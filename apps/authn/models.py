@@ -1,5 +1,6 @@
 from django.db import models
 from django.utils import timezone
+from django.conf import settings
 
 from .choices import ChallengePurpose
 
@@ -23,3 +24,22 @@ class EmailChallenge(models.Model):
     @property
     def is_expired(self) -> bool:
         return timezone.now() >= self.expires_at
+
+
+class UserSession(models.Model):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="tracked_sessions",
+    )
+    session_key = models.CharField(max_length=40, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["user", "-updated_at"], name="authn_user_session_user_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"UserSession<{self.user_id}:{self.session_key}>"

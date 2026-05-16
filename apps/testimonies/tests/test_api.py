@@ -1,8 +1,11 @@
 from django.test import TestCase
 from django.urls import reverse
+from django.utils import timezone
+from django.core.management import call_command
 from rest_framework.authtoken.models import Token
 
 from apps.testimonies.models import (
+    TestimonyComment,
     Testimony,
     TestimonyCategory,
     TestimonyFavorite,
@@ -10,6 +13,8 @@ from apps.testimonies.models import (
     TestimonyType,
 )
 from apps.users.tests.factories import ProfileFactory, UserFactory
+from apps.users.tests.factories import AdminAssignmentFactory, AdminRoleFactory
+from apps.users.choices import AdminRoleCode
 
 
 class TestimonyApiTests(TestCase):
@@ -88,6 +93,10 @@ class TestimonyApiTests(TestCase):
         self.assertEqual(searched.json()["count"], 1)
         self.assertIn("Breakthrough", searched.json()["results"][0]["title"])
 
+    def test_category_slug_auto_generates_when_missing(self) -> None:
+        category = TestimonyCategory.objects.create(name="My New Category")
+        self.assertEqual(category.slug, "my-new-category")
+
     def test_slice2_view_testimony_detail_returns_full_fields(self) -> None:
         testimony = Testimony.objects.get(title="God healed me")
         response = self.client.get(reverse("testimony-detail", kwargs={"pk": testimony.pk}))
@@ -100,6 +109,26 @@ class TestimonyApiTests(TestCase):
         self.assertEqual(body["category"], testimony.category.name)
         self.assertEqual(body["view_count"], testimony.view_count)
         self.assertEqual(body["comment_count"], testimony.comment_count)
+
+    def test_view_increment_increases_view_count(self) -> None:
+        testimony = Testimony.objects.get(title="God healed me")
+        before = testimony.view_count
+        response = self.client.post(
+            reverse("testimony-view-increment", kwargs={"testimony_id": testimony.id}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+        testimony.refresh_from_db()
+        self.assertEqual(testimony.view_count, before + 1)
+        self.assertEqual(response.json()["view_count"], before + 1)
+
+    def test_view_increment_returns_404_for_non_public_testimony(self) -> None:
+        pending = Testimony.objects.get(title="Pending testimony")
+        response = self.client.post(
+            reverse("testimony-view-increment", kwargs={"testimony_id": pending.id}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 404)
 
     def test_slice3_submit_written_testimony_requires_auth_and_sets_pending(self) -> None:
         unauth_response = self.client.post(
@@ -154,6 +183,38 @@ class TestimonyApiTests(TestCase):
         self.assertEqual(created.status, TestimonyStatus.PENDING_REVIEW)
         self.assertEqual(created.testimony_type, TestimonyType.VIDEO)
 
+    def test_submit_video_rejects_invalid_video_url_scheme(self) -> None:
+        user = UserFactory(email="video-invalid-scheme@example.com")
+        token = Token.objects.create(user=user)
+        response = self.client.post(
+            reverse("testimony-submit-video"),
+            {
+                "title": "Bad URL testimony",
+                "category_id": self.category_healing.id,
+                "video_url": "ftp://cdn.example.com/testimony.mp4",
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("video_url", response.json())
+
+    def test_submit_video_rejects_watch_page_links(self) -> None:
+        user = UserFactory(email="video-watch-link@example.com")
+        token = Token.objects.create(user=user)
+        response = self.client.post(
+            reverse("testimony-submit-video"),
+            {
+                "title": "Watch page testimony",
+                "category_id": self.category_healing.id,
+                "video_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("video_url", response.json())
+
     def test_slice5_my_testimonies_lists_all_statuses_for_user(self) -> None:
         owner = UserFactory(email="mine@example.com")
         ProfileFactory(user=owner, full_name="Mine User")
@@ -176,6 +237,7 @@ class TestimonyApiTests(TestCase):
             body="Rejected one",
             testimony_type=TestimonyType.WRITTEN,
             status=TestimonyStatus.REJECTED,
+            rejection_reason="Needs more detail.",
         )
         Testimony.objects.create(
             author=other,
@@ -195,12 +257,14 @@ class TestimonyApiTests(TestCase):
         self.assertIn("Mine approved", titles)
         self.assertIn("Mine rejected", titles)
         self.assertNotIn("Not mine", titles)
+        rejected = next(item for item in response.json()["results"] if item["title"] == "Mine rejected")
+        self.assertEqual(rejected["rejection_reason"], "Needs more detail.")
 
     def test_slice6_and_slice7_add_and_remove_favorite(self) -> None:
         user = UserFactory(email="favorite@example.com")
         ProfileFactory(user=user, full_name="Favorite User")
         token = Token.objects.create(user=user)
-        testimony = Testimony.objects.filter(status=TestimonyStatus.APPROVED).first()
+        testimony = Testimony.objects.get(title="God healed me")
         assert testimony is not None
 
         add_response = self.client.post(
@@ -230,3 +294,452 @@ class TestimonyApiTests(TestCase):
         self.assertFalse(
             TestimonyFavorite.objects.filter(user=user, testimony=testimony).exists()
         )
+
+    def test_slice8_view_favorites_feed_returns_paginated_testimonies(self) -> None:
+        user = UserFactory(email="favorite-feed@example.com")
+        ProfileFactory(user=user, full_name="Favorite Feed User")
+        token = Token.objects.create(user=user)
+        testimony = Testimony.objects.get(title="God healed me")
+        TestimonyFavorite.objects.create(user=user, testimony=testimony)
+
+        response = self.client.get(
+            reverse("testimony-favorite-feed"),
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["count"], 1)
+        self.assertEqual(body["results"][0]["title"], "God healed me")
+
+    def test_slice9_comment_on_approved_testimony(self) -> None:
+        user = UserFactory(email="commenter@example.com")
+        ProfileFactory(user=user, full_name="Comment User")
+        token = Token.objects.create(user=user)
+        testimony = Testimony.objects.get(title="God healed me")
+        initial_comment_count = testimony.comment_count
+
+        response = self.client.post(
+            reverse("testimony-comment-list-create", kwargs={"testimony_id": testimony.id}),
+            {"body": "This blessed me so much."},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(
+            TestimonyComment.objects.filter(testimony=testimony, author=user).exists()
+        )
+        testimony.refresh_from_db()
+        self.assertEqual(testimony.comment_count, initial_comment_count + 1)
+
+    def test_comment_reply_allows_depth_one_only(self) -> None:
+        user = UserFactory(email="reply-user@example.com")
+        ProfileFactory(user=user, full_name="Reply User")
+        token = Token.objects.create(user=user)
+        testimony = Testimony.objects.get(title="God healed me")
+        top_level = TestimonyComment.objects.create(
+            testimony=testimony,
+            author=user,
+            body="Top level comment.",
+        )
+
+        reply_response = self.client.post(
+            reverse("testimony-comment-list-create", kwargs={"testimony_id": testimony.id}),
+            {"body": "First level reply", "parent_comment_id": top_level.id},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+        self.assertEqual(reply_response.status_code, 201)
+        reply = TestimonyComment.objects.filter(
+            testimony=testimony,
+            author=user,
+            body="First level reply",
+            parent_comment=top_level,
+        ).first()
+        self.assertIsNotNone(reply)
+        reply_id = reply.id  # type: ignore[union-attr]
+
+        nested_response = self.client.post(
+            reverse("testimony-comment-list-create", kwargs={"testimony_id": testimony.id}),
+            {"body": "Second level reply", "parent_comment_id": reply_id},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+        self.assertEqual(nested_response.status_code, 400)
+        self.assertEqual(nested_response.json()["message"], "Only one reply level is allowed.")
+
+    def test_comment_list_returns_top_level_only_with_replies_count(self) -> None:
+        testimony = Testimony.objects.get(title="God healed me")
+        user = UserFactory(email="reply-reader@example.com")
+        ProfileFactory(user=user, full_name="Reply Reader")
+        top = TestimonyComment.objects.create(
+            testimony=testimony,
+            author=user,
+            body="Parent comment.",
+        )
+        TestimonyComment.objects.create(
+            testimony=testimony,
+            author=user,
+            body="Child reply.",
+            parent_comment=top,
+        )
+
+        response = self.client.get(
+            reverse("testimony-comment-list-create", kwargs={"testimony_id": testimony.id}),
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        ids = [item["id"] for item in payload["results"]]
+        self.assertIn(top.id, ids)
+        top_row = next(item for item in payload["results"] if item["id"] == top.id)
+        self.assertEqual(top_row["replies_count"], 1)
+
+    def test_comment_list_is_public_for_approved_testimony(self) -> None:
+        testimony = Testimony.objects.get(title="God healed me")
+        commenter = UserFactory(email="public-comment-reader@example.com")
+        ProfileFactory(user=commenter, full_name="Public Comment Reader")
+        TestimonyComment.objects.create(
+            testimony=testimony,
+            author=commenter,
+            body="Public visible comment.",
+        )
+
+        response = self.client.get(
+            reverse("testimony-comment-list-create", kwargs={"testimony_id": testimony.id}),
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertGreaterEqual(payload["count"], 1)
+
+    def test_comment_list_sets_is_owner_for_authenticated_user(self) -> None:
+        testimony = Testimony.objects.get(title="God healed me")
+        owner = UserFactory(email="owner-visible@example.com")
+        ProfileFactory(user=owner, full_name="Owner Visible")
+        token = Token.objects.create(user=owner)
+        comment = TestimonyComment.objects.create(
+            testimony=testimony,
+            author=owner,
+            body="Owner comment visible.",
+        )
+
+        response = self.client.get(
+            reverse("testimony-comment-list-create", kwargs={"testimony_id": testimony.id}),
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+        self.assertEqual(response.status_code, 200)
+        rows = response.json()["results"]
+        row = next(item for item in rows if item["id"] == comment.id)
+        self.assertEqual(row["is_owner"], True)
+
+    def test_slice10_delete_only_own_comment(self) -> None:
+        owner = UserFactory(email="owner@example.com")
+        ProfileFactory(user=owner, full_name="Owner")
+        other = UserFactory(email="other-commenter@example.com")
+        ProfileFactory(user=other, full_name="Other")
+        owner_token = Token.objects.create(user=owner)
+        other_token = Token.objects.create(user=other)
+        testimony = Testimony.objects.get(title="God healed me")
+        comment = TestimonyComment.objects.create(
+            testimony=testimony,
+            author=owner,
+            body="Owner comment.",
+        )
+        Testimony.objects.filter(id=testimony.id).update(comment_count=1)
+
+        forbidden = self.client.delete(
+            reverse("testimony-comment-delete", kwargs={"comment_id": comment.id}),
+            HTTP_AUTHORIZATION=f"Token {other_token.key}",
+        )
+        self.assertEqual(forbidden.status_code, 403)
+        self.assertTrue(TestimonyComment.objects.filter(id=comment.id).exists())
+
+        success = self.client.delete(
+            reverse("testimony-comment-delete", kwargs={"comment_id": comment.id}),
+            HTTP_AUTHORIZATION=f"Token {owner_token.key}",
+        )
+        self.assertEqual(success.status_code, 200)
+        self.assertFalse(TestimonyComment.objects.filter(id=comment.id).exists())
+
+    def test_slice10_delete_comment_never_sets_negative_comment_count(self) -> None:
+        owner = UserFactory(email="owner-negative@example.com")
+        ProfileFactory(user=owner, full_name="Owner Negative")
+        owner_token = Token.objects.create(user=owner)
+        testimony = Testimony.objects.get(title="God healed me")
+        comment = TestimonyComment.objects.create(
+            testimony=testimony,
+            author=owner,
+            body="Owner comment.",
+        )
+        Testimony.objects.filter(id=testimony.id).update(comment_count=0)
+
+        success = self.client.delete(
+            reverse("testimony-comment-delete", kwargs={"comment_id": comment.id}),
+            HTTP_AUTHORIZATION=f"Token {owner_token.key}",
+        )
+        self.assertEqual(success.status_code, 200)
+        testimony.refresh_from_db()
+        self.assertEqual(testimony.comment_count, 0)
+
+
+class AdminTestimonyApiTests(TestCase):
+    def setUp(self) -> None:
+        self.category = TestimonyCategory.objects.create(
+            name="Deliverance",
+            slug="deliverance",
+            description="Deliverance stories",
+            is_active=True,
+        )
+        self.author = UserFactory(email="member@example.com")
+        ProfileFactory(user=self.author, full_name="Member User")
+        self.pending = Testimony.objects.create(
+            author=self.author,
+            category=self.category,
+            title="Pending testimony",
+            body="Pending body",
+            testimony_type=TestimonyType.WRITTEN,
+            status=TestimonyStatus.PENDING_REVIEW,
+        )
+        self.approved = Testimony.objects.create(
+            author=self.author,
+            category=self.category,
+            title="Approved testimony",
+            body="Approved body",
+            testimony_type=TestimonyType.VIDEO,
+            status=TestimonyStatus.APPROVED,
+            video_url="https://example.com/video.mp4",
+        )
+        self.admin = UserFactory(email="admin@example.com")
+        ProfileFactory(user=self.admin, full_name="Admin User")
+        role = AdminRoleFactory(code=AdminRoleCode.SUPER_ADMIN)
+        AdminAssignmentFactory(user=self.admin, role=role)
+        self.client.force_login(self.admin)
+
+    def test_slice11_admin_manage_categories(self) -> None:
+        list_response = self.client.get(reverse("admin-testimony-category-list-create"))
+        self.assertEqual(list_response.status_code, 200)
+        self.assertGreaterEqual(len(list_response.json()), 1)
+
+        create_response = self.client.post(
+            reverse("admin-testimony-category-list-create"),
+            {"name": "Faith", "description": "Faith stories"},
+            content_type="application/json",
+        )
+        self.assertEqual(create_response.status_code, 201)
+        created_id = create_response.json()["id"]
+
+        edit_response = self.client.patch(
+            reverse("admin-testimony-category-detail", kwargs={"pk": created_id}),
+            {"description": "Updated faith stories"},
+            content_type="application/json",
+        )
+        self.assertEqual(edit_response.status_code, 200)
+        self.assertEqual(edit_response.json()["description"], "Updated faith stories")
+
+        deactivate_response = self.client.delete(
+            reverse("admin-testimony-category-activation", kwargs={"category_id": created_id})
+        )
+        self.assertEqual(deactivate_response.status_code, 200)
+        self.assertEqual(deactivate_response.json()["is_active"], False)
+
+        reactivate_response = self.client.post(
+            reverse("admin-testimony-category-activation", kwargs={"category_id": created_id})
+        )
+        self.assertEqual(reactivate_response.status_code, 200)
+        self.assertEqual(reactivate_response.json()["is_active"], True)
+
+    def test_slice12_admin_view_all_testimonies_with_filters_and_detail(self) -> None:
+        list_response = self.client.get(reverse("admin-testimony-list"))
+        self.assertEqual(list_response.status_code, 200)
+        payload = list_response.json()
+        self.assertEqual(payload["count"], 2)
+
+        pending_only = self.client.get(f'{reverse("admin-testimony-list")}?status=pending_review')
+        self.assertEqual(pending_only.status_code, 200)
+        self.assertEqual(pending_only.json()["count"], 1)
+        self.assertEqual(pending_only.json()["results"][0]["title"], self.pending.title)
+
+        category_only = self.client.get(f'{reverse("admin-testimony-list")}?category=deliverance')
+        self.assertEqual(category_only.status_code, 200)
+        self.assertEqual(category_only.json()["count"], 2)
+
+        detail_response = self.client.get(reverse("admin-testimony-detail", kwargs={"pk": self.approved.id}))
+        self.assertEqual(detail_response.status_code, 200)
+        self.assertEqual(detail_response.json()["title"], self.approved.title)
+        self.assertEqual(detail_response.json()["status"], TestimonyStatus.APPROVED)
+
+    def test_phase4_slice1_pending_queue_orders_oldest_first(self) -> None:
+        oldest = Testimony.objects.create(
+            author=self.author,
+            category=self.category,
+            title="Oldest pending",
+            body="Old pending",
+            testimony_type=TestimonyType.WRITTEN,
+            status=TestimonyStatus.PENDING_REVIEW,
+        )
+        newest = Testimony.objects.create(
+            author=self.author,
+            category=self.category,
+            title="Newest pending",
+            body="New pending",
+            testimony_type=TestimonyType.WRITTEN,
+            status=TestimonyStatus.PENDING_REVIEW,
+        )
+        response = self.client.get(reverse("admin-testimony-pending-queue"))
+        self.assertEqual(response.status_code, 200)
+        titles = [item["title"] for item in response.json()["results"]]
+        self.assertLess(titles.index(oldest.title), titles.index(newest.title))
+
+    def test_phase4_slice2_approve_pending_testimony(self) -> None:
+        response = self.client.post(reverse("admin-testimony-approve", kwargs={"testimony_id": self.pending.id}))
+        self.assertEqual(response.status_code, 200)
+        self.pending.refresh_from_db()
+        self.assertEqual(self.pending.status, TestimonyStatus.APPROVED)
+        public_detail = self.client.get(reverse("testimony-detail", kwargs={"pk": self.pending.id}))
+        self.assertEqual(public_detail.status_code, 200)
+
+    def test_phase4_slice3_reject_pending_testimony_requires_reason_and_exposes_it_to_author(self) -> None:
+        missing_reason = self.client.post(
+            reverse("admin-testimony-reject", kwargs={"testimony_id": self.pending.id}),
+            {},
+            content_type="application/json",
+        )
+        self.assertEqual(missing_reason.status_code, 400)
+
+        response = self.client.post(
+            reverse("admin-testimony-reject", kwargs={"testimony_id": self.pending.id}),
+            {"reason": "Insufficient context in submission."},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.pending.refresh_from_db()
+        self.assertEqual(self.pending.status, TestimonyStatus.REJECTED)
+        self.assertEqual(self.pending.rejection_reason, "Insufficient context in submission.")
+
+        author_token = Token.objects.create(user=self.author)
+        mine = self.client.get(reverse("testimony-mine-list"), HTTP_AUTHORIZATION=f"Token {author_token.key}")
+        self.assertEqual(mine.status_code, 200)
+        pending_item = next(item for item in mine.json()["results"] if item["id"] == self.pending.id)
+        self.assertEqual(pending_item["rejection_reason"], "Insufficient context in submission.")
+
+    def test_phase4_slice4_schedule_testimony_future_publish_and_auto_publish_to_public_feed(self) -> None:
+        publish_at = (timezone.now() + timezone.timedelta(hours=2)).isoformat()
+        response = self.client.post(
+            reverse("admin-testimony-schedule", kwargs={"testimony_id": self.pending.id}),
+            {"publish_at": publish_at},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.pending.refresh_from_db()
+        self.assertEqual(self.pending.status, TestimonyStatus.SCHEDULED)
+        self.assertIsNotNone(self.pending.publish_at)
+
+        not_yet_public = self.client.get(reverse("testimony-detail", kwargs={"pk": self.pending.id}))
+        self.assertEqual(not_yet_public.status_code, 404)
+
+        from apps.testimonies.models import TestimonyModerationHistory
+
+        Testimony.objects.filter(id=self.pending.id).update(publish_at=timezone.now() - timezone.timedelta(minutes=1))
+        call_command("publish_scheduled_testimonies")
+        list_response = self.client.get(reverse("testimony-list"))
+        self.assertEqual(list_response.status_code, 200)
+        self.pending.refresh_from_db()
+        self.assertEqual(self.pending.status, TestimonyStatus.APPROVED)
+        auto_history_exists = TestimonyModerationHistory.objects.filter(
+            testimony=self.pending,
+            action="auto_published",
+        ).exists()
+        self.assertTrue(auto_history_exists)
+
+    def test_phase4_slice5_archive_approved_testimony_removes_from_public_feed(self) -> None:
+        response = self.client.post(
+            reverse("admin-testimony-archive", kwargs={"testimony_id": self.approved.id}),
+            {"reason": "Seasonal curation update."},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.approved.refresh_from_db()
+        self.assertEqual(self.approved.status, TestimonyStatus.ARCHIVED)
+        self.assertIsNotNone(self.approved.archived_at)
+
+        public_detail = self.client.get(reverse("testimony-detail", kwargs={"pk": self.approved.id}))
+        self.assertEqual(public_detail.status_code, 404)
+
+    def test_phase4_slice6_view_moderation_history(self) -> None:
+        self.client.post(reverse("admin-testimony-approve", kwargs={"testimony_id": self.pending.id}))
+        self.client.post(
+            reverse("admin-testimony-archive", kwargs={"testimony_id": self.pending.id}),
+            {"reason": "Archive for policy clean-up"},
+            content_type="application/json",
+        )
+        response = self.client.get(
+            reverse("admin-testimony-moderation-history", kwargs={"testimony_id": self.pending.id})
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        actions = [item["action"] for item in payload]
+        self.assertIn("approved", actions)
+        self.assertIn("archived", actions)
+        archived_row = next(item for item in payload if item["action"] == "archived")
+        self.assertEqual(archived_row["reason"], "Archive for policy clean-up")
+        self.assertIn("actor_name", archived_row)
+
+    def test_phase4_slice7_author_my_testimonies_reflects_approved_and_rejected_with_reason(self) -> None:
+        author_token = Token.objects.create(user=self.author)
+        approve_response = self.client.post(
+            reverse("admin-testimony-approve", kwargs={"testimony_id": self.pending.id})
+        )
+        self.assertEqual(approve_response.status_code, 200)
+        mine_after_approve = self.client.get(
+            reverse("testimony-mine-list"),
+            HTTP_AUTHORIZATION=f"Token {author_token.key}",
+        )
+        self.assertEqual(mine_after_approve.status_code, 200)
+        approved_item = next(item for item in mine_after_approve.json()["results"] if item["id"] == self.pending.id)
+        self.assertEqual(approved_item["status"], TestimonyStatus.APPROVED)
+
+        self.pending.status = TestimonyStatus.PENDING_REVIEW
+        self.pending.rejection_reason = ""
+        self.pending.save(update_fields=["status", "rejection_reason", "updated_at"])
+        reject_response = self.client.post(
+            reverse("admin-testimony-reject", kwargs={"testimony_id": self.pending.id}),
+            {"reason": "Please include specific details."},
+            content_type="application/json",
+        )
+        self.assertEqual(reject_response.status_code, 200)
+        mine_after_reject = self.client.get(
+            reverse("testimony-mine-list"),
+            HTTP_AUTHORIZATION=f"Token {author_token.key}",
+        )
+        self.assertEqual(mine_after_reject.status_code, 200)
+        rejected_item = next(item for item in mine_after_reject.json()["results"] if item["id"] == self.pending.id)
+        self.assertEqual(rejected_item["status"], TestimonyStatus.REJECTED)
+        self.assertEqual(rejected_item["rejection_reason"], "Please include specific details.")
+
+    def test_phase4_slice8_approved_testimony_appears_in_public_browse_feed(self) -> None:
+        response = self.client.post(reverse("admin-testimony-approve", kwargs={"testimony_id": self.pending.id}))
+        self.assertEqual(response.status_code, 200)
+        list_response = self.client.get(reverse("testimony-list"))
+        self.assertEqual(list_response.status_code, 200)
+        titles = [item["title"] for item in list_response.json()["results"]]
+        self.assertIn(self.pending.title, titles)
+
+    def test_phase4_slice9_scheduled_testimony_auto_publishes_into_public_browse_feed(self) -> None:
+        future_publish = (timezone.now() + timezone.timedelta(hours=1)).isoformat()
+        schedule_response = self.client.post(
+            reverse("admin-testimony-schedule", kwargs={"testimony_id": self.pending.id}),
+            {"publish_at": future_publish},
+            content_type="application/json",
+        )
+        self.assertEqual(schedule_response.status_code, 200)
+        before_due = self.client.get(reverse("testimony-list"))
+        self.assertEqual(before_due.status_code, 200)
+        before_titles = [item["title"] for item in before_due.json()["results"]]
+        self.assertNotIn(self.pending.title, before_titles)
+
+        Testimony.objects.filter(id=self.pending.id).update(
+            publish_at=timezone.now() - timezone.timedelta(minutes=1)
+        )
+        call_command("publish_scheduled_testimonies")
+        after_due = self.client.get(reverse("testimony-list"))
+        self.assertEqual(after_due.status_code, 200)
+        after_titles = [item["title"] for item in after_due.json()["results"]]
+        self.assertIn(self.pending.title, after_titles)

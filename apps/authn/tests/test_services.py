@@ -1,11 +1,15 @@
+from importlib import import_module
+
+from django.conf import settings
 from django.test import TestCase
 from django.utils import timezone
 from django.core import mail
 from django.test import override_settings
+from django.contrib.sessions.models import Session
 from unittest.mock import patch
 
 from apps.authn.exceptions import AuthnError
-from apps.authn.models import EmailChallenge
+from apps.authn.models import EmailChallenge, UserSession
 from apps.authn.services.commands import (
     bootstrap_super_admin,
     change_temporary_admin_password,
@@ -181,6 +185,23 @@ class AuthnServiceTests(TestCase):
 
         with self.assertRaisesMessage(AuthnError, "This password reset code has expired."):
             complete_password_reset(email=user.email, password="NewStrongPass!2")
+
+    def test_complete_password_reset_invalidates_tracked_sessions_without_full_scan(self) -> None:
+        user = UserFactory(email="reset-sessions@example.com")
+        challenge = start_password_reset(email=user.email)
+        verify_password_reset(email=user.email, otp=challenge.code)
+
+        session_store = import_module(settings.SESSION_ENGINE).SessionStore()
+        session_store["_auth_user_id"] = str(user.pk)
+        session_store["_auth_user_backend"] = "django.contrib.auth.backends.ModelBackend"
+        session_store.save()
+        self.assertTrue(Session.objects.filter(session_key=session_store.session_key).exists())
+        UserSession.objects.create(user=user, session_key=session_store.session_key)
+
+        complete_password_reset(email=user.email, password="NewStrongPass!2")
+
+        self.assertFalse(Session.objects.filter(session_key=session_store.session_key).exists())
+        self.assertFalse(UserSession.objects.filter(user=user).exists())
 
     def test_start_registration_sends_otp_email(self) -> None:
         challenge = start_registration(full_name="Grace User", email="grace-mail@example.com")

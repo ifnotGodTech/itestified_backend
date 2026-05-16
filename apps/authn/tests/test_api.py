@@ -7,6 +7,7 @@ from django.test.client import Client
 from apps.users.choices import AdminRoleCode
 from apps.users.models import AdminRole
 from apps.authn.exceptions import AuthnError
+from apps.authn.models import UserSession
 from apps.users.tests.factories import UserFactory
 from apps.authn.services.commands import bootstrap_super_admin
 
@@ -62,6 +63,7 @@ class AuthnApiTests(TestCase):
         self.assertEqual(session_response.json()["email"], "admin@example.com")
         self.assertEqual(session_response.json()["role_code"], AdminRoleCode.SUPER_ADMIN)
         self.assertTrue(session_response.json()["must_change_password"])
+        self.assertTrue(UserSession.objects.filter(user__email="admin@example.com").exists())
 
     @override_settings(
         GOOGLE_OAUTH_CLIENT_IDS=["android-client-id.apps.googleusercontent.com"],
@@ -86,7 +88,38 @@ class AuthnApiTests(TestCase):
         body = response.json()
         self.assertIn("token", body)
         self.assertEqual(body["user"]["email"], "mobile-google@example.com")
+        self.assertIn("phone_number", body["user"])
+        self.assertIn("avatar_url", body["user"])
         self.assertTrue(body["is_new_user"])
+
+    @override_settings(OTP_HINT_IN_RESPONSE=True)
+    def test_admin_invitation_requires_csrf_token(self) -> None:
+        csrf_client = Client(enforce_csrf_checks=True)
+        inviter, temporary_password = bootstrap_super_admin(email="csrf-super@example.com", full_name="CSRF Super")
+        login_response = csrf_client.post(
+            reverse("auth-admin-login"),
+            {"email": inviter.email, "password": temporary_password},
+            content_type="application/json",
+        )
+        self.assertEqual(login_response.status_code, 200)
+        AdminRole.objects.get_or_create(code=AdminRoleCode.MODERATOR, defaults={"name": "Moderator"})
+
+        no_csrf_response = csrf_client.post(
+            reverse("auth-admin-invitations"),
+            {"email": "csrfmod@example.com", "role_code": AdminRoleCode.MODERATOR},
+            content_type="application/json",
+        )
+        self.assertEqual(no_csrf_response.status_code, 403)
+
+        csrf_token = csrf_client.cookies.get("csrftoken")
+        self.assertIsNotNone(csrf_token)
+        with_csrf_response = csrf_client.post(
+            reverse("auth-admin-invitations"),
+            {"email": "csrfmod@example.com", "role_code": AdminRoleCode.MODERATOR},
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=csrf_token.value,
+        )
+        self.assertEqual(with_csrf_response.status_code, 201)
 
     @override_settings(GOOGLE_OAUTH_CLIENT_IDS=[])
     def test_mobile_google_sign_in_returns_503_when_not_configured(self) -> None:
@@ -353,7 +386,7 @@ class AuthnApiTests(TestCase):
         self.assertEqual(complete_response.status_code, 200)
 
     @override_settings(OTP_HINT_IN_RESPONSE=True)
-    def test_admin_invite_allows_session_post_without_csrf_token(self) -> None:
+    def test_admin_invite_requires_csrf_token_for_session_post(self) -> None:
         client = Client(enforce_csrf_checks=True)
         inviter, temporary_password = bootstrap_super_admin(email="csrf-super@example.com", full_name="Csrf Super")
         login_response = client.post(
@@ -369,9 +402,19 @@ class AuthnApiTests(TestCase):
             {"email": "csrf-invitee@example.com", "role_code": AdminRoleCode.MODERATOR},
             content_type="application/json",
         )
-        self.assertEqual(invite_response.status_code, 201)
+        self.assertEqual(invite_response.status_code, 403)
 
-    def test_change_temporary_password_allows_session_post_without_csrf_token(self) -> None:
+        csrf_token = client.cookies.get("csrftoken")
+        self.assertIsNotNone(csrf_token)
+        invite_with_csrf_response = client.post(
+            reverse("auth-admin-invitations"),
+            {"email": "csrf-invitee@example.com", "role_code": AdminRoleCode.MODERATOR},
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=csrf_token.value,
+        )
+        self.assertEqual(invite_with_csrf_response.status_code, 201)
+
+    def test_change_temporary_password_requires_csrf_token_for_session_post(self) -> None:
         client = Client(enforce_csrf_checks=True)
         _user, temporary_password = bootstrap_super_admin(email="csrf-change@example.com", full_name="Csrf Change")
         login_response = client.post(
@@ -390,4 +433,18 @@ class AuthnApiTests(TestCase):
             },
             content_type="application/json",
         )
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 403)
+
+        csrf_token = client.cookies.get("csrftoken")
+        self.assertIsNotNone(csrf_token)
+        response_with_csrf = client.post(
+            reverse("auth-admin-change-temporary-password"),
+            {
+                "current_password": temporary_password,
+                "new_password": "NewStrongPass!2",
+                "confirm_new_password": "NewStrongPass!2",
+            },
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=csrf_token.value,
+        )
+        self.assertEqual(response_with_csrf.status_code, 200)

@@ -12,6 +12,33 @@ It is written for manual testing by a normal user, admin, QA tester, or product 
   - happy path (works as expected)
   - failure path (invalid input or unauthorized access is handled safely)
 
+## Layperson Test Pattern (Use This For Every Flow)
+
+Use this format for each test step:
+
+1. `Action`: what to click/type.
+2. `Expected Result`: what you should see if it works.
+3. `If It Fails`: what to record (screen name, error text, time, user type: guest/auth/admin).
+
+Example:
+
+1. `Action`: Open app as guest and tap a testimony.
+2. `Expected Result`: Testimony detail opens and content loads from backend.
+3. `If It Fails`: Note exact message (for example `PlatformException`), testimony title, and whether API logs show `4xx` or `5xx`.
+
+## Quick Smoke Checklist (Non-Technical)
+
+Run these first before full phase testing:
+
+1. Guest can open home and see content cards (not blank, not mock-only).
+2. Guest can open testimony detail and comments list.
+3. Guest gets login prompt for protected actions (like, comment, submit).
+4. Authenticated user can log in and open profile data.
+5. Authenticated user can like/unlike and icon state updates immediately.
+6. Authenticated user can add a comment and it appears immediately in comment sheet.
+7. Video testimony opens and plays without platform error.
+8. Admin can log in and open at least one protected admin page.
+
 ---
 
 ## Phase Status Snapshot (from Implementation Plan)
@@ -19,13 +46,56 @@ It is written for manual testing by a normal user, admin, QA tester, or product 
 - Phase 0: Completed
 - Phase 1: Completed
 - Phase 2: Completed
-- Phase 3: In progress (Slices 1-3 implemented)
-- Phase 4: Not started
-- Phase 5: Not started
-- Phase 6: Not started
-- Phase 7: Not started
+- Phase 3: Completed
+- Phase 4: In progress (Slices 1-9 implemented)
+- Phase 5: In progress (Slices 1-7 implemented)
+- Phase 6: In progress (Slices 1-7 implemented)
+- Phase 7: In progress (Slices 1-8 implemented)
 - Phase 8: Not started
 - Phase 9: Not started
+
+---
+
+## Guest vs Authenticated Access Matrix (Mobile + API)
+
+Use this as the first-pass check before running phase-by-phase flows.
+
+### Guest user (unauthenticated)
+
+- Allowed:
+  - Browse testimonies, categories, search, and detail pages.
+  - Read inspirational/scripture/public content.
+- Blocked (must prompt login/signup in mobile; must return auth error in API):
+  - Submit testimony.
+  - Favorite/unfavorite testimony.
+  - Create/delete comments.
+  - Access `profile/me`.
+  - Create donation or view donation history/detail.
+  - Access notification inbox, mark-read actions, and preferences update.
+
+### Authenticated user
+
+- Allowed:
+  - All guest read capabilities.
+  - Submit testimony and interact (favorites/comments).
+  - Access own profile data.
+  - Create/view own donations only.
+  - Access and manage own notifications only.
+- Blocked:
+  - Any admin-only endpoint.
+  - Other users' private resources (for example, another user's donation detail).
+
+### Admin users (role-scoped)
+
+- Allowed:
+  - Role-appropriate dashboard APIs (moderation, finance, user admin, notification history).
+- Blocked:
+  - Admin APIs outside assigned role scope.
+  - Any action not covered by role + policy.
+
+Pass criteria:
+- Mobile no longer relies on mock responses for completed slices.
+- Guest/auth/admin behavior matches this matrix in both UI and API responses.
 
 ---
 
@@ -258,11 +328,23 @@ Failure checks:
 ---
 
 ## Phase 3 — Testimonies Core Domain
-Status: In progress (Slices 1-3 implemented)
+
+### QA Seed For Phase 3
+
+Run this before manual QA to create reusable Phase 3 data:
+
+- `./.venv/bin/python backend/manage.py seed_phase3_testimonies`
+
+Seeded QA users:
+
+- `qa.author1@example.com` / `TestPass#123`
+- `qa.author2@example.com` / `TestPass#123`
+- `qa.viewer@example.com` / `TestPass#123`
+Status: In progress (Slices 1-10 implemented)
 
 Current verification scope:
-- Implemented now: `Flow P3-M1`, `Flow P3-M2`, `Flow P3-M3`
-- Pending in later slices: `Flow P3-M4`, `Flow P3-M5`, `Flow P3-A1`, `Flow P3-A2`
+- Implemented now: `Flow P3-M1` through `Flow P3-M5` (including favorites list parity and comment add/delete)
+- Pending in later slices: `Flow P3-A1`, `Flow P3-A2`
 
 ## Mobile User Flows
 
@@ -326,7 +408,7 @@ Expected behavior:
 ---
 
 ## Phase 4 — Moderation and Review Workflows
-Status: Not started
+Status: In progress (Slices 1-9 implemented)
 
 ## Admin Flows
 
@@ -378,7 +460,7 @@ Expected behavior:
 ---
 
 ## Phase 5 — Donations and Giving
-Status: Not started
+Status: In progress (Slices 1-7 implemented)
 
 ## Mobile User Flows
 
@@ -388,6 +470,7 @@ Goal: user can complete giving flow.
 Expected behavior:
 - User can enter donation details and initiate payment.
 - Donation record enters expected lifecycle state.
+- Amount convention is consistent: `amount` is interpreted and persisted in minor units (`kobo`/`cents`).
 
 Failure checks:
 - Invalid amounts are rejected.
@@ -419,7 +502,7 @@ Expected behavior:
 ---
 
 ## Phase 6 — Notifications and Engagement
-Status: Not started
+Status: In progress (Slices 1-7 implemented)
 
 ## Mobile User Flows
 
@@ -450,7 +533,7 @@ Expected behavior:
 ---
 
 ## Phase 7 — Content Operations
-Status: Not started
+Status: In progress (Slices 1-8 implemented)
 
 ## Admin Flows
 

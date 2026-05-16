@@ -26,6 +26,9 @@ INSTALLED_APPS = [
     "apps.users",
     "apps.authn",
     "apps.testimonies",
+    "apps.donations",
+    "apps.notifications",
+    "apps.content",
 ]
 
 MIDDLEWARE = [
@@ -139,3 +142,9 @@ GOOGLE_OAUTH_ALLOWED_ISSUERS = get_list(
     "GOOGLE_OAUTH_ALLOWED_ISSUERS",
     ["https://accounts.google.com", "accounts.google.com"],
 )
+
+FLUTTERWAVE_PUBLIC_KEY = os.environ.get("FLUTTERWAVE_PUBLIC_KEY", "")
+FLUTTERWAVE_SECRET_KEY = os.environ.get("FLUTTERWAVE_SECRET_KEY", "")
+FLUTTERWAVE_SECRET_HASH = os.environ.get("FLUTTERWAVE_SECRET_HASH", "")
+FLUTTERWAVE_BASE_URL = os.environ.get("FLUTTERWAVE_BASE_URL", "https://api.flutterwave.com")
+FLUTTERWAVE_REDIRECT_URL = os.environ.get("FLUTTERWAVE_REDIRECT_URL", "")

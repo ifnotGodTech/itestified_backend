@@ -20,7 +20,7 @@ from apps.users.selectors import get_active_admin_assignment
 
 from ..choices import ChallengePurpose
 from ..exceptions import AuthnError, ChallengeVerificationError, EmailDeliveryError
-from ..models import EmailChallenge
+from ..models import EmailChallenge, UserSession
 from ..validators import ensure_active_admin_assignment, ensure_active_user, validate_user_password
 
 BRAND_PURPLE_70 = "#6E46FF"  # mobile AppColors.purple70 / brandMainColor1
@@ -353,10 +353,11 @@ def complete_password_reset(*, email: str, password: str) -> User:
 def _invalidate_user_sessions(user: User) -> None:
     from django.contrib.sessions.models import Session
 
-    active = Session.objects.filter(expire_date__gte=timezone.now())
-    for session in active:
-        if str(session.get_decoded().get("_auth_user_id")) == str(user.pk):
-            session.delete()
+    session_keys = list(UserSession.objects.filter(user=user).values_list("session_key", flat=True))
+    if not session_keys:
+        return
+    Session.objects.filter(session_key__in=session_keys).delete()
+    UserSession.objects.filter(user=user).delete()
 
 
 @transaction.atomic

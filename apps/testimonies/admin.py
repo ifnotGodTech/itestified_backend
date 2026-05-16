@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Testimony, TestimonyCategory, TestimonyFavorite
+from .models import Testimony, TestimonyCategory, TestimonyComment, TestimonyFavorite
 
 
 @admin.register(TestimonyCategory)
@@ -21,3 +21,9 @@ class TestimonyAdmin(admin.ModelAdmin):
 class TestimonyFavoriteAdmin(admin.ModelAdmin):
     list_display = ("user", "testimony", "created_at")
     search_fields = ("user__email", "testimony__title")
+
+
+@admin.register(TestimonyComment)
+class TestimonyCommentAdmin(admin.ModelAdmin):
+    list_display = ("id", "testimony", "author", "created_at")
+    search_fields = ("author__email", "testimony__title", "body")

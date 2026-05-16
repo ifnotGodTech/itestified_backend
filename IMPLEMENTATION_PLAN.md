@@ -11,7 +11,7 @@ It should be used together with:
 
 ## Status
 
-Current state: backend scaffold and Phase 1-2 foundations are implemented.
+Current state: backend scaffold and Phase 1-2 foundations are implemented, with Phase 4-7 actively in delivery.
 
 Current milestone goal:
 - define the backend in a way that cleanly supports both the mobile app and the dashboard without inheriting either UI's temporary mock structures directly
@@ -79,16 +79,16 @@ Important constraint:
 - Phase 0: Completed
 - Phase 1: Completed
 - Phase 2: Completed
-- Phase 3: In progress (Slices 1-3 implemented)
-- Phase 4: Not started
-- Phase 5: Not started
-- Phase 6: Not started
-- Phase 7: Not started
+- Phase 3: Completed
+- Phase 4: In progress (Slices 1-9 implemented)
+- Phase 5: In progress (Slices 1-7 implemented)
+- Phase 6: In progress (Slices 1-7 implemented)
+- Phase 7: In progress (Slices 1-8 implemented)
 - Phase 8: Not started
 - Phase 9: Not started
 
 Current focus:
-- next phase to implement: `Phase 3: Testimonies Core Domain`
+- next phase to implement: `Phase 8: Reviews, Analytics, And Operational Admin Features`
 
 ## Product Understanding
 
@@ -100,6 +100,23 @@ The backend will serve two internal clients in this repository:
   - Next.js admin application for moderation, content management, donations review, notifications history, analytics, settings, and admin operations
 
 The backend must unify these into one shared domain model.
+
+### Mobile Access Contract: Guest vs Authenticated
+
+Backend execution and API permissions must follow the mobile capability split in `mobile/plan.md`:
+
+- `Guest` (not a persisted user/account type):
+  - can browse public content (home feed, testimonies, categories, inspirational pictures, scripture, search)
+  - cannot perform authenticated writes (submit testimony, favorite, comment, giving, profile updates, notification read-state actions)
+  - may see guest-specific restriction prompts in UI, but backend must still enforce access at API boundary
+
+- `Authenticated user`:
+  - can perform user-owned writes (submission, favorites, comments, giving, profile, notification actions)
+  - can view private/user-owned data (my testimonies, favorites, giving history, personal notifications, profile)
+
+Mandatory backend rule:
+- UI restriction prompts are not security controls.
+- Every protected endpoint must enforce auth/ownership/role checks regardless of client behavior.
 
 ### Shared business domains
 
@@ -302,6 +319,7 @@ Mobile auth strategy note:
 - Mobile supports a limited guest experience in parallel with authenticated flows.
 - Onboarding is first-run only and should not repeat for returning users.
 - Returning users with a valid auth session go directly to authenticated home; returning users without a valid session remain able to continue as guest with restrictions.
+- Guest access is non-persisted and must never receive authenticated mobile endpoints by default.
 
 - **Slice 1 — Register with email** — user enters their full name and email address to begin registration; the backend sends a one-time code to their email and the app advances to the OTP screen
 - **Slice 2 — Verify registration OTP** — user enters the code received by email; the backend confirms the code is correct and not expired, and marks the registration challenge as verified
@@ -327,6 +345,7 @@ Test:
 - model tests for user/admin relationships and constraints
 - service tests for auth flows
 - API tests for login/logout, registration, Google sign-in token verification, password reset, and protected routes
+- API permission tests that explicitly prove guest/unauthenticated requests are blocked on authenticated mobile actions
 - replace auth mocks in the client(s) covered by this slice
 - verify sign-up, sign-in, Google sign-in, sign-out, protected-route, and password-reset behavior end-to-end in the connected UI(s)
 
@@ -360,6 +379,10 @@ Sub-slices:
 - **Slice 9 — Comment on a testimony** — authenticated user types and submits a comment on an approved testimony
 - **Slice 10 — Delete own comment** — user removes a comment they previously posted; cannot remove another user's comment
 
+Access-control contract for this phase:
+- guest/unauthenticated users may read public browse/detail/category/search endpoints only
+- authenticated users only may submit testimonies, manage favorites, create/delete comments, and access "My Testimonies"
+
 #### Admin Flows
 
 - **Slice 11 — Manage categories** — admin creates a new category with name and description; edits name or description of an existing category; deactivates a category so it no longer appears to mobile users; reactivates it when needed
@@ -372,7 +395,7 @@ Test:
 - replace testimony-related mocks in the connected UI scope
 - verify browse, detail, and submission flows end-to-end in the connected client(s)
 
-Status: in progress
+Status: completed
 
 ### Phase 4: Moderation And Review Workflows
 
@@ -406,10 +429,11 @@ Test:
 - transition tests for allowed and blocked state changes
 - API tests for moderation actions, filtering, and permissions
 - audit-field verification tests
+- API permission tests that verify guest access to public reads and denial for authenticated writes
 - replace moderation mocks in the connected UI scope
 - verify moderation actions in `dashboard/frontend/` and confirm resulting visibility in `mobile/` where applicable
 
-Status: not started
+Status: in progress (Slices 1-9 implemented)
 
 ### Phase 5: Donations And Giving
 
@@ -426,9 +450,14 @@ Sub-slices:
 #### Mobile User Flows
 
 - **Slice 1 — Give a donation** — authenticated user enters an amount and currency and submits; the backend creates a donation record in `pending` status and returns a payment reference or redirect URL from the payment provider
+  - Amount convention: `amount` is in minor currency units (`kobo` for NGN, `cents` for USD).
 - **Slice 2 — Complete payment** — user is redirected to the payment provider and completes or cancels the transaction; the provider notifies the backend and the donation status updates to `successful` or `declined`
 - **Slice 3 — View giving history** — user opens the giving/history screen and sees a paginated list of their own donations with amount, date, and current status for each
 - **Slice 4 — View a donation detail** — user taps a donation record and sees the full detail including payment reference and status
+
+Access-control contract for this phase:
+- guest/unauthenticated users must be denied donation creation/history/detail endpoints
+- authenticated users can act only on their own donation records
 
 #### Admin Flows
 
@@ -443,7 +472,7 @@ Test:
 - replace giving and donation-history mocks in the connected UI scope
 - verify giving submission/history in `mobile/` and donation review/filtering in `dashboard/frontend/`
 
-Status: not started
+Status: in progress (Slices 1-7 implemented)
 
 ### Phase 6: Notifications And User Activity
 
@@ -466,6 +495,10 @@ Sub-slices:
 - **Slice 5 — Mark a notification as read** — user taps a single notification; it is marked as read and the unread count decreases
 - **Slice 6 — Mark all notifications as read** — user clears all unread notifications in one action; unread count returns to zero
 
+Access-control contract for this phase:
+- guest/unauthenticated users must be denied notification list/read-state actions
+- authenticated users can only read/update their own notifications
+
 #### Admin Flows
 
 - **Slice 7 — View notification history** — admin opens the notifications history screen and sees all notifications sent across all users; filters by notification type, recipient, and read status to investigate delivery or user activity
@@ -476,7 +509,7 @@ Test:
 - replace notification mocks in the connected UI scope
 - verify notification list/read behavior in `mobile/` and notification-history behavior in `dashboard/frontend/`
 
-Status: not started
+Status: in progress (Slices 1-7 implemented)
 
 ### Phase 7: Content Management Domains
 
@@ -504,13 +537,17 @@ Sub-slices:
 - **Slice 7 — Browse inspirational pictures** — user scrolls the inspirational pictures feed and sees all currently published and non-expired pictures ordered by the admin-defined sequence
 - **Slice 8 — Read the scripture of the day** — user opens the scripture screen and sees today's published scripture entry; if no entry exists for today, the screen shows an appropriate empty state
 
+Phase 7 slice-count note:
+- Phase 7 intentionally contains 8 slices total (5 admin + 3 mobile). There is no Phase 7 Slice 9.
+- Clarification: when planning references mention a "Slice 9" content publish flow, that refers to **Phase 9 / Slice 9**, not Phase 7.
+
 Test:
 - model tests for scheduling/publish invariants
 - API tests for content CRUD, filtering, and visibility rules
 - replace content mocks in the connected UI scope
 - verify dashboard publishing/curation actions and resulting mobile content visibility
 
-Status: not started
+Status: in progress (Slices 1-8 implemented)
 
 ### Phase 8: Reviews, Analytics, And Operational Admin Features
 

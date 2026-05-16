@@ -40,6 +40,75 @@ This section is the source of truth for launch/auth behavior while implementing 
 - `backend/IMPLEMENTATION_PLAN.md`
 - `backend/TESTING.md`
 
+## Temporary Integration Audit (Dashboard + Mobile)
+
+Purpose: track whether completed backend slices are truly wired in UI surfaces (not mock/fallback-driven).
+
+### Ordered Fix List
+
+1. Remove direct `mock-users` dependency from dashboard admin routes for identity rendering.
+   - Status: done
+   - Updated to use backend session fields (`email`/`full_name`) instead of lookup from mock registry.
+
+2. Keep backend-wired routes on `FromApi`/`FromBackend` providers and verify no regression.
+   - Status: done (existing wiring retained)
+   - Routes confirmed: testimonies, donations, notifications history, home management, inspirational pictures, scripture of the day.
+
+3. Replace mock-only dashboard route view models where backend endpoints already exist.
+   - Status: done
+   - Completed in this pass:
+     - `users` now uses backend API (`getUsersViewModelFromApi`) and action routes call backend deactivate/reactivate endpoints.
+     - `overview` now uses backend API-derived metrics (`getAdminOverviewViewModelFromApi`).
+     - `my-profile` now uses backend profile endpoint (`getMyProfileViewModelFromApi`).
+     - `notification-settings` now uses backend endpoint (`GET /api/v1/notifications/preferences/me/`) via `getNotificationSettingsViewModelFromApi`.
+     - `notification-settings` save now persists via dashboard API proxy (`POST /api/admin/notifications/preferences` -> backend `PATCH /api/v1/notifications/preferences/me/`).
+
+4. Replace dashboard mocks for Phase 8 surfaces.
+   - Status: blocked intentionally
+   - Block reason: Phase 8 backend remains deferred by instruction (`reviews`, `analytics`, `admin management` endpoints not started).
+
+5. Remove/disable mobile auth mock fallback for non-test runtime.
+   - Status: pending
+   - Current behavior: fallback remains enabled in some non-prod paths by env/test bootstrap.
+
+### Notes
+
+- This temporary section should be removed after full backend parity is achieved across completed phases.
+
+## Next Work Priority Queue
+
+Priority order for remaining work (excluding Phase 8 by instruction):
+
+1. High — Replace `auto_publish` side-effect in `GET` with a management command / cron.
+   - Status: done
+   - Implemented command: `./.venv/bin/python manage.py publish_due_scriptures`
+   - Scheduling note: run via cron/worker at regular intervals (e.g., every 5-15 minutes) in deployed environments.
+2. High — Fix `comment_count` race condition with `F()` expression updates.
+   - Status: done
+   - Decrement path now uses single-statement atomic clamp: `Greatest(F("comment_count") - 1, 0)`.
+3. Medium — Reconcile Phase 13 status contradiction in dashboard plan.
+   - Status: done
+   - `dashboard/IMPLEMENTATION_PLAN.md` updated: Phase 13 marked `In progress` with explicit backend-integration note.
+4. Medium — Clarify or add Phase 7 Slice 9 in implementation plan.
+   - Status: done
+   - Clarified in `backend/IMPLEMENTATION_PLAN.md`: "Slice 9" content publish flow refers to Phase 9, not Phase 7.
+5. Low — Document or fix donation amount integer convention.
+   - Status: done
+   - Convention documented at model/API level: amount is in minor currency units (`kobo`/`cents`).
+6. Low — Move slug generation out of `TestimonyCategory.save()`.
+   - Status: done
+   - Confirmed slug generation is not in `save()`; handled outside via signal path.
+7. Low — Fix `_invalidate_user_sessions` to avoid full-session scan.
+   - Status: done
+   - Added `UserSession` tracking and invalidation by tracked session keys (no global session decode scan).
+
+## Phase 7 Progress Snapshot
+
+Current state:
+- Phase 7 slices 1-8 are implemented and wired into dashboard and mobile content surfaces.
+- Verified with backend content API tests, dashboard component tests, and mobile browse/content tests.
+- Phase 7 is complete at 8 slices; remaining work continues in later phases.
+
 ## Google Sign-In Readiness (Phase 2 Slice 5)
 
 Current state: backend endpoint and tests are implemented, but end-to-end mobile Google login is not yet complete.

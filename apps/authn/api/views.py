@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.contrib.auth import login, logout, update_session_auth_hash
+from django.middleware.csrf import get_token
 from rest_framework.authentication import SessionAuthentication
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -8,6 +9,7 @@ from rest_framework.views import APIView
 from typing import Optional
 
 from apps.users.selectors import get_active_admin_assignment
+from apps.authn.models import UserSession
 
 from ..exceptions import AuthnError, ChallengeVerificationError, EmailDeliveryError
 from ..services.commands import (
@@ -58,11 +60,6 @@ def _error_response(
     if errors is not None:
         payload["error"]["details"] = errors
     return Response(payload, status=http_status)
-
-
-class CsrfExemptSessionAuthentication(SessionAuthentication):
-    def enforce_csrf(self, request):
-        return
 
 
 class MobileRegistrationStartView(APIView):
@@ -238,6 +235,8 @@ class MobileGoogleSignInView(APIView):
                 "user": {
                     "email": user.email,
                     "full_name": profile.full_name if profile else "",
+                    "phone_number": profile.phone_number if profile and profile.phone_number else None,
+                    "avatar_url": profile.avatar if profile and profile.avatar else None,
                 },
             }
         )
@@ -327,7 +326,7 @@ class PasswordResetCompleteView(APIView):
 
 
 class AdminInviteView(APIView):
-    authentication_classes = [CsrfExemptSessionAuthentication]
+    authentication_classes = [SessionAuthentication]
     permission_classes = [IsAuthenticated, IsActiveAdmin, IsSuperAdmin]
 
     def post(self, request):
@@ -418,6 +417,11 @@ class AdminInviteCompleteView(APIView):
             )
 
         login(request, user)
+        if request.session.session_key:
+            UserSession.objects.update_or_create(
+                session_key=request.session.session_key,
+                defaults={"user": user},
+            )
         assignment = get_active_admin_assignment(user)
         return Response(
             {
@@ -454,6 +458,12 @@ class AdminLoginView(APIView):
             )
 
         login(request, user)
+        if request.session.session_key:
+            UserSession.objects.update_or_create(
+                session_key=request.session.session_key,
+                defaults={"user": user},
+            )
+        get_token(request)
         return Response(
             {
                 "email": user.email,
@@ -465,11 +475,14 @@ class AdminLoginView(APIView):
 
 
 class AdminLogoutView(APIView):
-    authentication_classes = [CsrfExemptSessionAuthentication]
+    authentication_classes = [SessionAuthentication]
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        session_key = request.session.session_key
         logout(request)
+        if session_key:
+            UserSession.objects.filter(session_key=session_key).delete()
         return Response({"ok": True})
 
 
@@ -477,6 +490,7 @@ class AdminSessionView(APIView):
     permission_classes = [IsAuthenticated, IsActiveAdmin]
 
     def get(self, request):
+        get_token(request)
         assignment = get_active_admin_assignment(request.user)
         profile = getattr(request.user, "profile", None)
         return Response(
@@ -491,7 +505,7 @@ class AdminSessionView(APIView):
 
 
 class AdminChangeTemporaryPasswordView(APIView):
-    authentication_classes = [CsrfExemptSessionAuthentication]
+    authentication_classes = [SessionAuthentication]
     permission_classes = [IsAuthenticated, IsActiveAdmin]
 
     def post(self, request):
