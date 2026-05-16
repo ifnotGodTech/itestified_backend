@@ -1,0 +1,40 @@
+from django.urls import path
+
+from .views import (
+    AdminChangeTemporaryPasswordView,
+    AdminInviteCompleteView,
+    AdminInviteView,
+    AdminInviteVerifyView,
+    AdminLoginView,
+    AdminLogoutView,
+    AdminSessionView,
+    MobileGoogleSignInView,
+    MobileLoginView,
+    MobileRegistrationCompleteView,
+    MobileRegistrationStartView,
+    MobileRegistrationVerifyView,
+    PasswordResetCompleteView,
+    PasswordResetRequestView,
+    PasswordResetVerifyView,
+)
+
+urlpatterns = [
+    path("mobile/register/start/", MobileRegistrationStartView.as_view(), name="auth-mobile-register-start"),
+    path("mobile/register/verify/", MobileRegistrationVerifyView.as_view(), name="auth-mobile-register-verify"),
+    path("mobile/register/complete/", MobileRegistrationCompleteView.as_view(), name="auth-mobile-register-complete"),
+    path("mobile/login/", MobileLoginView.as_view(), name="auth-mobile-login"),
+    path("mobile/google/", MobileGoogleSignInView.as_view(), name="auth-mobile-google"),
+    path("mobile/password-reset/request/", PasswordResetRequestView.as_view(), name="auth-mobile-password-reset-request"),
+    path("mobile/password-reset/verify/", PasswordResetVerifyView.as_view(), name="auth-mobile-password-reset-verify"),
+    path("mobile/password-reset/complete/", PasswordResetCompleteView.as_view(), name="auth-mobile-password-reset-complete"),
+    path("admin/invitations/", AdminInviteView.as_view(), name="auth-admin-invitations"),
+    path("admin/invite/verify/", AdminInviteVerifyView.as_view(), name="auth-admin-invite-verify"),
+    path("admin/invite/complete/", AdminInviteCompleteView.as_view(), name="auth-admin-invite-complete"),
+    path("admin/login/", AdminLoginView.as_view(), name="auth-admin-login"),
+    path("admin/logout/", AdminLogoutView.as_view(), name="auth-admin-logout"),
+    path("admin/session/", AdminSessionView.as_view(), name="auth-admin-session"),
+    path("admin/change-temporary-password/", AdminChangeTemporaryPasswordView.as_view(), name="auth-admin-change-temporary-password"),
+    path("admin/forgot-password/", PasswordResetRequestView.as_view(), name="auth-admin-forgot-password"),
+    path("admin/password-reset/verify/", PasswordResetVerifyView.as_view(), name="auth-admin-password-reset-verify"),
+    path("admin/password-reset/complete/", PasswordResetCompleteView.as_view(), name="auth-admin-password-reset-complete"),
+]

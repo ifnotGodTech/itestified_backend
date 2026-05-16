@@ -1,0 +1,25 @@
+# Django
+*.pyc
+__pycache__/
+db.sqlite3
+*.sqlite3
+staticfiles/
+media/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# Editor
+.DS_Store
+.idea/
+.vscode/

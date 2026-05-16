@@ -1,0 +1,38 @@
+import os
+
+from .base import *
+from .env import get_bool, get_list
+
+DEBUG = False
+SECRET_KEY = os.environ["DJANGO_SECRET_KEY"]
+ALLOWED_HOSTS = get_list("DJANGO_ALLOWED_HOSTS")
+
+DATABASES = {
+    "default": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": os.environ["POSTGRES_DB"],
+        "USER": os.environ["POSTGRES_USER"],
+        "PASSWORD": os.environ["POSTGRES_PASSWORD"],
+        "HOST": os.environ.get("POSTGRES_HOST", "localhost"),
+        "PORT": os.environ.get("POSTGRES_PORT", "5432"),
+    }
+}
+
+SECURE_SSL_REDIRECT = get_bool("DJANGO_SECURE_SSL_REDIRECT", True)
+SESSION_COOKIE_SECURE = True
+CSRF_COOKIE_SECURE = True
+SECURE_HSTS_SECONDS = int(os.environ.get("DJANGO_SECURE_HSTS_SECONDS", "3600"))
+SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+SECURE_HSTS_PRELOAD = True
+ADMIN_ENTRY_CODE = os.environ["ADMIN_ENTRY_CODE"]
+EMAIL_BACKEND = os.environ.get("EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend")
+EMAIL_HOST = os.environ["EMAIL_HOST"]
+EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "587"))
+EMAIL_HOST_USER = os.environ["EMAIL_HOST_USER"]
+EMAIL_HOST_PASSWORD = os.environ["EMAIL_HOST_PASSWORD"]
+EMAIL_USE_TLS = get_bool("EMAIL_USE_TLS", True)
+EMAIL_USE_SSL = get_bool("EMAIL_USE_SSL", False)
+DEFAULT_FROM_EMAIL = os.environ["DEFAULT_FROM_EMAIL"]
+SUPPORT_EMAIL = os.environ["SUPPORT_EMAIL"]
+# Policy lock: OTP hints must never be exposed in production responses.
+OTP_HINT_IN_RESPONSE = False
