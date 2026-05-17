@@ -1,0 +1,86 @@
+services:
+  - type: web
+    name: itestified-backend
+    runtime: python
+    rootDir: backend
+    plan: starter
+    buildCommand: |
+      pip install -r requirements/production.txt
+      python manage.py collectstatic --noinput
+      python manage.py migrate --noinput
+    startCommand: gunicorn config.wsgi:application --bind 0.0.0.0:$PORT --workers 3 --timeout 120
+    healthCheckPath: /api/v1/
+    envVars:
+      - key: DJANGO_SETTINGS_MODULE
+        value: config.settings.production
+      - key: DJANGO_SECRET_KEY
+        generateValue: true
+      - key: DJANGO_ALLOWED_HOSTS
+        value: itestified-backend.onrender.com
+      - key: DJANGO_CSRF_TRUSTED_ORIGINS
+        value: https://itestified-backend.onrender.com
+      - key: DJANGO_SECURE_SSL_REDIRECT
+        value: true
+      - key: DJANGO_USE_X_FORWARDED_HOST
+        value: true
+      - key: OTP_HINT_IN_RESPONSE
+        value: false
+      - key: PYTHON_VERSION
+        value: 3.12.4
+      - key: POSTGRES_DB
+        fromDatabase:
+          name: itestified-db
+          property: database
+      - key: POSTGRES_USER
+        fromDatabase:
+          name: itestified-db
+          property: user
+      - key: POSTGRES_PASSWORD
+        fromDatabase:
+          name: itestified-db
+          property: password
+      - key: POSTGRES_HOST
+        fromDatabase:
+          name: itestified-db
+          property: host
+      - key: POSTGRES_PORT
+        fromDatabase:
+          name: itestified-db
+          property: port
+      - key: ADMIN_ENTRY_CODE
+        sync: false
+      - key: EMAIL_HOST
+        sync: false
+      - key: EMAIL_PORT
+        value: "587"
+      - key: EMAIL_HOST_USER
+        sync: false
+      - key: EMAIL_HOST_PASSWORD
+        sync: false
+      - key: EMAIL_USE_TLS
+        value: true
+      - key: EMAIL_USE_SSL
+        value: false
+      - key: DEFAULT_FROM_EMAIL
+        sync: false
+      - key: SUPPORT_EMAIL
+        sync: false
+      - key: GOOGLE_OAUTH_CLIENT_IDS
+        sync: false
+      - key: GOOGLE_OAUTH_ALLOWED_ISSUERS
+        value: https://accounts.google.com,accounts.google.com
+      - key: FLUTTERWAVE_PUBLIC_KEY
+        sync: false
+      - key: FLUTTERWAVE_SECRET_KEY
+        sync: false
+      - key: FLUTTERWAVE_SECRET_HASH
+        sync: false
+      - key: FLUTTERWAVE_BASE_URL
+        value: https://api.flutterwave.com
+      - key: FLUTTERWAVE_REDIRECT_URL
+        sync: false
+
+databases:
+  - name: itestified-db
+    databaseName: itestified
+    user: itestified
