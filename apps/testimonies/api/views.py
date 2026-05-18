@@ -19,6 +19,7 @@ from apps.testimonies.models import (
     TestimonyFavorite,
     TestimonyModerationHistory,
     TestimonyStatus,
+    TestimonyType,
 )
 from apps.authn.api.permissions import IsActiveAdmin
 from apps.testimonies.services.commands import (
@@ -27,7 +28,7 @@ from apps.testimonies.services.commands import (
     reject_testimony,
     schedule_testimony,
 )
-from apps.notifications.services import notify_testimony_comment
+from apps.notifications.services import notify_testimony_comment, notify_testimony_submitted_to_admins
 
 from .serializers import (
     AdminTestimonyCategorySerializer,
@@ -42,6 +43,7 @@ from .serializers import (
     TestimonyDetailSerializer,
     TestimonyListSerializer,
     TestimonyModerationHistorySerializer,
+    RejectedTestimonyResubmitSerializer,
     TestimonyVideoCreateSerializer,
 )
 
@@ -125,6 +127,40 @@ class AuthenticatedMyTestimonyListView(generics.ListAPIView):
         return Testimony.objects.select_related("author", "author__profile", "category").filter(
             author=self.request.user
         )
+
+
+class AuthenticatedRejectedTestimonyResubmitView(APIView):
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, testimony_id: int):
+        testimony = Testimony.objects.filter(id=testimony_id, author=request.user).first()
+        if testimony is None:
+            return Response({"message": "Testimony not found."}, status=status.HTTP_404_NOT_FOUND)
+        if testimony.testimony_type != TestimonyType.WRITTEN:
+            return Response({"message": "Only written testimonies can be edited here."}, status=status.HTTP_400_BAD_REQUEST)
+        if testimony.status != TestimonyStatus.REJECTED:
+            return Response(
+                {"message": "Only rejected testimonies can be resubmitted."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        serializer = RejectedTestimonyResubmitSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        testimony.title = serializer.validated_data["title"]
+        testimony.body = serializer.validated_data["body"]
+        testimony.category = serializer.validated_data["category"]
+        testimony.status = TestimonyStatus.PENDING_REVIEW
+        testimony.rejection_reason = ""
+        testimony.save(update_fields=["title", "body", "category", "status", "rejection_reason", "updated_at"])
+
+        notify_testimony_submitted_to_admins(
+            testimony_title=testimony.title,
+            testimony_type=testimony.testimony_type,
+            actor=request.user,
+        )
+
+        return Response(TestimonyDetailSerializer(testimony).data, status=status.HTTP_200_OK)
 
 
 class FavoriteListView(generics.ListAPIView):

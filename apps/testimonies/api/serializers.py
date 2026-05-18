@@ -223,6 +223,25 @@ class TestimonyCreateSerializer(serializers.ModelSerializer):
         return testimony
 
 
+class RejectedTestimonyResubmitSerializer(serializers.Serializer):
+    title = serializers.CharField(max_length=255)
+    body = serializers.CharField()
+    category_id = serializers.PrimaryKeyRelatedField(
+        source="category",
+        queryset=TestimonyCategory.objects.filter(is_active=True),
+    )
+
+    def validate_title(self, value: str) -> str:
+        if not value or not value.strip():
+            raise serializers.ValidationError("Title is required.")
+        return value.strip()
+
+    def validate_body(self, value: str) -> str:
+        if not value or not value.strip():
+            raise serializers.ValidationError("Body is required for written testimony.")
+        return value.strip()
+
+
 class TestimonyVideoCreateSerializer(serializers.ModelSerializer):
     _DISALLOWED_VIDEO_PAGE_HOSTS = {
         "youtube.com",

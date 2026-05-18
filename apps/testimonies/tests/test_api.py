@@ -4,6 +4,7 @@ from django.utils import timezone
 from django.core.management import call_command
 from rest_framework.authtoken.models import Token
 
+from apps.notifications.models import NotificationType, UserNotification
 from apps.testimonies.models import (
     TestimonyComment,
     Testimony,
@@ -259,6 +260,104 @@ class TestimonyApiTests(TestCase):
         self.assertNotIn("Not mine", titles)
         rejected = next(item for item in response.json()["results"] if item["title"] == "Mine rejected")
         self.assertEqual(rejected["rejection_reason"], "Needs more detail.")
+
+    def test_rejected_written_testimony_resubmit_transitions_to_pending_and_notifies_admin(self) -> None:
+        owner = UserFactory(email="resubmit-owner@example.com")
+        ProfileFactory(user=owner, full_name="Resubmit Owner")
+        owner_token = Token.objects.create(user=owner)
+        rejected = Testimony.objects.create(
+            author=owner,
+            category=self.category_faith,
+            title="Rejected Title",
+            body="Rejected body",
+            testimony_type=TestimonyType.WRITTEN,
+            status=TestimonyStatus.REJECTED,
+            rejection_reason="Needs details.",
+        )
+
+        admin_user = UserFactory(email="resubmit-admin@example.com")
+        ProfileFactory(user=admin_user, full_name="Resubmit Admin")
+        admin_role = AdminRoleFactory(code=AdminRoleCode.MODERATOR)
+        AdminAssignmentFactory(user=admin_user, role=admin_role)
+
+        response = self.client.post(
+            reverse("testimony-mine-resubmit", kwargs={"testimony_id": rejected.id}),
+            {
+                "title": "Updated Rejected Title",
+                "body": "Updated testimony body with enough details.",
+                "category_id": self.category_healing.id,
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {owner_token.key}",
+        )
+        self.assertEqual(response.status_code, 200)
+        rejected.refresh_from_db()
+        self.assertEqual(rejected.status, TestimonyStatus.PENDING_REVIEW)
+        self.assertEqual(rejected.rejection_reason, "")
+        self.assertEqual(rejected.category_id, self.category_healing.id)
+        self.assertEqual(rejected.title, "Updated Rejected Title")
+
+        admin_notification = UserNotification.objects.filter(
+            recipient=admin_user,
+            actor=owner,
+            notification_type=NotificationType.TESTIMONY_SUBMITTED,
+        ).first()
+        self.assertIsNotNone(admin_notification)
+        self.assertIn("Updated Rejected Title", admin_notification.message)  # type: ignore[union-attr]
+
+    def test_rejected_testimony_resubmit_returns_404_for_non_owner(self) -> None:
+        owner = UserFactory(email="resubmit-owner-2@example.com")
+        other = UserFactory(email="resubmit-other@example.com")
+        other_token = Token.objects.create(user=other)
+        rejected = Testimony.objects.create(
+            author=owner,
+            category=self.category_faith,
+            title="Owner Rejected",
+            body="Original body",
+            testimony_type=TestimonyType.WRITTEN,
+            status=TestimonyStatus.REJECTED,
+            rejection_reason="Needs edit",
+        )
+
+        response = self.client.post(
+            reverse("testimony-mine-resubmit", kwargs={"testimony_id": rejected.id}),
+            {
+                "title": "Attempted edit",
+                "body": "Not allowed",
+                "category_id": self.category_faith.id,
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {other_token.key}",
+        )
+        self.assertEqual(response.status_code, 404)
+        rejected.refresh_from_db()
+        self.assertEqual(rejected.status, TestimonyStatus.REJECTED)
+        self.assertEqual(rejected.title, "Owner Rejected")
+
+    def test_rejected_testimony_resubmit_rejects_non_rejected_status(self) -> None:
+        owner = UserFactory(email="resubmit-owner-3@example.com")
+        owner_token = Token.objects.create(user=owner)
+        pending = Testimony.objects.create(
+            author=owner,
+            category=self.category_faith,
+            title="Pending testimony",
+            body="Pending body",
+            testimony_type=TestimonyType.WRITTEN,
+            status=TestimonyStatus.PENDING_REVIEW,
+        )
+
+        response = self.client.post(
+            reverse("testimony-mine-resubmit", kwargs={"testimony_id": pending.id}),
+            {
+                "title": "Pending testimony updated",
+                "body": "Still pending",
+                "category_id": self.category_healing.id,
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {owner_token.key}",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["message"], "Only rejected testimonies can be resubmitted.")
 
     def test_slice6_and_slice7_add_and_remove_favorite(self) -> None:
         user = UserFactory(email="favorite@example.com")
