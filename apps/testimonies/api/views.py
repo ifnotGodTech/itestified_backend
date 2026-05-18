@@ -3,6 +3,7 @@ from rest_framework.authentication import SessionAuthentication, TokenAuthentica
 from django.utils import timezone
 from django.db.models import F
 from django.db.models import Count
+from django.db.models import Q
 from django.db.models.functions import Greatest
 from datetime import datetime
 from rest_framework.pagination import PageNumberPagination
@@ -250,8 +251,13 @@ class TestimonyCommentDeleteView(APIView):
         if comment.author_id != request.user.id:
             return Response({"message": "You can only delete your own comment."}, status=status.HTTP_403_FORBIDDEN)
         testimony_id = comment.testimony_id
+        deleted_comment_count = TestimonyComment.objects.filter(
+            Q(id=comment.id) | Q(parent_comment_id=comment.id)
+        ).count()
         comment.delete()
-        Testimony.objects.filter(id=testimony_id).update(comment_count=Greatest(F("comment_count") - 1, 0))
+        Testimony.objects.filter(id=testimony_id).update(
+            comment_count=Greatest(F("comment_count") - deleted_comment_count, 0)
+        )
         return Response({"message": "Comment deleted."}, status=status.HTTP_200_OK)
 
 
