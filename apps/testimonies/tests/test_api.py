@@ -359,6 +359,67 @@ class TestimonyApiTests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["message"], "Only rejected testimonies can be resubmitted.")
 
+    def test_my_testimony_delete_allows_owner_for_rejected(self) -> None:
+        owner = UserFactory(email="delete-owner@example.com")
+        owner_token = Token.objects.create(user=owner)
+        rejected = Testimony.objects.create(
+            author=owner,
+            category=self.category_faith,
+            title="Delete me rejected",
+            body="Rejected content",
+            testimony_type=TestimonyType.WRITTEN,
+            status=TestimonyStatus.REJECTED,
+            rejection_reason="Needs edit",
+        )
+
+        response = self.client.delete(
+            reverse("testimony-mine-delete", kwargs={"testimony_id": rejected.id}),
+            HTTP_AUTHORIZATION=f"Token {owner_token.key}",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(Testimony.objects.filter(id=rejected.id).exists())
+
+    def test_my_testimony_delete_rejects_non_owner(self) -> None:
+        owner = UserFactory(email="delete-owner-2@example.com")
+        other = UserFactory(email="delete-other@example.com")
+        other_token = Token.objects.create(user=other)
+        rejected = Testimony.objects.create(
+            author=owner,
+            category=self.category_faith,
+            title="Cannot delete",
+            body="Rejected content",
+            testimony_type=TestimonyType.WRITTEN,
+            status=TestimonyStatus.REJECTED,
+            rejection_reason="Needs edit",
+        )
+
+        response = self.client.delete(
+            reverse("testimony-mine-delete", kwargs={"testimony_id": rejected.id}),
+            HTTP_AUTHORIZATION=f"Token {other_token.key}",
+        )
+        self.assertEqual(response.status_code, 404)
+        self.assertTrue(Testimony.objects.filter(id=rejected.id).exists())
+
+    def test_my_testimony_delete_rejects_approved_status(self) -> None:
+        owner = UserFactory(email="delete-owner-3@example.com")
+        owner_token = Token.objects.create(user=owner)
+        approved = Testimony.objects.create(
+            author=owner,
+            category=self.category_faith,
+            title="Approved cannot delete",
+            body="Approved content",
+            testimony_type=TestimonyType.WRITTEN,
+            status=TestimonyStatus.APPROVED,
+        )
+
+        response = self.client.delete(
+            reverse("testimony-mine-delete", kwargs={"testimony_id": approved.id}),
+            HTTP_AUTHORIZATION=f"Token {owner_token.key}",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["message"], "Only pending or rejected testimonies can be deleted.")
+        self.assertTrue(Testimony.objects.filter(id=approved.id).exists())
+
     def test_slice6_and_slice7_add_and_remove_favorite(self) -> None:
         user = UserFactory(email="favorite@example.com")
         ProfileFactory(user=user, full_name="Favorite User")

@@ -163,6 +163,23 @@ class AuthenticatedRejectedTestimonyResubmitView(APIView):
         return Response(TestimonyDetailSerializer(testimony).data, status=status.HTTP_200_OK)
 
 
+class AuthenticatedMyTestimonyDeleteView(APIView):
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, testimony_id: int):
+        testimony = Testimony.objects.filter(id=testimony_id, author=request.user).first()
+        if testimony is None:
+            return Response({"message": "Testimony not found."}, status=status.HTTP_404_NOT_FOUND)
+        if testimony.status not in (TestimonyStatus.PENDING_REVIEW, TestimonyStatus.REJECTED):
+            return Response(
+                {"message": "Only pending or rejected testimonies can be deleted."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        testimony.delete()
+        return Response({"message": "Testimony deleted."}, status=status.HTTP_200_OK)
+
+
 class FavoriteListView(generics.ListAPIView):
     authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
