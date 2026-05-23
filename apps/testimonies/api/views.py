@@ -47,6 +47,7 @@ from .serializers import (
     RejectedTestimonyResubmitSerializer,
     AdminVideoTestimonyUploadSerializer,
     AdminVideoTestimonyEditSerializer,
+    AdminVideoTestimonyCreateFromUrlSerializer,
     TestimonyVideoCreateSerializer,
 )
 
@@ -509,6 +510,18 @@ class AdminVideoTestimonyUploadView(generics.CreateAPIView):
     permission_classes = [IsActiveAdmin]
     parser_classes = [MultiPartParser, FormParser]
     serializer_class = AdminVideoTestimonyUploadSerializer
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        testimony = serializer.save()
+        return Response(AdminTestimonyDetailSerializer(testimony).data, status=status.HTTP_201_CREATED)
+
+
+class AdminVideoTestimonyCreateFromUrlView(generics.CreateAPIView):
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsActiveAdmin]
+    serializer_class = AdminVideoTestimonyCreateFromUrlSerializer
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)

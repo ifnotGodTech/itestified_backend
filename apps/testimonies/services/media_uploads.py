@@ -25,6 +25,12 @@ def _configure_cloudinary() -> None:
     except ImportError as exc:
         raise CloudinaryUploadError("cloudinary package is not installed.") from exc
 
+    # Support both explicit vars and Cloudinary URL-style config so Render env setup is flexible.
+    cloudinary_url = os.environ.get("CLOUDINARY_URL", "").strip()
+    if cloudinary_url:
+        cloudinary.config(cloudinary_url=cloudinary_url, secure=True)
+        return
+
     cloudinary.config(
         cloud_name=_require_env("CLOUDINARY_CLOUD_NAME"),
         api_key=_require_env("CLOUDINARY_API_KEY"),
@@ -41,8 +47,17 @@ def upload_testimony_media(*, video_file, thumbnail_file=None) -> CloudinaryUplo
     except ImportError as exc:
         raise CloudinaryUploadError("cloudinary uploader could not be imported.") from exc
 
-    video_folder = os.environ.get("CLOUDINARY_TESTIMONY_VIDEO_FOLDER", "itestified/testimonies/videos")
-    thumbnail_folder = os.environ.get("CLOUDINARY_TESTIMONY_THUMBNAIL_FOLDER", "itestified/testimonies/thumbnails")
+    common_upload_folder = os.environ.get("CLOUDINARY_UPLOAD_FOLDER", "").strip()
+    video_folder = (
+        os.environ.get("CLOUDINARY_TESTIMONY_VIDEO_FOLDER", "").strip()
+        or common_upload_folder
+        or "itestified/testimonies/videos"
+    )
+    thumbnail_folder = (
+        os.environ.get("CLOUDINARY_TESTIMONY_THUMBNAIL_FOLDER", "").strip()
+        or common_upload_folder
+        or "itestified/testimonies/thumbnails"
+    )
 
     try:
         video_result = uploader.upload_large(

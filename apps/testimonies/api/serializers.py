@@ -508,6 +508,78 @@ class AdminVideoTestimonyEditSerializer(serializers.Serializer):
         return instance
 
 
+class AdminVideoTestimonyCreateFromUrlSerializer(serializers.Serializer):
+    title = serializers.CharField(max_length=255)
+    category_id = serializers.PrimaryKeyRelatedField(
+        source="category",
+        queryset=TestimonyCategory.objects.filter(is_active=True),
+    )
+    video_url = serializers.URLField()
+    thumbnail_url = serializers.URLField(required=False, allow_blank=True)
+    body = serializers.CharField(required=False, allow_blank=True)
+    upload_status = serializers.ChoiceField(
+        choices=AdminVideoTestimonyUploadSerializer.UploadStatus.CHOICES,
+        required=False,
+        default=AdminVideoTestimonyUploadSerializer.UploadStatus.UPLOAD_NOW,
+    )
+    scheduled_publish_at = serializers.CharField(required=False, allow_blank=True)
+
+    def validate_title(self, value: str) -> str:
+        trimmed = value.strip()
+        if not trimmed:
+            raise serializers.ValidationError("Title is required.")
+        return trimmed
+
+    def validate_body(self, value: str) -> str:
+        return value.strip()
+
+    def validate(self, attrs):
+        upload_status = attrs.get("upload_status", AdminVideoTestimonyUploadSerializer.UploadStatus.UPLOAD_NOW)
+        raw_publish_at = str(attrs.get("scheduled_publish_at", "")).strip()
+        if upload_status == AdminVideoTestimonyUploadSerializer.UploadStatus.SCHEDULE_FOR_LATER:
+            if not raw_publish_at:
+                raise serializers.ValidationError(
+                    {"scheduled_publish_at": "scheduled_publish_at is required when upload_status is schedule_for_later."}
+                )
+            try:
+                publish_at = datetime.fromisoformat(raw_publish_at.replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise serializers.ValidationError({"scheduled_publish_at": "scheduled_publish_at must be a valid ISO datetime."}) from exc
+            if timezone.is_naive(publish_at):
+                publish_at = timezone.make_aware(publish_at, timezone.get_current_timezone())
+            if publish_at <= timezone.now():
+                raise serializers.ValidationError({"scheduled_publish_at": "scheduled_publish_at must be in the future."})
+            attrs["parsed_scheduled_publish_at"] = publish_at
+        else:
+            attrs["parsed_scheduled_publish_at"] = None
+        return attrs
+
+    def create(self, validated_data):
+        actor = self.context["request"].user
+        upload_status = validated_data.get("upload_status", AdminVideoTestimonyUploadSerializer.UploadStatus.UPLOAD_NOW)
+        status_value = TestimonyStatus.PENDING_REVIEW
+        publish_at = None
+        if upload_status == AdminVideoTestimonyUploadSerializer.UploadStatus.UPLOAD_NOW:
+            status_value = TestimonyStatus.APPROVED
+        elif upload_status == AdminVideoTestimonyUploadSerializer.UploadStatus.SCHEDULE_FOR_LATER:
+            status_value = TestimonyStatus.SCHEDULED
+            publish_at = validated_data.get("parsed_scheduled_publish_at")
+        elif upload_status == AdminVideoTestimonyUploadSerializer.UploadStatus.DRAFT:
+            status_value = TestimonyStatus.DRAFT
+
+        return Testimony.objects.create(
+            author=actor,
+            category=validated_data["category"],
+            title=validated_data["title"],
+            body=validated_data.get("body", ""),
+            video_url=validated_data["video_url"],
+            thumbnail_url=validated_data.get("thumbnail_url", ""),
+            testimony_type=TestimonyType.VIDEO,
+            status=status_value,
+            publish_at=publish_at,
+        )
+
+
 class FavoriteSerializer(serializers.ModelSerializer):
     class Meta:
         model = TestimonyFavorite
