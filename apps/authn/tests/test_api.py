@@ -360,6 +360,21 @@ class AuthnApiTests(TestCase):
         self.assertEqual(body["error"]["code"], "challenge_verification_failed")
         self.assertIn("No password reset challenge was found", body["message"])
 
+    @patch("apps.authn.services.commands._build_otp_email_html")
+    def test_mobile_password_reset_request_returns_503_when_email_template_build_fails(self, mock_build_html) -> None:
+        user = UserFactory(email="mobile-reset-template-fail@example.com")
+        mock_build_html.side_effect = RuntimeError("template failure")
+
+        response = self.client.post(
+            reverse("auth-mobile-password-reset-request"),
+            {"email": user.email},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 503)
+        body = response.json()
+        self.assertEqual(body["error"]["code"], "email_delivery_failed")
+        self.assertIn("Unable to send the verification code right now", body["message"])
+
     @override_settings(OTP_HINT_IN_RESPONSE=True)
     def test_admin_password_reset_verify_and_complete_flow(self) -> None:
         user = UserFactory(email="admin-reset@example.com")

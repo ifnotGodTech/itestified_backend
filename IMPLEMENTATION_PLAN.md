@@ -80,7 +80,7 @@ Important constraint:
 - Phase 1: Completed
 - Phase 2: Completed
 - Phase 3: Completed
-- Phase 4: In progress (Slices 1-9 implemented)
+- Phase 4: In progress (Slices 1-11 implemented)
 - Phase 5: In progress (Slices 1-7 implemented)
 - Phase 6: In progress (Slices 1-7 implemented)
 - Phase 7: In progress (Slices 1-8 implemented)
@@ -426,6 +426,8 @@ Sub-slices:
 - **Slice 4 — Schedule a testimony** — admin approves a testimony but sets a future publish date; testimony is not visible on mobile until that date is reached
 - **Slice 5 — Archive a testimony** — admin removes an approved testimony from the public feed by archiving it; the testimony is no longer visible to mobile users but is not deleted
 - **Slice 6 — View moderation history** — admin opens a testimony's detail view and sees a full chronological audit trail of every moderation action taken, who took it, when, and any reason recorded
+- **Slice 10 — Edit video testimony metadata** — admin opens a video testimony edit modal and updates title/category; for scheduled video testimonies, admin can also update future publish datetime with validation
+- **Slice 11 — Delete testimony record from admin list** — admin can delete a testimony from the moderation list (video and text), with confirmation modal and role enforcement
 
 #### Mobile User Flows
 

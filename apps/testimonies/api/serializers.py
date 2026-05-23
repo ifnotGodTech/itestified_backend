@@ -421,7 +421,9 @@ class AdminVideoTestimonyUploadSerializer(serializers.Serializer):
         upload_status = validated_data.get("upload_status", self.UploadStatus.UPLOAD_NOW)
         status_value = TestimonyStatus.PENDING_REVIEW
         publish_at = None
-        if upload_status == self.UploadStatus.SCHEDULE_FOR_LATER:
+        if upload_status == self.UploadStatus.UPLOAD_NOW:
+            status_value = TestimonyStatus.APPROVED
+        elif upload_status == self.UploadStatus.SCHEDULE_FOR_LATER:
             status_value = TestimonyStatus.SCHEDULED
             publish_at = validated_data.get("parsed_scheduled_publish_at")
         elif upload_status == self.UploadStatus.DRAFT:
@@ -438,12 +440,72 @@ class AdminVideoTestimonyUploadSerializer(serializers.Serializer):
             status=status_value,
             publish_at=publish_at,
         )
-        notify_testimony_submitted_to_admins(
-            testimony_title=testimony.title,
-            testimony_type=testimony.testimony_type,
-            actor=actor,
-        )
+        # Admin-originated uploads should not trigger the mobile/user submission review notification flow.
         return testimony
+
+
+class AdminVideoTestimonyEditSerializer(serializers.Serializer):
+    title = serializers.CharField(max_length=255, required=False)
+    category_id = serializers.PrimaryKeyRelatedField(
+        source="category",
+        queryset=TestimonyCategory.objects.filter(is_active=True),
+        required=False,
+    )
+    scheduled_publish_at = serializers.CharField(required=False, allow_blank=True)
+
+    def validate_title(self, value: str) -> str:
+        trimmed = value.strip()
+        if not trimmed:
+            raise serializers.ValidationError("Title is required.")
+        return trimmed
+
+    def validate(self, attrs):
+        testimony = self.instance
+        if testimony is None:
+            return attrs
+
+        raw_publish_at = str(attrs.get("scheduled_publish_at", "")).strip()
+        if testimony.status == TestimonyStatus.SCHEDULED and raw_publish_at:
+            try:
+                publish_at = datetime.fromisoformat(raw_publish_at.replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise serializers.ValidationError(
+                    {"scheduled_publish_at": "scheduled_publish_at must be a valid ISO datetime."}
+                ) from exc
+            if timezone.is_naive(publish_at):
+                publish_at = timezone.make_aware(publish_at, timezone.get_current_timezone())
+            if publish_at <= timezone.now():
+                raise serializers.ValidationError(
+                    {"scheduled_publish_at": "scheduled_publish_at must be in the future."}
+                )
+            attrs["parsed_scheduled_publish_at"] = publish_at
+        elif raw_publish_at:
+            raise serializers.ValidationError(
+                {"scheduled_publish_at": "scheduled_publish_at can only be updated for scheduled testimonies."}
+            )
+        return attrs
+
+    def update(self, instance: Testimony, validated_data):
+        fields_to_update = []
+
+        title = validated_data.get("title")
+        if title is not None:
+            instance.title = title
+            fields_to_update.append("title")
+
+        category = validated_data.get("category")
+        if category is not None:
+            instance.category = category
+            fields_to_update.append("category")
+
+        parsed_publish_at = validated_data.get("parsed_scheduled_publish_at")
+        if parsed_publish_at is not None:
+            instance.publish_at = parsed_publish_at
+            fields_to_update.append("publish_at")
+
+        if fields_to_update:
+            instance.save(update_fields=[*fields_to_update, "updated_at"])
+        return instance
 
 
 class FavoriteSerializer(serializers.ModelSerializer):

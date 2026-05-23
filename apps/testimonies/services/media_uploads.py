@@ -59,6 +59,7 @@ def upload_testimony_media(*, video_file, thumbnail_file=None) -> CloudinaryUplo
         raise CloudinaryUploadError("Cloudinary did not return a secure video URL.")
 
     thumbnail_url = ""
+    public_id = str(video_result.get("public_id") or "").strip()
     if thumbnail_file is not None:
         try:
             thumbnail_result = uploader.upload(
@@ -70,5 +71,24 @@ def upload_testimony_media(*, video_file, thumbnail_file=None) -> CloudinaryUplo
             thumbnail_url = str(thumbnail_result.get("secure_url") or "").strip()
         except Exception as exc:  # noqa: BLE001 - third-party exceptions vary.
             raise CloudinaryUploadError("Thumbnail upload failed.") from exc
+    elif public_id:
+        try:
+            # Auto-generate a thumbnail frame from the uploaded video when no thumbnail was provided.
+            from cloudinary.utils import cloudinary_url
+
+            generated_url, _ = cloudinary_url(
+                public_id,
+                resource_type="video",
+                type="upload",
+                format="jpg",
+                secure=True,
+                transformation=[
+                    {"start_offset": "2"},
+                    {"width": 1280, "height": 720, "crop": "fill", "gravity": "auto"},
+                ],
+            )
+            thumbnail_url = str(generated_url or "").strip()
+        except Exception:
+            thumbnail_url = ""
 
     return CloudinaryUploadResult(video_url=video_url, thumbnail_url=thumbnail_url)

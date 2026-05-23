@@ -433,7 +433,7 @@ Failure checks:
 ---
 
 ## Phase 4 — Moderation and Review Workflows
-Status: In progress (Slices 1-9 implemented)
+Status: In progress (Slices 1-11 implemented)
 
 ## Admin Flows
 
@@ -472,6 +472,15 @@ Goal: moderation actions are auditable.
 Expected behavior:
 - History shows who did what and when.
 - Status transitions are coherent (no illegal jumps).
+
+### Flow P4-A6 — Edit and delete testimony from admin modal
+Goal: admin testimony modals for edit/delete are fully functional and persisted.
+
+Expected behavior:
+- Video edit modal persists title/category updates immediately after save.
+- Scheduled video edit validates future schedule datetime and rejects past timestamps.
+- Delete modal removes selected testimony record (video or text) and list refreshes without stale row.
+- Non-admin access to edit/delete actions is blocked at API boundary.
 
 ## Mobile User Flow
 

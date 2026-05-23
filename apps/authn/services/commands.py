@@ -61,25 +61,25 @@ def _send_otp_email(*, email: str, purpose: str, code: str) -> None:
         subject = "iTestified verification code"
         purpose_line = "Use this code to verify your iTestified account registration."
 
-    text_message = "\n".join(
-        [
-            "Hello,",
-            "",
-            purpose_line,
-            f"Your code is: {code}",
-            f"This code expires in {expires_minutes} minutes.",
-            "",
-            "If you did not request this, you can ignore this message.",
-            f"Support: {support_email}",
-        ]
-    )
-    html_message = _build_otp_email_html(
-        purpose_line=purpose_line,
-        code=code,
-        expires_minutes=expires_minutes,
-        support_email=support_email,
-    )
     try:
+        text_message = "\n".join(
+            [
+                "Hello,",
+                "",
+                purpose_line,
+                f"Your code is: {code}",
+                f"This code expires in {expires_minutes} minutes.",
+                "",
+                "If you did not request this, you can ignore this message.",
+                f"Support: {support_email}",
+            ]
+        )
+        html_message = _build_otp_email_html(
+            purpose_line=purpose_line,
+            code=code,
+            expires_minutes=expires_minutes,
+            support_email=support_email,
+        )
         email_message = EmailMultiAlternatives(
             subject=subject,
             body=text_message,
@@ -135,11 +135,14 @@ def _email_logo_markup() -> str:
     if not logo_path.exists():
         return '<div style="color:#FFFFFF;font-size:22px;font-weight:800;letter-spacing:0.02em;">iTestified</div>'
 
-    encoded = base64.b64encode(logo_path.read_bytes()).decode("ascii")
-    return (
-        f'<img src="data:image/png;base64,{encoded}" alt="iTestified" '
-        'style="max-height:56px;width:auto;display:inline-block;" />'
-    )
+    try:
+        encoded = base64.b64encode(logo_path.read_bytes()).decode("ascii")
+        return (
+            f'<img src="data:image/png;base64,{encoded}" alt="iTestified" '
+            'style="max-height:56px;width:auto;display:inline-block;" />'
+        )
+    except Exception:
+        return '<div style="color:#FFFFFF;font-size:22px;font-weight:800;letter-spacing:0.02em;">iTestified</div>'
 
 
 def _generate_temp_password(length: int = 20) -> str:

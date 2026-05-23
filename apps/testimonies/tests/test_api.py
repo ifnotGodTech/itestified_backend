@@ -753,9 +753,13 @@ class AdminTestimonyApiTests(TestCase):
         self.assertEqual(response.status_code, 201)
         created = Testimony.objects.get(title="Admin uploaded testimony")
         self.assertEqual(created.testimony_type, TestimonyType.VIDEO)
-        self.assertEqual(created.status, TestimonyStatus.PENDING_REVIEW)
+        self.assertEqual(created.status, TestimonyStatus.APPROVED)
         self.assertEqual(created.video_url, "https://res.cloudinary.com/demo/video/upload/v1/testimony.mp4")
         self.assertEqual(created.thumbnail_url, "https://res.cloudinary.com/demo/image/upload/v1/thumb.jpg")
+        submitted_notifications = UserNotification.objects.filter(
+            notification_type=NotificationType.TESTIMONY_SUBMITTED
+        ).count()
+        self.assertEqual(submitted_notifications, 0)
 
     @patch("apps.testimonies.api.serializers.upload_testimony_media")
     def test_admin_upload_video_with_draft_status_persists_draft(self, upload_mock) -> None:
@@ -778,6 +782,7 @@ class AdminTestimonyApiTests(TestCase):
         self.assertEqual(response.status_code, 201)
         created = Testimony.objects.get(title="Draft upload testimony")
         self.assertEqual(created.status, TestimonyStatus.DRAFT)
+        self.assertIsNone(created.publish_at)
 
     @patch("apps.testimonies.api.serializers.upload_testimony_media")
     def test_admin_upload_video_with_schedule_status_requires_future_datetime(self, upload_mock) -> None:
@@ -817,6 +822,29 @@ class AdminTestimonyApiTests(TestCase):
         self.assertEqual(created.status, TestimonyStatus.SCHEDULED)
         self.assertIsNotNone(created.publish_at)
 
+    @patch("apps.testimonies.api.serializers.upload_testimony_media")
+    def test_admin_upload_video_upload_now_status_persists_approved(self, upload_mock) -> None:
+        from apps.testimonies.services.media_uploads import CloudinaryUploadResult
+
+        upload_mock.return_value = CloudinaryUploadResult(
+            video_url="https://res.cloudinary.com/demo/video/upload/v1/testimony-upload-now.mp4",
+            thumbnail_url="",
+        )
+        video = SimpleUploadedFile("testimony.mp4", b"fake-video-content", content_type="video/mp4")
+        response = self.client.post(
+            reverse("admin-testimony-upload-video"),
+            {
+                "title": "Upload now testimony",
+                "category_id": self.category.id,
+                "upload_status": "upload_now",
+                "video_file": video,
+            },
+        )
+        self.assertEqual(response.status_code, 201)
+        created = Testimony.objects.get(title="Upload now testimony")
+        self.assertEqual(created.status, TestimonyStatus.APPROVED)
+        self.assertIsNone(created.publish_at)
+
     def test_admin_upload_video_rejects_non_mp4_file(self) -> None:
         video = SimpleUploadedFile("testimony.mov", b"fake-video-content", content_type="video/quicktime")
         response = self.client.post(
@@ -843,6 +871,83 @@ class AdminTestimonyApiTests(TestCase):
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("total_videos_in_batch", response.json())
+
+    def test_admin_delete_video_testimony(self) -> None:
+        response = self.client.delete(
+            reverse("admin-testimony-delete-video", kwargs={"testimony_id": self.approved.id})
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(Testimony.objects.filter(id=self.approved.id).exists())
+
+    def test_admin_delete_text_testimony(self) -> None:
+        response = self.client.delete(
+            reverse("admin-testimony-delete-video", kwargs={"testimony_id": self.pending.id})
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(Testimony.objects.filter(id=self.pending.id).exists())
+
+    def test_admin_delete_testimony_requires_admin(self) -> None:
+        self.client.logout()
+        non_admin = UserFactory(email="nonadmin-delete@example.com")
+        self.client.force_login(non_admin)
+        response = self.client.delete(
+            reverse("admin-testimony-delete-video", kwargs={"testimony_id": self.approved.id})
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_admin_edit_video_testimony_updates_title_and_category(self) -> None:
+        faith = TestimonyCategory.objects.create(
+            name="Faith",
+            slug="faith",
+            description="Faith stories",
+            is_active=True,
+        )
+        response = self.client.patch(
+            reverse("admin-testimony-edit-video", kwargs={"testimony_id": self.approved.id}),
+            {"title": "Updated video title", "category_id": faith.id},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.approved.refresh_from_db()
+        self.assertEqual(self.approved.title, "Updated video title")
+        self.assertEqual(self.approved.category_id, faith.id)
+
+    def test_admin_edit_video_testimony_schedule_requires_future_datetime(self) -> None:
+        scheduled_video = Testimony.objects.create(
+            author=self.author,
+            category=self.category,
+            title="Scheduled video",
+            body="",
+            testimony_type=TestimonyType.VIDEO,
+            status=TestimonyStatus.SCHEDULED,
+            video_url="https://example.com/scheduled.mp4",
+            publish_at=timezone.now() + timezone.timedelta(days=1),
+        )
+        invalid = self.client.patch(
+            reverse("admin-testimony-edit-video", kwargs={"testimony_id": scheduled_video.id}),
+            {"scheduled_publish_at": (timezone.now() - timezone.timedelta(hours=1)).isoformat()},
+            content_type="application/json",
+        )
+        self.assertEqual(invalid.status_code, 400)
+        self.assertIn("scheduled_publish_at", invalid.json())
+
+        valid = self.client.patch(
+            reverse("admin-testimony-edit-video", kwargs={"testimony_id": scheduled_video.id}),
+            {"scheduled_publish_at": (timezone.now() + timezone.timedelta(days=2)).isoformat()},
+            content_type="application/json",
+        )
+        self.assertEqual(valid.status_code, 200)
+        scheduled_video.refresh_from_db()
+        self.assertEqual(scheduled_video.status, TestimonyStatus.SCHEDULED)
+        self.assertGreater(scheduled_video.publish_at, timezone.now())
+
+    def test_admin_edit_video_testimony_rejects_non_video(self) -> None:
+        response = self.client.patch(
+            reverse("admin-testimony-edit-video", kwargs={"testimony_id": self.pending.id}),
+            {"title": "Should fail"},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
 
     def test_admin_upload_video_requires_admin_session(self) -> None:
         self.client.logout()
