@@ -34,6 +34,7 @@ EMAIL_HOST_USER = os.environ["EMAIL_HOST_USER"]
 EMAIL_HOST_PASSWORD = os.environ["EMAIL_HOST_PASSWORD"]
 EMAIL_USE_TLS = get_bool("EMAIL_USE_TLS", True)
 EMAIL_USE_SSL = get_bool("EMAIL_USE_SSL", False)
+EMAIL_TIMEOUT = int(os.environ.get("EMAIL_TIMEOUT", "10"))
 DEFAULT_FROM_EMAIL = os.environ["DEFAULT_FROM_EMAIL"]
 SUPPORT_EMAIL = os.environ["SUPPORT_EMAIL"]
 # Policy lock: OTP hints must never be exposed in production responses.

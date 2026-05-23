@@ -1,5 +1,7 @@
 import secrets
 import base64
+import logging
+import time
 from datetime import timedelta
 from pathlib import Path
 from typing import Optional
@@ -29,6 +31,7 @@ BRAND_PURPLE_30 = "#D8C8FF"  # mobile AppColors.purple30
 BRAND_PURPLE_40 = "#E6D8FF"  # mobile AppColors.purple40
 BRAND_ORANGE = "#FF9F4A"  # mobile AppColors.colorsOrange / brandSupportColor3
 BRAND_DARK_GREY_100 = "#120F1A"  # mobile AppColors.darkGrey100
+logger = logging.getLogger(__name__)
 
 
 def _generate_otp() -> str:
@@ -61,7 +64,20 @@ def _send_otp_email(*, email: str, purpose: str, code: str) -> None:
         subject = "iTestified verification code"
         purpose_line = "Use this code to verify your iTestified account registration."
 
+    start_time = time.monotonic()
+    masked_email = email
+    if "@" in email:
+        local, domain = email.split("@", 1)
+        masked_local = (local[:2] + "***") if local else "***"
+        masked_email = f"{masked_local}@{domain}"
     try:
+        logger.info(
+            "authn.email.send_otp.start purpose=%s recipient=%s timeout=%s backend=%s",
+            purpose,
+            masked_email,
+            getattr(settings, "EMAIL_TIMEOUT", None),
+            getattr(settings, "EMAIL_BACKEND", ""),
+        )
         text_message = "\n".join(
             [
                 "Hello,",
@@ -93,7 +109,22 @@ def _send_otp_email(*, email: str, purpose: str, code: str) -> None:
         )
         email_message.attach_alternative(html_message, "text/html")
         email_message.send(fail_silently=False)
+        elapsed_ms = int((time.monotonic() - start_time) * 1000)
+        logger.info(
+            "authn.email.send_otp.success purpose=%s recipient=%s elapsed_ms=%s",
+            purpose,
+            masked_email,
+            elapsed_ms,
+        )
     except Exception as exc:
+        elapsed_ms = int((time.monotonic() - start_time) * 1000)
+        logger.exception(
+            "authn.email.send_otp.failure purpose=%s recipient=%s elapsed_ms=%s error_type=%s",
+            purpose,
+            masked_email,
+            elapsed_ms,
+            type(exc).__name__,
+        )
         raise EmailDeliveryError("Unable to send the verification code right now. Please try again.") from exc
 
 
