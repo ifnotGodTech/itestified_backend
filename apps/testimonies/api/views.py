@@ -14,6 +14,7 @@ from rest_framework import status
 from rest_framework.views import APIView
 
 from apps.testimonies.models import (
+    ModerationAction,
     Testimony,
     TestimonyCategory,
     TestimonyComment,
@@ -555,4 +556,36 @@ class AdminUpdateVideoTestimonyView(APIView):
         serializer = AdminVideoTestimonyEditSerializer(testimony, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
+        return Response(AdminTestimonyDetailSerializer(testimony).data, status=status.HTTP_200_OK)
+
+
+class AdminUploadNowVideoTestimonyView(APIView):
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsActiveAdmin]
+
+    def post(self, request, testimony_id: int):
+        testimony = Testimony.objects.filter(id=testimony_id).first()
+        if testimony is None:
+            return Response({"message": "Testimony not found."}, status=status.HTTP_404_NOT_FOUND)
+        if testimony.testimony_type != TestimonyType.VIDEO:
+            return Response({"message": "Only video testimonies can be uploaded here."}, status=status.HTTP_400_BAD_REQUEST)
+        if testimony.status not in (TestimonyStatus.DRAFT, TestimonyStatus.SCHEDULED):
+            return Response(
+                {"message": "Only draft or scheduled video testimonies can be uploaded now."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        from_status = testimony.status
+        testimony.status = TestimonyStatus.APPROVED
+        testimony.publish_at = None
+        testimony.save(update_fields=["status", "publish_at", "updated_at"])
+
+        TestimonyModerationHistory.objects.create(
+            testimony=testimony,
+            action=ModerationAction.APPROVED,
+            actor=request.user,
+            from_status=from_status,
+            to_status=TestimonyStatus.APPROVED,
+            reason="Uploaded now from draft/scheduled via admin modal.",
+        )
         return Response(AdminTestimonyDetailSerializer(testimony).data, status=status.HTTP_200_OK)

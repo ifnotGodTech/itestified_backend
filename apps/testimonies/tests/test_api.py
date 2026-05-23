@@ -949,6 +949,33 @@ class AdminTestimonyApiTests(TestCase):
         )
         self.assertEqual(response.status_code, 400)
 
+    def test_admin_upload_now_video_promotes_draft_to_approved(self) -> None:
+        draft_video = Testimony.objects.create(
+            author=self.author,
+            category=self.category,
+            title="Draft video",
+            body="",
+            testimony_type=TestimonyType.VIDEO,
+            status=TestimonyStatus.DRAFT,
+            video_url="https://example.com/draft.mp4",
+        )
+        response = self.client.post(
+            reverse("admin-testimony-upload-now-video", kwargs={"testimony_id": draft_video.id}),
+            {},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+        draft_video.refresh_from_db()
+        self.assertEqual(draft_video.status, TestimonyStatus.APPROVED)
+
+    def test_admin_upload_now_video_rejects_non_draft_or_scheduled(self) -> None:
+        response = self.client.post(
+            reverse("admin-testimony-upload-now-video", kwargs={"testimony_id": self.approved.id}),
+            {},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
     def test_admin_upload_video_requires_admin_session(self) -> None:
         self.client.logout()
         non_admin = UserFactory(email="nonadmin@example.com")

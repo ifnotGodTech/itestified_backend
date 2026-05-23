@@ -238,6 +238,24 @@ Failure checks:
 - Wrong reset code is rejected.
 - Unregistered email does not reveal account existence.
 
+### Flow P2-M5 — Reset password for social-login account (hardening)
+Goal: account created through Google sign-in can complete password reset and set a usable local password.
+
+Steps:
+1. Start forgot-password using an email that already signs in with Google.
+2. Complete reset OTP verify step.
+3. Set a new password.
+4. Log in with email/password using the same account.
+
+Expected result:
+- Reset flow completes successfully for social-login account.
+- New local password works.
+- Google sign-in for the same account still works.
+
+Failure checks:
+- Verify/complete steps fail after app state recreation/navigation.
+- Reset flow requires hidden client state instead of explicit email+otp inputs.
+
 ## Admin User Flows
 
 ### Flow P2-A1 — Super admin bootstrap (operator-run)

@@ -273,7 +273,14 @@ Test:
 - review output for consistency with `mobile/` and `dashboard/frontend/`
 - confirm the locked decisions are sufficient to begin the first backend slice without likely schema churn
 
-Status: completed
+Status: completed (with follow-up hardening in progress)
+
+Phase 2 hardening draft note:
+- Mobile forgot-password reliability hardening is being tracked as a follow-up pass after initial completion.
+- Scope of this follow-up:
+  - ensure reset OTP verify/complete flows remain stable when client in-memory auth state is recreated
+  - validate social-login account compatibility with password reset/set-password expectations
+  - re-run end-to-end mobile auth verification on production after deployment
 
 ### Phase 1: Project Bootstrap And Infrastructure
 

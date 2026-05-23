@@ -10,6 +10,7 @@ from .views import (
     AdminScheduleTestimonyView,
     AdminArchiveTestimonyView,
     AdminUpdateVideoTestimonyView,
+    AdminUploadNowVideoTestimonyView,
     AdminTestimonyDetailView,
     AdminTestimonyListView,
     AdminTestimonyModerationHistoryView,
@@ -73,6 +74,7 @@ urlpatterns = [
     path("admin/testimonies/<int:testimony_id>/archive/", AdminArchiveTestimonyView.as_view(), name="admin-testimony-archive"),
     path("admin/testimonies/<int:testimony_id>/delete/", AdminDeleteVideoTestimonyView.as_view(), name="admin-testimony-delete-video"),
     path("admin/testimonies/<int:testimony_id>/edit/", AdminUpdateVideoTestimonyView.as_view(), name="admin-testimony-edit-video"),
+    path("admin/testimonies/<int:testimony_id>/upload-now/", AdminUploadNowVideoTestimonyView.as_view(), name="admin-testimony-upload-now-video"),
     path(
         "admin/testimonies/<int:testimony_id>/moderation-history/",
         AdminTestimonyModerationHistoryView.as_view(),
