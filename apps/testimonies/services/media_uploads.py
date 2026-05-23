@@ -52,6 +52,9 @@ def upload_testimony_media(*, video_file, thumbnail_file=None) -> CloudinaryUplo
             overwrite=False,
         )
     except Exception as exc:  # noqa: BLE001 - third-party exceptions vary.
+        reason = str(exc).strip()
+        if reason:
+            raise CloudinaryUploadError(f"Video upload failed: {reason}") from exc
         raise CloudinaryUploadError("Video upload failed.") from exc
 
     video_url = str(video_result.get("secure_url") or "").strip()
@@ -70,6 +73,9 @@ def upload_testimony_media(*, video_file, thumbnail_file=None) -> CloudinaryUplo
             )
             thumbnail_url = str(thumbnail_result.get("secure_url") or "").strip()
         except Exception as exc:  # noqa: BLE001 - third-party exceptions vary.
+            reason = str(exc).strip()
+            if reason:
+                raise CloudinaryUploadError(f"Thumbnail upload failed: {reason}") from exc
             raise CloudinaryUploadError("Thumbnail upload failed.") from exc
     elif public_id:
         try:
