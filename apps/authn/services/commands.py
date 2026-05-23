@@ -8,7 +8,7 @@ from django.conf import settings
 from django.contrib.auth import authenticate
 from django.contrib.auth.hashers import check_password
 from django.contrib.auth.models import update_last_login
-from django.core.mail import EmailMultiAlternatives
+from django.core.mail import EmailMultiAlternatives, get_connection
 from django.db import IntegrityError
 from django.db import transaction
 from django.utils import timezone
@@ -80,11 +80,16 @@ def _send_otp_email(*, email: str, purpose: str, code: str) -> None:
             expires_minutes=expires_minutes,
             support_email=support_email,
         )
+        connection = get_connection(
+            fail_silently=False,
+            timeout=getattr(settings, "EMAIL_TIMEOUT", 10),
+        )
         email_message = EmailMultiAlternatives(
             subject=subject,
             body=text_message,
             from_email=settings.DEFAULT_FROM_EMAIL,
             to=[email],
+            connection=connection,
         )
         email_message.attach_alternative(html_message, "text/html")
         email_message.send(fail_silently=False)

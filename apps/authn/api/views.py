@@ -7,6 +7,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from typing import Optional
+import logging
 
 from apps.users.selectors import get_active_admin_assignment
 from apps.authn.models import UserSession
@@ -41,6 +42,8 @@ from .serializers import (
     StartRegistrationSerializer,
     VerifyCodeSerializer,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _error_response(
@@ -262,6 +265,13 @@ class PasswordResetRequestView(APIView):
             return _error_response(
                 message=str(exc),
                 code="email_delivery_failed",
+                http_status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        except Exception:
+            logger.exception("Unexpected password reset request failure.")
+            return _error_response(
+                message="Password reset service is temporarily unavailable. Please try again shortly.",
+                code="password_reset_unavailable",
                 http_status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
         if challenge is None:
