@@ -1,6 +1,8 @@
 from urllib.parse import urlparse
+from datetime import datetime
 
 from rest_framework import serializers
+from django.utils import timezone
 
 from apps.notifications.services import notify_testimony_submitted_to_admins
 from apps.testimonies.models import (
@@ -12,6 +14,7 @@ from apps.testimonies.models import (
     TestimonyStatus,
     TestimonyType,
 )
+from apps.testimonies.services.media_uploads import CloudinaryUploadError, upload_testimony_media
 
 
 class TestimonyCategorySerializer(serializers.ModelSerializer):
@@ -299,6 +302,146 @@ class TestimonyVideoCreateSerializer(serializers.ModelSerializer):
             testimony_title=testimony.title,
             testimony_type=testimony.testimony_type,
             actor=user,
+        )
+        return testimony
+
+
+class AdminVideoTestimonyUploadSerializer(serializers.Serializer):
+    MAX_VIDEO_FILE_SIZE_BYTES = 200 * 1024 * 1024  # 200 MB
+    MAX_THUMBNAIL_FILE_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
+    MAX_VIDEOS_PER_BATCH = 10
+    ALLOWED_VIDEO_CONTENT_TYPES = {
+        "video/mp4",
+    }
+    ALLOWED_THUMBNAIL_CONTENT_TYPES = {
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+    }
+
+    class UploadStatus:
+        UPLOAD_NOW = "upload_now"
+        SCHEDULE_FOR_LATER = "schedule_for_later"
+        DRAFT = "draft"
+        CHOICES = (
+            (UPLOAD_NOW, "Upload Now"),
+            (SCHEDULE_FOR_LATER, "Schedule for Later"),
+            (DRAFT, "Draft"),
+        )
+
+    title = serializers.CharField(max_length=255)
+    category_id = serializers.PrimaryKeyRelatedField(
+        source="category",
+        queryset=TestimonyCategory.objects.filter(is_active=True),
+    )
+    video_file = serializers.FileField()
+    thumbnail_file = serializers.FileField(required=False, allow_null=True)
+    body = serializers.CharField(required=False, allow_blank=True)
+    total_videos_in_batch = serializers.IntegerField(required=False, min_value=1)
+    upload_status = serializers.ChoiceField(
+        choices=UploadStatus.CHOICES,
+        required=False,
+        default=UploadStatus.UPLOAD_NOW,
+    )
+    scheduled_publish_at = serializers.CharField(required=False, allow_blank=True)
+
+    def validate_title(self, value: str) -> str:
+        trimmed = value.strip()
+        if not trimmed:
+            raise serializers.ValidationError("Title is required.")
+        return trimmed
+
+    def validate_body(self, value: str) -> str:
+        return value.strip()
+
+    def validate_video_file(self, value):
+        content_type = (getattr(value, "content_type", "") or "").lower().strip()
+        if content_type not in self.ALLOWED_VIDEO_CONTENT_TYPES:
+            raise serializers.ValidationError("Only MP4 video uploads are allowed.")
+        size = int(getattr(value, "size", 0) or 0)
+        if size <= 0:
+            raise serializers.ValidationError("Video file is empty.")
+        if size > self.MAX_VIDEO_FILE_SIZE_BYTES:
+            raise serializers.ValidationError("Video file exceeds the 200MB limit.")
+        return value
+
+    def validate_thumbnail_file(self, value):
+        if value is None:
+            return value
+        content_type = (getattr(value, "content_type", "") or "").lower().strip()
+        if content_type and content_type not in self.ALLOWED_THUMBNAIL_CONTENT_TYPES:
+            raise serializers.ValidationError("Thumbnail must be JPG, PNG, or WEBP.")
+        size = int(getattr(value, "size", 0) or 0)
+        if size <= 0:
+            raise serializers.ValidationError("Thumbnail file is empty.")
+        if size > self.MAX_THUMBNAIL_FILE_SIZE_BYTES:
+            raise serializers.ValidationError("Thumbnail file exceeds the 10MB limit.")
+        return value
+
+    def validate(self, attrs):
+        upload_status = attrs.get("upload_status", self.UploadStatus.UPLOAD_NOW)
+        raw_publish_at = str(attrs.get("scheduled_publish_at", "")).strip()
+        total_videos = int(attrs.get("total_videos_in_batch") or 1)
+        if total_videos > self.MAX_VIDEOS_PER_BATCH:
+            raise serializers.ValidationError(
+                {
+                    "total_videos_in_batch": f"A maximum of {self.MAX_VIDEOS_PER_BATCH} videos is allowed per upload batch."
+                }
+            )
+
+        if upload_status == self.UploadStatus.SCHEDULE_FOR_LATER:
+            if not raw_publish_at:
+                raise serializers.ValidationError(
+                    {"scheduled_publish_at": "scheduled_publish_at is required when upload_status is schedule_for_later."}
+                )
+            try:
+                publish_at = datetime.fromisoformat(raw_publish_at.replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise serializers.ValidationError({"scheduled_publish_at": "scheduled_publish_at must be a valid ISO datetime."}) from exc
+            if timezone.is_naive(publish_at):
+                publish_at = timezone.make_aware(publish_at, timezone.get_current_timezone())
+            if publish_at <= timezone.now():
+                raise serializers.ValidationError({"scheduled_publish_at": "scheduled_publish_at must be in the future."})
+            attrs["parsed_scheduled_publish_at"] = publish_at
+        else:
+            attrs["parsed_scheduled_publish_at"] = None
+
+        return attrs
+
+    def create(self, validated_data):
+        actor = self.context["request"].user
+        try:
+            upload_result = upload_testimony_media(
+                video_file=validated_data["video_file"],
+                thumbnail_file=validated_data.get("thumbnail_file"),
+            )
+        except CloudinaryUploadError as exc:
+            raise serializers.ValidationError({"video_file": str(exc)}) from exc
+
+        upload_status = validated_data.get("upload_status", self.UploadStatus.UPLOAD_NOW)
+        status_value = TestimonyStatus.PENDING_REVIEW
+        publish_at = None
+        if upload_status == self.UploadStatus.SCHEDULE_FOR_LATER:
+            status_value = TestimonyStatus.SCHEDULED
+            publish_at = validated_data.get("parsed_scheduled_publish_at")
+        elif upload_status == self.UploadStatus.DRAFT:
+            status_value = TestimonyStatus.DRAFT
+
+        testimony = Testimony.objects.create(
+            author=actor,
+            category=validated_data["category"],
+            title=validated_data["title"],
+            body=validated_data.get("body", ""),
+            video_url=upload_result.video_url,
+            thumbnail_url=upload_result.thumbnail_url,
+            testimony_type=TestimonyType.VIDEO,
+            status=status_value,
+            publish_at=publish_at,
+        )
+        notify_testimony_submitted_to_admins(
+            testimony_title=testimony.title,
+            testimony_type=testimony.testimony_type,
+            actor=actor,
         )
         return testimony
 

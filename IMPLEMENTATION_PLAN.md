@@ -356,7 +356,7 @@ Status: completed
 Build:
 - implement testimony categories
 - implement testimony aggregate and related media/content structure
-- implement submission flow for written and video testimonies
+- implement submission flow for written testimonies (mobile) and admin-managed video testimonies
 - implement read models for mobile browse/detail use cases
 - implement comments and engagement counters if included in MVP backend scope
 - implement favorites if the backend will own them at this stage
@@ -371,22 +371,30 @@ Sub-slices:
 - **Slice 1 — Browse testimonies** — user opens the testimonies feed and sees a paginated list of approved testimonies; can filter by category and search by title
 - **Slice 2 — View testimony detail** — user taps a testimony and sees the full title, body, media, author name, category, view count, and comment count
 - **Slice 3 — Submit a written testimony** — authenticated user fills in title, body, and category and submits; testimony enters `pending_review` status immediately
-- **Slice 4 — Submit a video testimony** — authenticated user submits title, category, and a video URL with optional thumbnail; testimony enters `pending_review`
-- **Slice 5 — Track own submissions** — user opens "My Testimonies" and sees all their testimonies at every status with the current status label visible
-- **Slice 6 — Save a testimony to favorites** — user taps the bookmark icon on any approved testimony; testimony is added to their favorites list
-- **Slice 7 — Remove a testimony from favorites** — user removes a saved testimony from their favorites list
-- **Slice 8 — View favorites list** — user opens the saved/favorites screen and sees all their bookmarked testimonies paginated
-- **Slice 9 — Comment on a testimony** — authenticated user types and submits a comment on an approved testimony
-- **Slice 10 — Delete own comment** — user removes a comment they previously posted; cannot remove another user's comment
+- **Slice 4 — Track own submissions** — user opens "My Testimonies" and sees all their testimonies at every status with the current status label visible
+- **Slice 5 — Save a testimony to favorites** — user taps the bookmark icon on any approved testimony; testimony is added to their favorites list
+- **Slice 6 — Remove a testimony from favorites** — user removes a saved testimony from their favorites list
+- **Slice 7 — View favorites list** — user opens the saved/favorites screen and sees all their bookmarked testimonies paginated
+- **Slice 8 — Comment on a testimony** — authenticated user types and submits a comment on an approved testimony
+- **Slice 9 — Delete own comment** — user removes a comment they previously posted; cannot remove another user's comment
 
 Access-control contract for this phase:
 - guest/unauthenticated users may read public browse/detail/category/search endpoints only
-- authenticated users only may submit testimonies, manage favorites, create/delete comments, and access "My Testimonies"
+- authenticated users only may submit written testimonies, manage favorites, create/delete comments, and access "My Testimonies"
+- video testimony creation and upload are admin-only actions
 
 #### Admin Flows
 
-- **Slice 11 — Manage categories** — admin creates a new category with name and description; edits name or description of an existing category; deactivates a category so it no longer appears to mobile users; reactivates it when needed
-- **Slice 12 — View all testimonies** — admin opens the testimony list and sees all testimonies regardless of status; filters by status (pending, approved, rejected, etc.) and by category; opens a detail view for any testimony
+- **Slice 10 — Manage categories** — admin creates a new category with name and description; edits name or description of an existing category; deactivates a category so it no longer appears to mobile users; reactivates it when needed
+- **Slice 11 — View all testimonies** — admin opens the testimony list and sees all testimonies regardless of status; filters by status (pending, approved, rejected, etc.) and by category; opens a detail view for any testimony
+- **Slice 12 — Upload a video testimony** — admin creates testimony records with title, category, and uploaded video (with optional thumbnail and summary/body), using upload status options: `upload_now`, `schedule_for_later`, or `draft`; created records enter the appropriate moderation lifecycle state and support single-video and multiple-video upload modes in dashboard UX
+  - **Slice 12.1 — Upload mode selection** — admin can switch between `Single Video Upload` and `Multiple Video Upload` from the upload-mode dropdown
+  - **Slice 12.2 — Multi-video composer controls** — in multiple mode, admin can add a new video card from an `Add new video` action and remove an unneeded card from its cancel/remove icon before submission
+  - **Slice 12.3 — Required payload per card** — each video card enforces required fields (`title`, `category`, `video file`) with optional `source`, optional `summary/body`, and optional thumbnail
+  - **Slice 12.4 — Upload status at create-time** — admin chooses `upload_now`, `schedule_for_later`, or `draft` during creation; selected status is persisted and aligned to testimony lifecycle states
+  - **Slice 12.5 — Schedule metadata validation** — when `schedule_for_later` is selected, schedule date/time must be supplied and validated before record creation
+  - **Slice 12.6 — Cloud media persistence** — backend uploads video (and optional thumbnail) to Cloudinary and stores returned secure URLs on testimony records
+  - **Slice 12.7 — Security and permissions** — only authenticated admins can access upload endpoints and screen actions; non-admin attempts are denied
 
 Test:
 - model tests for testimony states and relationships

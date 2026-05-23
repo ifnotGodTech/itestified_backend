@@ -1,5 +1,6 @@
 from rest_framework import generics
 from rest_framework.authentication import SessionAuthentication, TokenAuthentication
+from rest_framework.parsers import FormParser, MultiPartParser
 from django.utils import timezone
 from django.db.models import F
 from django.db.models import Count
@@ -44,6 +45,7 @@ from .serializers import (
     TestimonyListSerializer,
     TestimonyModerationHistorySerializer,
     RejectedTestimonyResubmitSerializer,
+    AdminVideoTestimonyUploadSerializer,
     TestimonyVideoCreateSerializer,
 )
 
@@ -499,3 +501,16 @@ class AdminTestimonyModerationHistoryView(generics.ListAPIView):
         return TestimonyModerationHistory.objects.select_related("actor").filter(
             testimony_id=self.kwargs["testimony_id"]
         )
+
+
+class AdminVideoTestimonyUploadView(generics.CreateAPIView):
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsActiveAdmin]
+    parser_classes = [MultiPartParser, FormParser]
+    serializer_class = AdminVideoTestimonyUploadSerializer
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        testimony = serializer.save()
+        return Response(AdminTestimonyDetailSerializer(testimony).data, status=status.HTTP_201_CREATED)

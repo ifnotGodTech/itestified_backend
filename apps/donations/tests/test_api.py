@@ -60,15 +60,17 @@ class DonationApiTests(TestCase):
             checkout_url="https://checkout.flutterwave.com/pay/don-testref",
         )
 
-        callback = self.client.post(
-            reverse("donation-provider-callback"),
-            {
-                "payment_reference": donation.payment_reference,
-                "status": DonationStatus.SUCCESSFUL,
-                "provider_transaction_id": "FW-12345",
-            },
-            content_type="application/json",
-        )
+        with patch("apps.donations.api.views.settings.FLUTTERWAVE_SECRET_HASH", "secret-hash"):
+            callback = self.client.post(
+                reverse("donation-provider-callback"),
+                {
+                    "payment_reference": donation.payment_reference,
+                    "status": DonationStatus.SUCCESSFUL,
+                    "provider_transaction_id": "FW-12345",
+                },
+                content_type="application/json",
+                HTTP_VERIF_HASH="secret-hash",
+            )
         self.assertEqual(callback.status_code, 200)
         donation.refresh_from_db()
         self.assertEqual(donation.status, DonationStatus.SUCCESSFUL)
@@ -83,21 +85,68 @@ class DonationApiTests(TestCase):
             payment_reference="DON-TESTREF-2",
         )
 
-        callback = self.client.post(
-            reverse("donation-provider-callback"),
-            {
-                "data": {
-                    "tx_ref": donation.payment_reference,
-                    "status": "successful",
-                    "id": "556677",
+        with patch("apps.donations.api.views.settings.FLUTTERWAVE_SECRET_HASH", "secret-hash"):
+            callback = self.client.post(
+                reverse("donation-provider-callback"),
+                {
+                    "data": {
+                        "tx_ref": donation.payment_reference,
+                        "status": "successful",
+                        "id": "556677",
+                    },
                 },
-            },
-            content_type="application/json",
-        )
+                content_type="application/json",
+                HTTP_VERIF_HASH="secret-hash",
+            )
         self.assertEqual(callback.status_code, 200)
         donation.refresh_from_db()
         self.assertEqual(donation.status, DonationStatus.SUCCESSFUL)
         self.assertEqual(donation.provider_transaction_id, "556677")
+
+    def test_provider_callback_returns_503_when_secret_hash_not_configured(self):
+        user = UserFactory(email="provider3@example.com")
+        donation = Donation.objects.create(
+            user=user,
+            amount=1000,
+            currency="NGN",
+            payment_reference="DON-TESTREF-3",
+        )
+
+        with patch("apps.donations.api.views.settings.FLUTTERWAVE_SECRET_HASH", ""):
+            callback = self.client.post(
+                reverse("donation-provider-callback"),
+                {
+                    "payment_reference": donation.payment_reference,
+                    "status": DonationStatus.SUCCESSFUL,
+                    "provider_transaction_id": "FW-99999",
+                },
+                content_type="application/json",
+            )
+
+        self.assertEqual(callback.status_code, 503)
+
+    def test_provider_callback_rejects_invalid_signature(self):
+        user = UserFactory(email="provider4@example.com")
+        donation = Donation.objects.create(
+            user=user,
+            amount=1000,
+            currency="NGN",
+            payment_reference="DON-TESTREF-4",
+        )
+
+        with patch("apps.donations.api.views.settings.FLUTTERWAVE_SECRET_HASH", "secret-hash"):
+            callback = self.client.post(
+                reverse("donation-provider-callback"),
+                {
+                    "payment_reference": donation.payment_reference,
+                    "status": DonationStatus.SUCCESSFUL,
+                    "provider_transaction_id": "FW-11111",
+                },
+                content_type="application/json",
+                HTTP_VERIF_HASH="wrong-hash",
+            )
+
+        self.assertEqual(callback.status_code, 403)
 
     def test_phase5_slice3_view_own_history_only(self):
         user = UserFactory(email="history@example.com")

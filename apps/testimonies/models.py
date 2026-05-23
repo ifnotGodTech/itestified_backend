@@ -24,6 +24,7 @@ def ensure_testimony_category_slug(sender, instance: TestimonyCategory, **kwargs
 
 
 class TestimonyStatus(models.TextChoices):
+    DRAFT = "draft", "Draft"
     PENDING_REVIEW = "pending_review", "Pending Review"
     SCHEDULED = "scheduled", "Scheduled"
     APPROVED = "approved", "Approved"

@@ -344,7 +344,7 @@ Status: In progress (Slices 1-10 implemented)
 
 Current verification scope:
 - Implemented now: `Flow P3-M1` through `Flow P3-M5` (including favorites list parity and comment add/delete)
-- Pending in later slices: `Flow P3-A1`, `Flow P3-A2`
+- Pending in later slices: `Flow P3-A1`, `Flow P3-A2`, `Flow P3-A3`
 
 ## Mobile User Flows
 
@@ -363,11 +363,11 @@ Expected behavior:
 - Detail page opens with title/content/media/author context.
 - Engagement counters or metadata render correctly (if part of design).
 
-### Flow P3-M3 — Submit testimony (written/video)
+### Flow P3-M3 — Submit testimony (written)
 Goal: user can create testimony submission.
 
 Expected behavior:
-- Submission form accepts valid input.
+- Written submission form accepts valid input.
 - Submitted testimony enters moderation state (for example pending review).
 
 Failure checks:
@@ -404,6 +404,31 @@ Goal: admin can list and filter testimonies for operations.
 Expected behavior:
 - Admin can view all relevant statuses.
 - Filters (status/category/date if provided) work correctly.
+
+### Flow P3-A3 — Upload video testimony (admin-only)
+Goal: admin can create video testimony records for review/publishing.
+
+Expected behavior:
+- Admin upload/create form accepts valid video testimony payload.
+- Admin can choose upload status at creation time: `upload_now`, `schedule_for_later`, or `draft`.
+- Created record appears in admin list with expected status matching selected upload status.
+- Dashboard supports both `Single Video Upload` and `Multiple Video Upload` modes, with add-new-video action in multiple mode.
+- In multiple mode, each additional video card can be removed by its cancel/remove icon before submission.
+- Video renders/playbacks in admin detail using stored source.
+
+Sub-flow checks:
+- `Flow P3-A3.1` Upload mode: switching between single and multiple updates the upload composer correctly.
+- `Flow P3-A3.2` Multi-video controls: `Add new video` creates another card; remove icon removes only the selected card.
+- `Flow P3-A3.3` Per-card validation: each card enforces required fields (`title`, `category`, `video file`).
+- `Flow P3-A3.4` Status mapping: `upload_now`, `schedule_for_later`, and `draft` each create records with correct lifecycle status.
+- `Flow P3-A3.5` Schedule validation: schedule date/time required and validated when `schedule_for_later` is selected.
+- `Flow P3-A3.6` Cloud media persistence: created records store Cloudinary-backed video URL (and thumbnail URL when provided).
+- `Flow P3-A3.7` Authorization: admin-only endpoint enforcement blocks non-admin requests.
+
+Failure checks:
+- Invalid video input is rejected with clear validation.
+- Invalid schedule payload is rejected when `schedule_for_later` is selected.
+- Non-admin users cannot access this flow.
 
 ---
 

@@ -158,10 +158,15 @@ class DonationProviderCallbackView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        if settings.FLUTTERWAVE_SECRET_HASH:
-            signature = request.headers.get("verif-hash", "")
-            if signature != settings.FLUTTERWAVE_SECRET_HASH:
-                return Response({"message": "Invalid webhook signature."}, status=status.HTTP_403_FORBIDDEN)
+        if not settings.FLUTTERWAVE_SECRET_HASH:
+            return Response(
+                {"message": "Webhook secret hash is not configured."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        signature = request.headers.get("verif-hash", "")
+        if signature != settings.FLUTTERWAVE_SECRET_HASH:
+            return Response({"message": "Invalid webhook signature."}, status=status.HTTP_403_FORBIDDEN)
 
         payload = request.data.get("data", request.data)
         serializer = DonationProviderCallbackSerializer(data=payload)

@@ -2,7 +2,9 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 from django.core.management import call_command
+from django.core.files.uploadedfile import SimpleUploadedFile
 from rest_framework.authtoken.models import Token
+from unittest.mock import patch
 
 from apps.notifications.models import NotificationType, UserNotification
 from apps.testimonies.models import (
@@ -725,6 +727,137 @@ class AdminTestimonyApiTests(TestCase):
         self.assertEqual(detail_response.status_code, 200)
         self.assertEqual(detail_response.json()["title"], self.approved.title)
         self.assertEqual(detail_response.json()["status"], TestimonyStatus.APPROVED)
+
+    @patch("apps.testimonies.api.serializers.upload_testimony_media")
+    def test_slice13_admin_upload_video_testimony_uses_cloudinary_urls(self, upload_mock) -> None:
+        from apps.testimonies.services.media_uploads import CloudinaryUploadResult
+
+        upload_mock.return_value = CloudinaryUploadResult(
+            video_url="https://res.cloudinary.com/demo/video/upload/v1/testimony.mp4",
+            thumbnail_url="https://res.cloudinary.com/demo/image/upload/v1/thumb.jpg",
+        )
+
+        video = SimpleUploadedFile("testimony.mp4", b"fake-video-content", content_type="video/mp4")
+        thumbnail = SimpleUploadedFile("thumb.jpg", b"fake-image-content", content_type="image/jpeg")
+
+        response = self.client.post(
+            reverse("admin-testimony-upload-video"),
+            {
+                "title": "Admin uploaded testimony",
+                "category_id": self.category.id,
+                "body": "Uploaded by admin.",
+                "video_file": video,
+                "thumbnail_file": thumbnail,
+            },
+        )
+        self.assertEqual(response.status_code, 201)
+        created = Testimony.objects.get(title="Admin uploaded testimony")
+        self.assertEqual(created.testimony_type, TestimonyType.VIDEO)
+        self.assertEqual(created.status, TestimonyStatus.PENDING_REVIEW)
+        self.assertEqual(created.video_url, "https://res.cloudinary.com/demo/video/upload/v1/testimony.mp4")
+        self.assertEqual(created.thumbnail_url, "https://res.cloudinary.com/demo/image/upload/v1/thumb.jpg")
+
+    @patch("apps.testimonies.api.serializers.upload_testimony_media")
+    def test_admin_upload_video_with_draft_status_persists_draft(self, upload_mock) -> None:
+        from apps.testimonies.services.media_uploads import CloudinaryUploadResult
+
+        upload_mock.return_value = CloudinaryUploadResult(
+            video_url="https://res.cloudinary.com/demo/video/upload/v1/testimony-draft.mp4",
+            thumbnail_url="",
+        )
+        video = SimpleUploadedFile("testimony.mp4", b"fake-video-content", content_type="video/mp4")
+        response = self.client.post(
+            reverse("admin-testimony-upload-video"),
+            {
+                "title": "Draft upload testimony",
+                "category_id": self.category.id,
+                "upload_status": "draft",
+                "video_file": video,
+            },
+        )
+        self.assertEqual(response.status_code, 201)
+        created = Testimony.objects.get(title="Draft upload testimony")
+        self.assertEqual(created.status, TestimonyStatus.DRAFT)
+
+    @patch("apps.testimonies.api.serializers.upload_testimony_media")
+    def test_admin_upload_video_with_schedule_status_requires_future_datetime(self, upload_mock) -> None:
+        from apps.testimonies.services.media_uploads import CloudinaryUploadResult
+
+        upload_mock.return_value = CloudinaryUploadResult(
+            video_url="https://res.cloudinary.com/demo/video/upload/v1/testimony-scheduled.mp4",
+            thumbnail_url="",
+        )
+        video = SimpleUploadedFile("testimony.mp4", b"fake-video-content", content_type="video/mp4")
+        missing_schedule = self.client.post(
+            reverse("admin-testimony-upload-video"),
+            {
+                "title": "Scheduled upload testimony",
+                "category_id": self.category.id,
+                "upload_status": "schedule_for_later",
+                "video_file": video,
+            },
+        )
+        self.assertEqual(missing_schedule.status_code, 400)
+        self.assertIn("scheduled_publish_at", missing_schedule.json())
+
+        valid_video = SimpleUploadedFile("testimony2.mp4", b"fake-video-content", content_type="video/mp4")
+        publish_at = (timezone.now() + timezone.timedelta(hours=1)).isoformat()
+        valid_schedule = self.client.post(
+            reverse("admin-testimony-upload-video"),
+            {
+                "title": "Scheduled upload testimony",
+                "category_id": self.category.id,
+                "upload_status": "schedule_for_later",
+                "scheduled_publish_at": publish_at,
+                "video_file": valid_video,
+            },
+        )
+        self.assertEqual(valid_schedule.status_code, 201)
+        created = Testimony.objects.get(title="Scheduled upload testimony")
+        self.assertEqual(created.status, TestimonyStatus.SCHEDULED)
+        self.assertIsNotNone(created.publish_at)
+
+    def test_admin_upload_video_rejects_non_mp4_file(self) -> None:
+        video = SimpleUploadedFile("testimony.mov", b"fake-video-content", content_type="video/quicktime")
+        response = self.client.post(
+            reverse("admin-testimony-upload-video"),
+            {
+                "title": "Invalid format upload",
+                "category_id": self.category.id,
+                "video_file": video,
+            },
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("video_file", response.json())
+
+    def test_admin_upload_video_rejects_excessive_batch_size(self) -> None:
+        video = SimpleUploadedFile("testimony.mp4", b"fake-video-content", content_type="video/mp4")
+        response = self.client.post(
+            reverse("admin-testimony-upload-video"),
+            {
+                "title": "Too many in batch",
+                "category_id": self.category.id,
+                "total_videos_in_batch": 11,
+                "video_file": video,
+            },
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("total_videos_in_batch", response.json())
+
+    def test_admin_upload_video_requires_admin_session(self) -> None:
+        self.client.logout()
+        non_admin = UserFactory(email="nonadmin@example.com")
+        self.client.force_login(non_admin)
+        video = SimpleUploadedFile("testimony.mp4", b"fake-video-content", content_type="video/mp4")
+        response = self.client.post(
+            reverse("admin-testimony-upload-video"),
+            {
+                "title": "Unauthorized upload",
+                "category_id": self.category.id,
+                "video_file": video,
+            },
+        )
+        self.assertEqual(response.status_code, 403)
 
     def test_phase4_slice1_pending_queue_orders_oldest_first(self) -> None:
         oldest = Testimony.objects.create(

@@ -4,6 +4,7 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from django.db.models import Q
 
 from apps.authn.api.permissions import IsActiveAdmin
 from apps.users.choices import UserAccountStatus
@@ -44,7 +45,19 @@ class AdminUserListView(generics.ListAPIView):
         if status_filter in {UserAccountStatus.ACTIVE, UserAccountStatus.DEACTIVATED, UserAccountStatus.DELETED}:
             queryset = queryset.filter(account_status=status_filter)
         if search_text:
-            queryset = queryset.filter(email__icontains=search_text)
+            normalized = search_text
+            if normalized.lower().startswith("u"):
+                normalized = normalized[1:]
+            normalized = normalized.lstrip("0")
+            numeric_user_id = int(normalized) if normalized.isdigit() else None
+
+            query = (
+                Q(email__icontains=search_text)
+                | Q(profile__full_name__icontains=search_text)
+            )
+            if numeric_user_id is not None:
+                query = query | Q(id=numeric_user_id)
+            queryset = queryset.filter(query)
         return queryset
 
     def list(self, request, *args, **kwargs):

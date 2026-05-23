@@ -48,6 +48,16 @@ class UsersApiTests(TestCase):
         self.assertEqual(filtered.json()["count"], 1)
         self.assertEqual(filtered.json()["results"][0]["email"], "deactivated@example.com")
 
+        name_filtered = self.client.get(f'{reverse("admin-user-list")}?q=Active User')
+        self.assertEqual(name_filtered.status_code, 200)
+        self.assertEqual(name_filtered.json()["count"], 1)
+        self.assertEqual(name_filtered.json()["results"][0]["email"], "active@example.com")
+
+        user_id_filtered = self.client.get(f'{reverse("admin-user-list")}?q=U{str(active_user.id).zfill(5)}')
+        self.assertEqual(user_id_filtered.status_code, 200)
+        self.assertEqual(user_id_filtered.json()["count"], 1)
+        self.assertEqual(user_id_filtered.json()["results"][0]["email"], "active@example.com")
+
         deactivate_response = self.client.post(
             reverse("admin-user-deactivate", kwargs={"user_id": active_user.id}),
             {},
