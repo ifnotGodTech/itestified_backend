@@ -13,6 +13,7 @@ from django.contrib.auth.models import update_last_login
 from django.core.mail import EmailMultiAlternatives, get_connection
 from django.db import IntegrityError
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 from rest_framework.authtoken.models import Token
 
@@ -278,6 +279,10 @@ def _verify_google_id_token_payload(*, id_token: str) -> dict:
     return payload
 
 
+def _find_user_by_email_identity(email: str) -> Optional[User]:
+    return User.objects.filter(Q(email__iexact=email) | Q(username__iexact=email)).first()
+
+
 @transaction.atomic
 def login_mobile_user_with_google(*, id_token: str, platform: Optional[str] = None) -> tuple[User, Token, bool]:
     if not settings.GOOGLE_OAUTH_CLIENT_IDS:
@@ -301,26 +306,31 @@ def login_mobile_user_with_google(*, id_token: str, platform: Optional[str] = No
     if email_verified not in (True, "true", "True", 1):
         raise AuthnError("Google account email is not verified.")
 
-    user = User.objects.filter(email__iexact=email).first()
+    user = _find_user_by_email_identity(email)
     is_new_user = user is None
 
     if user is None:
-        user = User.objects.create_user(email=email, password=None)
-        user.set_unusable_password()
-        user.save(update_fields=["password"])
-        Profile.objects.create(
-            user=user,
-            full_name=(full_name if full_name else email.split("@")[0].replace(".", " ").title()),
-        )
+        try:
+            with transaction.atomic():
+                user = User.objects.create_user(email=email, password=None)
+                user.set_unusable_password()
+                user.save(update_fields=["password"])
+        except IntegrityError:
+            user = _find_user_by_email_identity(email)
+            if user is None:
+                raise
+            is_new_user = False
     else:
-        if not hasattr(user, "profile"):
-            Profile.objects.create(
-                user=user,
-                full_name=(full_name if full_name else email.split("@")[0].replace(".", " ").title()),
-            )
-        elif full_name and not user.profile.full_name.strip():
-            user.profile.full_name = full_name
-            user.profile.save(update_fields=["full_name", "updated_at"])
+        if user.email.lower() != email and not User.objects.filter(email__iexact=email).exclude(pk=user.pk).exists():
+            user.email = email
+            user.username = email
+            user.save(update_fields=["email", "username"])
+
+    profile_full_name = full_name if full_name else email.split("@")[0].replace(".", " ").title()
+    profile, _created = Profile.objects.get_or_create(user=user, defaults={"full_name": profile_full_name})
+    if full_name and not profile.full_name.strip():
+        profile.full_name = full_name
+        profile.save(update_fields=["full_name", "updated_at"])
 
     ensure_active_user(user)
     token, _ = Token.objects.get_or_create(user=user)

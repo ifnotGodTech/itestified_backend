@@ -7,6 +7,7 @@ from django.core import mail
 from django.test import override_settings
 from django.contrib.sessions.models import Session
 from unittest.mock import patch
+from django.db import IntegrityError
 
 from apps.authn.exceptions import AuthnError
 from apps.authn.models import EmailChallenge, UserSession
@@ -89,6 +90,58 @@ class AuthnServiceTests(TestCase):
         self.assertFalse(is_new_user)
         self.assertEqual(user.pk, existing.pk)
         self.assertTrue(bool(token.key))
+
+    @override_settings(
+        GOOGLE_OAUTH_CLIENT_IDS=["android-client-id.apps.googleusercontent.com"],
+        GOOGLE_OAUTH_ALLOWED_ISSUERS=["https://accounts.google.com", "accounts.google.com"],
+    )
+    @patch("apps.authn.services.commands._verify_google_id_token_payload")
+    def test_google_mobile_login_uses_existing_username_identity(self, mock_verify) -> None:
+        existing = UserFactory(email="legacy@example.com", username="google-legacy@example.com")
+        mock_verify.return_value = {
+            "aud": "android-client-id.apps.googleusercontent.com",
+            "iss": "accounts.google.com",
+            "email": "google-legacy@example.com",
+            "email_verified": True,
+            "name": "Legacy User",
+        }
+
+        user, _token, is_new_user = login_mobile_user_with_google(id_token="valid-token", platform="android")
+
+        self.assertFalse(is_new_user)
+        self.assertEqual(user.pk, existing.pk)
+        user.refresh_from_db()
+        self.assertEqual(user.email, "google-legacy@example.com")
+        self.assertEqual(user.username, "google-legacy@example.com")
+
+    @override_settings(
+        GOOGLE_OAUTH_CLIENT_IDS=["android-client-id.apps.googleusercontent.com"],
+        GOOGLE_OAUTH_ALLOWED_ISSUERS=["https://accounts.google.com", "accounts.google.com"],
+    )
+    @patch("apps.authn.services.commands._find_user_by_email_identity")
+    @patch("apps.authn.services.commands.User.objects.create_user")
+    @patch("apps.authn.services.commands._verify_google_id_token_payload")
+    def test_google_mobile_login_recovers_from_duplicate_create_race(
+        self,
+        mock_verify,
+        mock_create_user,
+        mock_find_user_by_email_identity,
+    ) -> None:
+        existing = UserFactory(email="google-race@example.com")
+        mock_find_user_by_email_identity.side_effect = [None, existing]
+        mock_verify.return_value = {
+            "aud": "android-client-id.apps.googleusercontent.com",
+            "iss": "accounts.google.com",
+            "email": "google-race@example.com",
+            "email_verified": True,
+            "name": "Race User",
+        }
+        mock_create_user.side_effect = IntegrityError("duplicate key value violates unique constraint")
+
+        user, _token, is_new_user = login_mobile_user_with_google(id_token="valid-token", platform="android")
+
+        self.assertFalse(is_new_user)
+        self.assertEqual(user.pk, existing.pk)
 
     @override_settings(
         GOOGLE_OAUTH_CLIENT_IDS=["android-client-id.apps.googleusercontent.com"],
