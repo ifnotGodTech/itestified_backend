@@ -220,7 +220,7 @@ class DonationApiTests(TestCase):
 
         with (
             patch("apps.donations.api.views.settings.FLUTTERWAVE_SECRET_KEY", "sk_test"),
-            patch("apps.donations.api.views.FlutterwaveGateway.verify") as verify_mock,
+            patch("apps.donations.services.commands.FlutterwaveGateway.verify") as verify_mock,
         ):
             verify_mock.return_value.status = DonationStatus.SUCCESSFUL
             verify_mock.return_value.provider_transaction_id = "9988"
