@@ -27,6 +27,10 @@ services:
         value: false
       - key: PYTHON_VERSION
         value: 3.12.4
+      - key: DATABASE_URL
+        fromDatabase:
+          name: itestified-db
+          property: connectionString
       - key: POSTGRES_DB
         fromDatabase:
           name: itestified-db
@@ -78,6 +82,75 @@ services:
       - key: FLUTTERWAVE_BASE_URL
         value: https://api.flutterwave.com
       - key: FLUTTERWAVE_REDIRECT_URL
+        sync: false
+  - type: cron
+    name: itestified-scheduled-publisher
+    runtime: python
+    rootDir: backend
+    plan: starter
+    schedule: "*/5 * * * *"
+    buildCommand: pip install -r requirements/production.txt
+    startCommand: python manage.py publish_scheduled_testimonies && python manage.py publish_due_scriptures && python manage.py publish_due_inspirational_pictures
+    envVars:
+      - key: DJANGO_SETTINGS_MODULE
+        value: config.settings.production
+      - key: DJANGO_SECRET_KEY
+        sync: false
+      - key: DJANGO_ALLOWED_HOSTS
+        value: itestified-backend.onrender.com
+      - key: DJANGO_CSRF_TRUSTED_ORIGINS
+        value: https://itestified-backend.onrender.com
+      - key: DJANGO_SECURE_SSL_REDIRECT
+        value: true
+      - key: DJANGO_USE_X_FORWARDED_HOST
+        value: true
+      - key: OTP_HINT_IN_RESPONSE
+        value: false
+      - key: PYTHON_VERSION
+        value: 3.12.4
+      - key: DATABASE_URL
+        fromDatabase:
+          name: itestified-db
+          property: connectionString
+      - key: POSTGRES_DB
+        fromDatabase:
+          name: itestified-db
+          property: database
+      - key: POSTGRES_USER
+        fromDatabase:
+          name: itestified-db
+          property: user
+      - key: POSTGRES_PASSWORD
+        fromDatabase:
+          name: itestified-db
+          property: password
+      - key: POSTGRES_HOST
+        fromDatabase:
+          name: itestified-db
+          property: host
+      - key: POSTGRES_PORT
+        fromDatabase:
+          name: itestified-db
+          property: port
+      - key: ADMIN_ENTRY_CODE
+        sync: false
+      - key: EMAIL_HOST
+        sync: false
+      - key: EMAIL_PORT
+        value: "587"
+      - key: EMAIL_HOST_USER
+        sync: false
+      - key: EMAIL_HOST_PASSWORD
+        sync: false
+      - key: EMAIL_USE_TLS
+        value: true
+      - key: EMAIL_USE_SSL
+        value: false
+      - key: DEFAULT_FROM_EMAIL
+        sync: false
+      - key: SUPPORT_EMAIL
+        sync: false
+      - key: GOOGLE_OAUTH_CLIENT_IDS
         sync: false
 
 databases:

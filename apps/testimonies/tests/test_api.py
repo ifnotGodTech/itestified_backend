@@ -1,5 +1,5 @@
 from django.test import TestCase
-from django.urls import reverse
+from django.urls import NoReverseMatch, reverse
 from django.utils import timezone
 from django.core.management import call_command
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -165,58 +165,9 @@ class TestimonyApiTests(TestCase):
         self.assertEqual(created.status, TestimonyStatus.PENDING_REVIEW)
         self.assertEqual(created.testimony_type, TestimonyType.WRITTEN)
 
-    def test_slice4_submit_video_testimony_sets_pending_review(self) -> None:
-        user = UserFactory(email="video@example.com")
-        ProfileFactory(user=user, full_name="Video User")
-        token = Token.objects.create(user=user)
-        response = self.client.post(
-            reverse("testimony-submit-video"),
-            {
-                "title": "Healing video testimony",
-                "category_id": self.category_healing.id,
-                "video_url": "https://cdn.example.com/testimony.mp4",
-                "thumbnail_url": "https://cdn.example.com/thumb.jpg",
-            },
-            content_type="application/json",
-            HTTP_AUTHORIZATION=f"Token {token.key}",
-        )
-        self.assertEqual(response.status_code, 201)
-        created = Testimony.objects.get(title="Healing video testimony")
-        self.assertEqual(created.author, user)
-        self.assertEqual(created.status, TestimonyStatus.PENDING_REVIEW)
-        self.assertEqual(created.testimony_type, TestimonyType.VIDEO)
-
-    def test_submit_video_rejects_invalid_video_url_scheme(self) -> None:
-        user = UserFactory(email="video-invalid-scheme@example.com")
-        token = Token.objects.create(user=user)
-        response = self.client.post(
-            reverse("testimony-submit-video"),
-            {
-                "title": "Bad URL testimony",
-                "category_id": self.category_healing.id,
-                "video_url": "ftp://cdn.example.com/testimony.mp4",
-            },
-            content_type="application/json",
-            HTTP_AUTHORIZATION=f"Token {token.key}",
-        )
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("video_url", response.json())
-
-    def test_submit_video_rejects_watch_page_links(self) -> None:
-        user = UserFactory(email="video-watch-link@example.com")
-        token = Token.objects.create(user=user)
-        response = self.client.post(
-            reverse("testimony-submit-video"),
-            {
-                "title": "Watch page testimony",
-                "category_id": self.category_healing.id,
-                "video_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-            },
-            content_type="application/json",
-            HTTP_AUTHORIZATION=f"Token {token.key}",
-        )
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("video_url", response.json())
+    def test_mobile_video_testimony_submission_route_is_not_exposed(self) -> None:
+        with self.assertRaises(NoReverseMatch):
+            reverse("testimony-submit-video")
 
     def test_slice5_my_testimonies_lists_all_statuses_for_user(self) -> None:
         owner = UserFactory(email="mine@example.com")

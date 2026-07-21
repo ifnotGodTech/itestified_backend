@@ -1,4 +1,3 @@
-from urllib.parse import urlparse
 from datetime import datetime
 
 from rest_framework import serializers
@@ -243,67 +242,6 @@ class RejectedTestimonyResubmitSerializer(serializers.Serializer):
         if not value or not value.strip():
             raise serializers.ValidationError("Body is required for written testimony.")
         return value.strip()
-
-
-class TestimonyVideoCreateSerializer(serializers.ModelSerializer):
-    _DISALLOWED_VIDEO_PAGE_HOSTS = {
-        "youtube.com",
-        "www.youtube.com",
-        "m.youtube.com",
-        "youtu.be",
-        "vimeo.com",
-        "www.vimeo.com",
-    }
-
-    category_id = serializers.PrimaryKeyRelatedField(
-        source="category",
-        queryset=TestimonyCategory.objects.filter(is_active=True),
-        write_only=True,
-    )
-    thumbnail_url = serializers.URLField(required=False, allow_blank=True)
-
-    class Meta:
-        model = Testimony
-        fields = ("title", "category_id", "video_url", "thumbnail_url")
-
-    def validate_title(self, value: str) -> str:
-        if not value or not value.strip():
-            raise serializers.ValidationError("Title is required.")
-        return value.strip()
-
-    def validate_video_url(self, value: str) -> str:
-        if not value or not value.strip():
-            raise serializers.ValidationError("Video URL is required.")
-        trimmed = value.strip()
-        parsed = urlparse(trimmed)
-        if parsed.scheme not in {"http", "https"}:
-            raise serializers.ValidationError("Video URL must start with http:// or https://.")
-        if not parsed.netloc:
-            raise serializers.ValidationError("Video URL must include a valid host.")
-        host = parsed.netloc.lower()
-        if host in self._DISALLOWED_VIDEO_PAGE_HOSTS:
-            raise serializers.ValidationError(
-                "Direct video stream/file URL is required (watch-page links are not supported)."
-            )
-        return trimmed
-
-    def create(self, validated_data):
-        user = self.context["request"].user
-        testimony = Testimony.objects.create(
-            author=user,
-            category=validated_data["category"],
-            title=validated_data["title"],
-            video_url=validated_data["video_url"],
-            thumbnail_url=validated_data.get("thumbnail_url", ""),
-            testimony_type=TestimonyType.VIDEO,
-            status=TestimonyStatus.PENDING_REVIEW,
-        )
-        notify_testimony_submitted_to_admins(
-            testimony_title=testimony.title,
-            testimony_type=testimony.testimony_type,
-            actor=user,
-        )
-        return testimony
 
 
 class AdminVideoTestimonyUploadSerializer(serializers.Serializer):

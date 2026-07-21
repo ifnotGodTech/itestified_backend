@@ -20,7 +20,6 @@ from .views import (
     AuthenticatedMyTestimonyListView,
     AuthenticatedMyTestimonyDeleteView,
     AuthenticatedRejectedTestimonyResubmitView,
-    AuthenticatedVideoTestimonyCreateView,
     AuthenticatedWrittenTestimonyCreateView,
     FavoriteListView,
     FavoriteTestimonyListView,
@@ -55,7 +54,6 @@ urlpatterns = [
     path("<int:testimony_id>/comments/", TestimonyCommentListCreateView.as_view(), name="testimony-comment-list-create"),
     path("comments/<int:comment_id>/", TestimonyCommentDeleteView.as_view(), name="testimony-comment-delete"),
     path("submit/written/", AuthenticatedWrittenTestimonyCreateView.as_view(), name="testimony-submit-written"),
-    path("submit/video/", AuthenticatedVideoTestimonyCreateView.as_view(), name="testimony-submit-video"),
     path("admin/categories/", AdminCategoryListCreateView.as_view(), name="admin-testimony-category-list-create"),
     path("admin/categories/<int:pk>/", AdminCategoryDetailView.as_view(), name="admin-testimony-category-detail"),
     path(

@@ -49,7 +49,6 @@ from .serializers import (
     AdminVideoTestimonyUploadSerializer,
     AdminVideoTestimonyEditSerializer,
     AdminVideoTestimonyCreateFromUrlSerializer,
-    TestimonyVideoCreateSerializer,
 )
 
 
@@ -114,12 +113,6 @@ class AuthenticatedWrittenTestimonyCreateView(generics.CreateAPIView):
     authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
     serializer_class = TestimonyCreateSerializer
-
-
-class AuthenticatedVideoTestimonyCreateView(generics.CreateAPIView):
-    authentication_classes = [TokenAuthentication]
-    permission_classes = [IsAuthenticated]
-    serializer_class = TestimonyVideoCreateSerializer
 
 
 class AuthenticatedMyTestimonyListView(generics.ListAPIView):

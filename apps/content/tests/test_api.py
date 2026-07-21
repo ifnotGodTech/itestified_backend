@@ -246,3 +246,31 @@ class ContentAdminApiTests(TestCase):
         self.assertEqual(due.status, ScriptureStatus.PUBLISHED)
         self.assertIsNotNone(due.published_at)
         self.assertEqual(future.status, ScriptureStatus.SCHEDULED)
+
+    def test_publish_due_inspirational_pictures_management_command_publishes_due_entries(self):
+        due = InspirationalPicture.objects.create(
+            title="Due Picture",
+            caption="Ready now.",
+            image_url="https://images.example.com/due.jpg",
+            status=InspirationalPictureStatus.SCHEDULED,
+            publish_at=timezone.now() - timedelta(minutes=5),
+            created_by=self.admin,
+            updated_by=self.admin,
+        )
+        future = InspirationalPicture.objects.create(
+            title="Future Picture",
+            caption="Later.",
+            image_url="https://images.example.com/future.jpg",
+            status=InspirationalPictureStatus.SCHEDULED,
+            publish_at=timezone.now() + timedelta(days=1),
+            created_by=self.admin,
+            updated_by=self.admin,
+        )
+
+        out = StringIO()
+        call_command("publish_due_inspirational_pictures", stdout=out)
+
+        due.refresh_from_db()
+        future.refresh_from_db()
+        self.assertEqual(due.status, InspirationalPictureStatus.PUBLISHED)
+        self.assertEqual(future.status, InspirationalPictureStatus.SCHEDULED)
