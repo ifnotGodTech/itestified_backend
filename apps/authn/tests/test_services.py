@@ -6,10 +6,10 @@ from django.utils import timezone
 from django.core import mail
 from django.test import override_settings
 from django.contrib.sessions.models import Session
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from django.db import IntegrityError
 
-from apps.authn.exceptions import AuthnError
+from apps.authn.exceptions import AuthnError, EmailDeliveryError
 from apps.authn.models import EmailChallenge, UserSession
 from apps.authn.services.commands import (
     bootstrap_super_admin,
@@ -280,3 +280,41 @@ class AuthnServiceTests(TestCase):
         unknown = start_password_reset(email="unknown-reset@example.com")
         self.assertIsNone(unknown)
         self.assertEqual(len(mail.outbox), 1)
+
+    @override_settings(
+        EMAIL_PROVIDER="resend",
+        RESEND_API_KEY="re_test",
+        RESEND_FROM_EMAIL="iTestified <onboarding@example.com>",
+        DEFAULT_FROM_EMAIL="iTestified <no-reply@example.com>",
+    )
+    @patch("apps.authn.services.commands.requests.post")
+    def test_start_password_reset_can_send_email_with_resend_provider(self, mock_post) -> None:
+        user = UserFactory(email="resend-reset@example.com")
+        response = Mock()
+        response.raise_for_status.return_value = None
+        mock_post.return_value = response
+
+        challenge = start_password_reset(email=user.email)
+
+        self.assertIsNotNone(challenge)
+        mock_post.assert_called_once()
+        _url, kwargs = mock_post.call_args
+        self.assertEqual(kwargs["headers"]["Authorization"], "Bearer re_test")
+        self.assertEqual(kwargs["json"]["from"], "iTestified <onboarding@example.com>")
+        self.assertEqual(kwargs["json"]["to"], [user.email])
+        self.assertIn(challenge.code, kwargs["json"]["text"])
+
+    @override_settings(
+        EMAIL_PROVIDER="resend",
+        RESEND_API_KEY="re_test",
+        RESEND_FROM_EMAIL="iTestified <onboarding@example.com>",
+    )
+    @patch("apps.authn.services.commands.requests.post")
+    def test_start_password_reset_raises_delivery_error_when_resend_fails(self, mock_post) -> None:
+        user = UserFactory(email="resend-failure@example.com")
+        response = Mock()
+        response.raise_for_status.side_effect = RuntimeError("resend failed")
+        mock_post.return_value = response
+
+        with self.assertRaises(EmailDeliveryError):
+            start_password_reset(email=user.email)

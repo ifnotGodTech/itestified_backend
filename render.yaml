@@ -69,6 +69,12 @@ services:
         sync: false
       - key: SUPPORT_EMAIL
         sync: false
+      - key: EMAIL_PROVIDER
+        value: smtp
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_FROM_EMAIL
+        sync: false
       - key: GOOGLE_OAUTH_CLIENT_IDS
         sync: false
       - key: GOOGLE_OAUTH_ALLOWED_ISSUERS
@@ -149,6 +155,12 @@ services:
       - key: DEFAULT_FROM_EMAIL
         sync: false
       - key: SUPPORT_EMAIL
+        sync: false
+      - key: EMAIL_PROVIDER
+        value: smtp
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_FROM_EMAIL
         sync: false
       - key: GOOGLE_OAUTH_CLIENT_IDS
         sync: false

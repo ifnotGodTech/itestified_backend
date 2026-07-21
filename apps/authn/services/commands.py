@@ -6,6 +6,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Optional
 
+import requests
 from django.conf import settings
 from django.contrib.auth import authenticate
 from django.contrib.auth.hashers import check_password
@@ -33,6 +34,7 @@ BRAND_PURPLE_40 = "#E6D8FF"  # mobile AppColors.purple40
 BRAND_ORANGE = "#FF9F4A"  # mobile AppColors.colorsOrange / brandSupportColor3
 BRAND_DARK_GREY_100 = "#120F1A"  # mobile AppColors.darkGrey100
 logger = logging.getLogger(__name__)
+RESEND_EMAIL_API_URL = "https://api.resend.com/emails"
 
 
 def _generate_otp() -> str:
@@ -50,6 +52,52 @@ def _get_latest_challenge(email: str, purpose: str, for_update: bool = False) ->
     if for_update:
         qs = qs.select_for_update()
     return qs.first()
+
+
+def _send_email(
+    *,
+    subject: str,
+    text_message: str,
+    html_message: str,
+    from_email: str,
+    to_email: str,
+) -> None:
+    if getattr(settings, "EMAIL_PROVIDER", "smtp").lower() == "resend":
+        api_key = getattr(settings, "RESEND_API_KEY", "")
+        if not api_key:
+            raise EmailDeliveryError("Resend API key is not configured.")
+        response = requests.post(
+            RESEND_EMAIL_API_URL,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "User-Agent": "itestified-backend",
+            },
+            json={
+                "from": getattr(settings, "RESEND_FROM_EMAIL", from_email),
+                "to": [to_email],
+                "subject": subject,
+                "text": text_message,
+                "html": html_message,
+            },
+            timeout=getattr(settings, "EMAIL_TIMEOUT", 10),
+        )
+        response.raise_for_status()
+        return
+
+    connection = get_connection(
+        fail_silently=False,
+        timeout=getattr(settings, "EMAIL_TIMEOUT", 10),
+    )
+    email_message = EmailMultiAlternatives(
+        subject=subject,
+        body=text_message,
+        from_email=from_email,
+        to=[to_email],
+        connection=connection,
+    )
+    email_message.attach_alternative(html_message, "text/html")
+    email_message.send(fail_silently=False)
 
 
 def _send_otp_email(*, email: str, purpose: str, code: str) -> None:
@@ -97,19 +145,13 @@ def _send_otp_email(*, email: str, purpose: str, code: str) -> None:
             expires_minutes=expires_minutes,
             support_email=support_email,
         )
-        connection = get_connection(
-            fail_silently=False,
-            timeout=getattr(settings, "EMAIL_TIMEOUT", 10),
-        )
-        email_message = EmailMultiAlternatives(
+        _send_email(
             subject=subject,
-            body=text_message,
+            text_message=text_message,
+            html_message=html_message,
             from_email=settings.DEFAULT_FROM_EMAIL,
-            to=[email],
-            connection=connection,
+            to_email=email,
         )
-        email_message.attach_alternative(html_message, "text/html")
-        email_message.send(fail_silently=False)
         elapsed_ms = int((time.monotonic() - start_time) * 1000)
         logger.info(
             "authn.email.send_otp.success purpose=%s recipient=%s elapsed_ms=%s",
