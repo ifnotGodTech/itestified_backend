@@ -318,3 +318,43 @@ class AuthnServiceTests(TestCase):
 
         with self.assertRaises(EmailDeliveryError):
             start_password_reset(email=user.email)
+
+    @override_settings(
+        EMAIL_PROVIDER="brevo",
+        BREVO_API_KEY="xkeysib-test",
+        BREVO_FROM_EMAIL="iTestified <no-reply@example.com>",
+        DEFAULT_FROM_EMAIL="iTestified <fallback@example.com>",
+    )
+    @patch("apps.authn.services.commands.requests.post")
+    def test_start_password_reset_can_send_email_with_brevo_provider(self, mock_post) -> None:
+        user = UserFactory(email="brevo-reset@example.com")
+        response = Mock()
+        response.raise_for_status.return_value = None
+        mock_post.return_value = response
+
+        challenge = start_password_reset(email=user.email)
+
+        self.assertIsNotNone(challenge)
+        mock_post.assert_called_once()
+        _url, kwargs = mock_post.call_args
+        self.assertEqual(kwargs["headers"]["api-key"], "xkeysib-test")
+        self.assertEqual(kwargs["json"]["sender"], {"name": "iTestified", "email": "no-reply@example.com"})
+        self.assertEqual(kwargs["json"]["to"], [{"email": user.email}])
+        self.assertEqual(kwargs["json"]["subject"], "iTestified password reset code")
+        self.assertIn(challenge.code, kwargs["json"]["textContent"])
+        self.assertIn(challenge.code, kwargs["json"]["htmlContent"])
+
+    @override_settings(
+        EMAIL_PROVIDER="brevo",
+        BREVO_API_KEY="xkeysib-test",
+        BREVO_FROM_EMAIL="iTestified <no-reply@example.com>",
+    )
+    @patch("apps.authn.services.commands.requests.post")
+    def test_start_password_reset_raises_delivery_error_when_brevo_fails(self, mock_post) -> None:
+        user = UserFactory(email="brevo-failure@example.com")
+        response = Mock()
+        response.raise_for_status.side_effect = RuntimeError("brevo failed")
+        mock_post.return_value = response
+
+        with self.assertRaises(EmailDeliveryError):
+            start_password_reset(email=user.email)

@@ -711,6 +711,12 @@ class AdminTestimonyApiTests(TestCase):
             notification_type=NotificationType.TESTIMONY_SUBMITTED
         ).count()
         self.assertEqual(submitted_notifications, 0)
+        published_notifications = UserNotification.objects.filter(
+            notification_type=NotificationType.NEW_VIDEO_TESTIMONY,
+            recipient=self.author,
+        )
+        self.assertEqual(published_notifications.count(), 1)
+        self.assertIn("Admin uploaded testimony", published_notifications.get().message)
 
     @patch("apps.testimonies.api.serializers.upload_testimony_media")
     def test_admin_upload_video_with_draft_status_persists_draft(self, upload_mock) -> None:
@@ -734,6 +740,12 @@ class AdminTestimonyApiTests(TestCase):
         created = Testimony.objects.get(title="Draft upload testimony")
         self.assertEqual(created.status, TestimonyStatus.DRAFT)
         self.assertIsNone(created.publish_at)
+        self.assertFalse(
+            UserNotification.objects.filter(
+                notification_type=NotificationType.NEW_VIDEO_TESTIMONY,
+                message__icontains="Draft upload testimony",
+            ).exists()
+        )
 
     @patch("apps.testimonies.api.serializers.upload_testimony_media")
     def test_admin_upload_video_with_schedule_status_requires_future_datetime(self, upload_mock) -> None:
@@ -772,6 +784,12 @@ class AdminTestimonyApiTests(TestCase):
         created = Testimony.objects.get(title="Scheduled upload testimony")
         self.assertEqual(created.status, TestimonyStatus.SCHEDULED)
         self.assertIsNotNone(created.publish_at)
+        self.assertFalse(
+            UserNotification.objects.filter(
+                notification_type=NotificationType.NEW_VIDEO_TESTIMONY,
+                message__icontains="Scheduled upload testimony",
+            ).exists()
+        )
 
     @patch("apps.testimonies.api.serializers.upload_testimony_media")
     def test_admin_upload_video_upload_now_status_persists_approved(self, upload_mock) -> None:
@@ -795,6 +813,13 @@ class AdminTestimonyApiTests(TestCase):
         created = Testimony.objects.get(title="Upload now testimony")
         self.assertEqual(created.status, TestimonyStatus.APPROVED)
         self.assertIsNone(created.publish_at)
+        self.assertTrue(
+            UserNotification.objects.filter(
+                recipient=self.author,
+                notification_type=NotificationType.NEW_VIDEO_TESTIMONY,
+                message__icontains="Upload now testimony",
+            ).exists()
+        )
 
     def test_admin_upload_video_rejects_non_mp4_file(self) -> None:
         video = SimpleUploadedFile("testimony.mov", b"fake-video-content", content_type="video/quicktime")
@@ -918,6 +943,44 @@ class AdminTestimonyApiTests(TestCase):
         self.assertEqual(response.status_code, 200)
         draft_video.refresh_from_db()
         self.assertEqual(draft_video.status, TestimonyStatus.APPROVED)
+        self.assertTrue(
+            UserNotification.objects.filter(
+                recipient=self.author,
+                notification_type=NotificationType.NEW_VIDEO_TESTIMONY,
+                message__icontains="Draft video",
+            ).exists()
+        )
+
+    def test_scheduled_video_auto_publish_notifies_regular_users(self) -> None:
+        scheduled_video = Testimony.objects.create(
+            author=self.admin,
+            category=self.category,
+            title="Scheduled public video",
+            body="",
+            testimony_type=TestimonyType.VIDEO,
+            status=TestimonyStatus.SCHEDULED,
+            video_url="https://example.com/scheduled-public.mp4",
+            publish_at=timezone.now() - timezone.timedelta(minutes=1),
+        )
+
+        call_command("publish_scheduled_testimonies")
+
+        scheduled_video.refresh_from_db()
+        self.assertEqual(scheduled_video.status, TestimonyStatus.APPROVED)
+        self.assertTrue(
+            UserNotification.objects.filter(
+                recipient=self.author,
+                notification_type=NotificationType.NEW_VIDEO_TESTIMONY,
+                message__icontains="Scheduled public video",
+            ).exists()
+        )
+        self.assertFalse(
+            UserNotification.objects.filter(
+                recipient=self.admin,
+                notification_type=NotificationType.NEW_VIDEO_TESTIMONY,
+                message__icontains="Scheduled public video",
+            ).exists()
+        )
 
     def test_admin_upload_now_video_rejects_non_draft_or_scheduled(self) -> None:
         response = self.client.post(

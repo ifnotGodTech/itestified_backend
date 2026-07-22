@@ -7,6 +7,7 @@ class NotificationType(models.TextChoices):
     TESTIMONY_APPROVED = "testimony_approved", "Testimony Approved"
     TESTIMONY_REJECTED = "testimony_rejected", "Testimony Rejected"
     TESTIMONY_COMMENT = "testimony_comment", "Testimony Comment"
+    NEW_VIDEO_TESTIMONY = "new_video_testimony", "New Video Testimony"
 
 
 class UserNotification(models.Model):

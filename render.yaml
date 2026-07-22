@@ -75,6 +75,10 @@ services:
         sync: false
       - key: RESEND_FROM_EMAIL
         sync: false
+      - key: BREVO_API_KEY
+        sync: false
+      - key: BREVO_FROM_EMAIL
+        sync: false
       - key: GOOGLE_OAUTH_CLIENT_IDS
         sync: false
       - key: GOOGLE_OAUTH_ALLOWED_ISSUERS
@@ -161,6 +165,10 @@ services:
       - key: RESEND_API_KEY
         sync: false
       - key: RESEND_FROM_EMAIL
+        sync: false
+      - key: BREVO_API_KEY
+        sync: false
+      - key: BREVO_FROM_EMAIL
         sync: false
       - key: GOOGLE_OAUTH_CLIENT_IDS
         sync: false

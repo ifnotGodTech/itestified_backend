@@ -55,5 +55,7 @@ SUPPORT_EMAIL = os.environ["SUPPORT_EMAIL"]
 EMAIL_PROVIDER = os.environ.get("EMAIL_PROVIDER", "smtp")
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
 RESEND_FROM_EMAIL = os.environ.get("RESEND_FROM_EMAIL", DEFAULT_FROM_EMAIL)
+BREVO_API_KEY = os.environ.get("BREVO_API_KEY", "")
+BREVO_FROM_EMAIL = os.environ.get("BREVO_FROM_EMAIL", DEFAULT_FROM_EMAIL)
 # Policy lock: OTP hints must never be exposed in production responses.
 OTP_HINT_IN_RESPONSE = False

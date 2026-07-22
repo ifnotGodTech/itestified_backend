@@ -10,8 +10,10 @@ from apps.testimonies.models import (
     Testimony,
     TestimonyModerationHistory,
     TestimonyStatus,
+    TestimonyType,
 )
 from apps.notifications.services import (
+    notify_new_video_testimony_published,
     notify_testimony_approved,
     notify_testimony_rejected,
 )
@@ -144,4 +146,6 @@ def auto_publish_due_scheduled_testimonies() -> int:
             to_status=TestimonyStatus.APPROVED,
             actor=None,
         )
+        if testimony.testimony_type == TestimonyType.VIDEO:
+            notify_new_video_testimony_published(testimony=testimony, actor=None)
     return len(testimonies)

@@ -30,7 +30,11 @@ from apps.testimonies.services.commands import (
     reject_testimony,
     schedule_testimony,
 )
-from apps.notifications.services import notify_testimony_comment, notify_testimony_submitted_to_admins
+from apps.notifications.services import (
+    notify_new_video_testimony_published,
+    notify_testimony_comment,
+    notify_testimony_submitted_to_admins,
+)
 
 from .serializers import (
     AdminTestimonyCategorySerializer,
@@ -509,6 +513,8 @@ class AdminVideoTestimonyUploadView(generics.CreateAPIView):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         testimony = serializer.save()
+        if testimony.status == TestimonyStatus.APPROVED:
+            notify_new_video_testimony_published(testimony=testimony, actor=request.user)
         return Response(AdminTestimonyDetailSerializer(testimony).data, status=status.HTTP_201_CREATED)
 
 
@@ -521,6 +527,8 @@ class AdminVideoTestimonyCreateFromUrlView(generics.CreateAPIView):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         testimony = serializer.save()
+        if testimony.status == TestimonyStatus.APPROVED:
+            notify_new_video_testimony_published(testimony=testimony, actor=request.user)
         return Response(AdminTestimonyDetailSerializer(testimony).data, status=status.HTTP_201_CREATED)
 
 
@@ -581,4 +589,5 @@ class AdminUploadNowVideoTestimonyView(APIView):
             to_status=TestimonyStatus.APPROVED,
             reason="Uploaded now from draft/scheduled via admin modal.",
         )
+        notify_new_video_testimony_published(testimony=testimony, actor=request.user)
         return Response(AdminTestimonyDetailSerializer(testimony).data, status=status.HTTP_200_OK)

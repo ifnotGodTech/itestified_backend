@@ -1,6 +1,7 @@
 from apps.notifications.models import NotificationType, UserNotification
-from apps.users.choices import AdminAssignmentStatus
+from apps.users.choices import AdminAssignmentStatus, UserAccountStatus
 from apps.users.models import AdminAssignment
+from apps.users.models import User
 
 
 def notify_testimony_approved(*, recipient, actor, testimony_title: str) -> UserNotification:
@@ -48,6 +49,33 @@ def notify_testimony_submitted_to_admins(*, testimony_title: str, testimony_type
         for user_id in admin_user_ids
     ]
     UserNotification.objects.bulk_create(rows)
+
+
+def notify_new_video_testimony_published(*, testimony, actor=None) -> int:
+    recipient_qs = User.objects.filter(account_status=UserAccountStatus.ACTIVE)
+    active_admin_user_ids = AdminAssignment.objects.filter(
+        status=AdminAssignmentStatus.ACTIVE
+    ).values_list("user_id", flat=True)
+    recipient_qs = recipient_qs.exclude(id__in=active_admin_user_ids)
+    if actor is not None:
+        recipient_qs = recipient_qs.exclude(id=actor.id)
+
+    recipient_ids = list(recipient_qs.values_list("id", flat=True))
+    if not recipient_ids:
+        return 0
+
+    rows = [
+        UserNotification(
+            recipient_id=user_id,
+            actor=actor,
+            notification_type=NotificationType.NEW_VIDEO_TESTIMONY,
+            title="New video testimony",
+            message=f'New video testimony published: "{testimony.title}".',
+        )
+        for user_id in recipient_ids
+    ]
+    UserNotification.objects.bulk_create(rows)
+    return len(rows)
 
 
 def notify_testimony_comment(*, recipient, actor, testimony_title: str) -> UserNotification:
