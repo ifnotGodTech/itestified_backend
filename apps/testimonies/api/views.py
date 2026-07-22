@@ -54,6 +54,7 @@ from .serializers import (
     AdminVideoTestimonyEditSerializer,
     AdminVideoTestimonyCreateFromUrlSerializer,
 )
+from apps.testimonies.services.media_uploads import CloudinaryUploadError, create_direct_upload_signature
 
 
 class TestimonyPagination(PageNumberPagination):
@@ -519,6 +520,30 @@ class AdminVideoTestimonyUploadView(generics.CreateAPIView):
         if testimony.status == TestimonyStatus.APPROVED:
             notify_new_video_testimony_published(testimony=testimony, actor=request.user)
         return Response(AdminTestimonyDetailSerializer(testimony).data, status=status.HTTP_201_CREATED)
+
+
+class AdminVideoTestimonyUploadSignatureView(APIView):
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsActiveAdmin]
+
+    def post(self, request):
+        resource_type = str(request.data.get("resource_type") or "video").strip().lower()
+        try:
+            upload_signature = create_direct_upload_signature(resource_type=resource_type)
+        except CloudinaryUploadError as exc:
+            return Response({"message": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(
+            {
+                "cloud_name": upload_signature.cloud_name,
+                "api_key": upload_signature.api_key,
+                "timestamp": upload_signature.timestamp,
+                "folder": upload_signature.folder,
+                "signature": upload_signature.signature,
+                "resource_type": resource_type,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class AdminVideoTestimonyCreateFromUrlView(generics.CreateAPIView):

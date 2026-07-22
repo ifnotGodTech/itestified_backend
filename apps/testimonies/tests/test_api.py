@@ -690,11 +690,20 @@ class AdminTestimonyApiTests(TestCase):
 
         create_response = self.client.post(
             reverse("admin-testimony-category-list-create"),
-            {"name": "Faith", "description": "Faith stories"},
+            {"name": "faith", "description": "Faith stories"},
             content_type="application/json",
         )
         self.assertEqual(create_response.status_code, 201)
+        self.assertEqual(create_response.json()["name"], "Faith")
         created_id = create_response.json()["id"]
+
+        duplicate_response = self.client.post(
+            reverse("admin-testimony-category-list-create"),
+            {"name": "FAITH", "description": "Duplicate faith stories"},
+            content_type="application/json",
+        )
+        self.assertEqual(duplicate_response.status_code, 400)
+        self.assertEqual(duplicate_response.json()["name"], ["Category name already exists."])
 
         edit_response = self.client.patch(
             reverse("admin-testimony-category-detail", kwargs={"pk": created_id}),
@@ -785,6 +794,38 @@ class AdminTestimonyApiTests(TestCase):
         )
         self.assertEqual(published_notifications.count(), 1)
         self.assertIn("Admin uploaded testimony", published_notifications.get().message)
+
+    @patch("apps.testimonies.api.views.create_direct_upload_signature")
+    def test_admin_upload_signature_returns_signed_cloudinary_payload(self, signature_mock) -> None:
+        from apps.testimonies.services.media_uploads import CloudinaryUploadSignature
+
+        signature_mock.return_value = CloudinaryUploadSignature(
+            cloud_name="demo",
+            api_key="12345",
+            timestamp=1784720000,
+            folder="itestified/testimonies/videos",
+            signature="signed-payload",
+        )
+
+        response = self.client.post(
+            reverse("admin-testimony-upload-signature"),
+            {"resource_type": "video"},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {
+                "cloud_name": "demo",
+                "api_key": "12345",
+                "timestamp": 1784720000,
+                "folder": "itestified/testimonies/videos",
+                "signature": "signed-payload",
+                "resource_type": "video",
+            },
+        )
+        signature_mock.assert_called_once_with(resource_type="video")
 
     @patch("apps.testimonies.api.serializers.upload_testimony_media")
     def test_admin_upload_video_with_draft_status_persists_draft(self, upload_mock) -> None:

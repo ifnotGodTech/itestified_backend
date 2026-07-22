@@ -12,6 +12,7 @@ from apps.testimonies.models import (
     TestimonyModerationHistory,
     TestimonyStatus,
     TestimonyType,
+    normalize_testimony_category_name,
 )
 from apps.testimonies.services.media_uploads import CloudinaryUploadError, upload_testimony_media
 
@@ -32,12 +33,13 @@ class AdminTestimonyCategorySerializer(serializers.ModelSerializer):
         trimmed = value.strip()
         if not trimmed:
             raise serializers.ValidationError("Name is required.")
+        normalized = normalize_testimony_category_name(trimmed)
         queryset = TestimonyCategory.objects.all()
         if self.instance is not None:
             queryset = queryset.exclude(id=self.instance.id)
-        if queryset.filter(name__iexact=trimmed).exists():
+        if queryset.filter(name__iexact=normalized).exists():
             raise serializers.ValidationError("Category name already exists.")
-        return trimmed
+        return normalized
 
     def validate_description(self, value: str) -> str:
         return value.strip()

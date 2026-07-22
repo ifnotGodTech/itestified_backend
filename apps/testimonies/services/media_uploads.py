@@ -1,4 +1,5 @@
 import os
+import time
 from dataclasses import dataclass
 
 
@@ -10,6 +11,15 @@ class CloudinaryUploadError(Exception):
 class CloudinaryUploadResult:
     video_url: str
     thumbnail_url: str
+
+
+@dataclass
+class CloudinaryUploadSignature:
+    cloud_name: str
+    api_key: str
+    timestamp: int
+    folder: str
+    signature: str
 
 
 def _require_env(name: str) -> str:
@@ -36,6 +46,53 @@ def _configure_cloudinary() -> None:
         api_key=_require_env("CLOUDINARY_API_KEY"),
         api_secret=_require_env("CLOUDINARY_API_SECRET"),
         secure=True,
+    )
+
+
+def create_direct_upload_signature(*, resource_type: str) -> CloudinaryUploadSignature:
+    _configure_cloudinary()
+
+    try:
+        import cloudinary
+        from cloudinary.utils import api_sign_request
+    except ImportError as exc:
+        raise CloudinaryUploadError("cloudinary package is not installed.") from exc
+
+    common_upload_folder = os.environ.get("CLOUDINARY_UPLOAD_FOLDER", "").strip()
+    if resource_type == "video":
+        folder = (
+            os.environ.get("CLOUDINARY_TESTIMONY_VIDEO_FOLDER", "").strip()
+            or common_upload_folder
+            or "itestified/testimonies/videos"
+        )
+    elif resource_type == "image":
+        folder = (
+            os.environ.get("CLOUDINARY_TESTIMONY_THUMBNAIL_FOLDER", "").strip()
+            or common_upload_folder
+            or "itestified/testimonies/thumbnails"
+        )
+    else:
+        raise CloudinaryUploadError("Unsupported upload resource type.")
+
+    config = cloudinary.config()
+    cloud_name = str(config.cloud_name or "").strip()
+    api_key = str(config.api_key or "").strip()
+    api_secret = str(config.api_secret or "").strip()
+    if not cloud_name or not api_key or not api_secret:
+        raise CloudinaryUploadError("Cloudinary direct upload credentials are incomplete.")
+
+    timestamp = int(time.time())
+    params_to_sign = {
+        "folder": folder,
+        "timestamp": timestamp,
+    }
+    signature = api_sign_request(params_to_sign, api_secret)
+    return CloudinaryUploadSignature(
+        cloud_name=cloud_name,
+        api_key=api_key,
+        timestamp=timestamp,
+        folder=folder,
+        signature=signature,
     )
 
 
