@@ -128,7 +128,7 @@ class AuthenticatedMyTestimonyListView(generics.ListAPIView):
     def get_queryset(self):
         return Testimony.objects.select_related("author", "author__profile", "category").filter(
             author=self.request.user
-        )
+        ).order_by("-created_at", "-id")
 
 
 class AuthenticatedRejectedTestimonyResubmitView(APIView):
@@ -369,15 +369,18 @@ class AdminTestimonyListView(generics.ListAPIView):
         status_value = (self.request.query_params.get("status") or "").strip()
         category_slug = (self.request.query_params.get("category") or "").strip()
         search_text = (self.request.query_params.get("search") or "").strip()
+        testimony_type = (self.request.query_params.get("testimony_type") or "").strip()
         if status_value:
             queryset = queryset.filter(status=status_value)
         if category_slug:
             queryset = queryset.filter(category__slug=category_slug)
+        if testimony_type in TestimonyType.values:
+            queryset = queryset.filter(testimony_type=testimony_type)
         if search_text:
             queryset = queryset.filter(title__icontains=search_text)
         if status_value == TestimonyStatus.PENDING_REVIEW:
-            return queryset.order_by("created_at")
-        return queryset
+            return queryset.order_by("created_at", "id")
+        return queryset.order_by("-created_at", "-id")
 
 
 class AdminTestimonyDetailView(generics.RetrieveAPIView):

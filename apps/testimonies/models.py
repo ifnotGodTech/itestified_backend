@@ -72,6 +72,11 @@ class Testimony(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["testimony_type", "status", "-created_at"], name="testim_type_status_created_idx"),
+            models.Index(fields=["category", "status", "-created_at"], name="testim_cat_status_created_idx"),
+            models.Index(fields=["-created_at", "id"], name="testim_created_id_idx"),
+        ]
 
     def __str__(self) -> str:
         return f"{self.title} ({self.status})"

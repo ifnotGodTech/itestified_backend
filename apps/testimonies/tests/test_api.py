@@ -214,6 +214,38 @@ class TestimonyApiTests(TestCase):
         rejected = next(item for item in response.json()["results"] if item["title"] == "Mine rejected")
         self.assertEqual(rejected["rejection_reason"], "Needs more detail.")
 
+    def test_my_testimonies_orders_newest_first_so_fresh_pending_is_visible(self) -> None:
+        owner = UserFactory(email="fresh-mine@example.com")
+        ProfileFactory(user=owner, full_name="Fresh Mine")
+        token = Token.objects.create(user=owner)
+        older = Testimony.objects.create(
+            author=owner,
+            category=self.category_faith,
+            title="Older approved",
+            body="Older approved body",
+            testimony_type=TestimonyType.WRITTEN,
+            status=TestimonyStatus.APPROVED,
+        )
+        fresh_pending = Testimony.objects.create(
+            author=owner,
+            category=self.category_faith,
+            title="Fresh pending",
+            body="Fresh pending body",
+            testimony_type=TestimonyType.WRITTEN,
+            status=TestimonyStatus.PENDING_REVIEW,
+        )
+
+        response = self.client.get(
+            reverse("testimony-mine-list"),
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        results = response.json()["results"]
+        self.assertEqual(results[0]["id"], fresh_pending.id)
+        self.assertEqual(results[0]["status"], TestimonyStatus.PENDING_REVIEW)
+        self.assertEqual(results[1]["id"], older.id)
+
     def test_rejected_written_testimony_resubmit_transitions_to_pending_and_notifies_admin(self) -> None:
         owner = UserFactory(email="resubmit-owner@example.com")
         ProfileFactory(user=owner, full_name="Resubmit Owner")
@@ -689,6 +721,7 @@ class AdminTestimonyApiTests(TestCase):
         self.assertEqual(list_response.status_code, 200)
         payload = list_response.json()
         self.assertEqual(payload["count"], 2)
+        self.assertEqual([row["id"] for row in payload["results"]], [self.approved.id, self.pending.id])
 
         pending_only = self.client.get(f'{reverse("admin-testimony-list")}?status=pending_review')
         self.assertEqual(pending_only.status_code, 200)
@@ -698,6 +731,16 @@ class AdminTestimonyApiTests(TestCase):
         category_only = self.client.get(f'{reverse("admin-testimony-list")}?category=deliverance')
         self.assertEqual(category_only.status_code, 200)
         self.assertEqual(category_only.json()["count"], 2)
+
+        written_only = self.client.get(f'{reverse("admin-testimony-list")}?testimony_type=written')
+        self.assertEqual(written_only.status_code, 200)
+        self.assertEqual(written_only.json()["count"], 1)
+        self.assertEqual(written_only.json()["results"][0]["title"], self.pending.title)
+
+        video_only = self.client.get(f'{reverse("admin-testimony-list")}?testimony_type=video')
+        self.assertEqual(video_only.status_code, 200)
+        self.assertEqual(video_only.json()["count"], 1)
+        self.assertEqual(video_only.json()["results"][0]["title"], self.approved.title)
 
         detail_response = self.client.get(reverse("admin-testimony-detail", kwargs={"pk": self.approved.id}))
         self.assertEqual(detail_response.status_code, 200)
