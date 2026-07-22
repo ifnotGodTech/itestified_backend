@@ -10,7 +10,7 @@ from django.db.models import Q
 
 from apps.authn.api.permissions import IsActiveAdmin
 
-from apps.notifications.models import UserNotification, UserNotificationPreference
+from apps.notifications.models import NotificationType, UserNotification, UserNotificationPreference
 
 from .serializers import UserNotificationPreferenceSerializer, UserNotificationSerializer
 
@@ -89,7 +89,7 @@ class AdminNotificationHistoryView(generics.ListAPIView):
         elif status_filter == "unread":
             queryset = queryset.filter(is_read=False)
 
-        if notif_type in {"testimony_submitted", "testimony_approved", "testimony_rejected", "testimony_comment"}:
+        if notif_type in NotificationType.values:
             queryset = queryset.filter(notification_type=notif_type)
 
         if search_text:
