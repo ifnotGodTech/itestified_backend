@@ -694,7 +694,7 @@ class AdminTestimonyApiTests(TestCase):
             author=self.author,
             category=self.category,
             title="Approved testimony",
-            body="Approved body",
+            body="Approved body\nSource: YouTube",
             testimony_type=TestimonyType.VIDEO,
             status=TestimonyStatus.APPROVED,
             video_url="https://example.com/video.mp4",
@@ -772,6 +772,20 @@ class AdminTestimonyApiTests(TestCase):
         self.assertEqual(video_only.status_code, 200)
         self.assertEqual(video_only.json()["count"], 1)
         self.assertEqual(video_only.json()["results"][0]["title"], self.approved.title)
+
+        source_only = self.client.get(f'{reverse("admin-testimony-list")}?testimony_type=video&source=YouTube')
+        self.assertEqual(source_only.status_code, 200)
+        self.assertEqual(source_only.json()["count"], 1)
+        self.assertEqual(source_only.json()["results"][0]["title"], self.approved.title)
+        self.assertEqual(source_only.json()["results"][0]["source"], "YouTube")
+
+        missing_source = self.client.get(f'{reverse("admin-testimony-list")}?testimony_type=video&source=TikTok')
+        self.assertEqual(missing_source.status_code, 200)
+        self.assertEqual(missing_source.json()["count"], 0)
+
+        date_only = self.client.get(f'{reverse("admin-testimony-list")}?date_from=01/01/2020&date_to=31/12/2099')
+        self.assertEqual(date_only.status_code, 200)
+        self.assertEqual(date_only.json()["count"], 2)
 
         detail_response = self.client.get(reverse("admin-testimony-detail", kwargs={"pk": self.approved.id}))
         self.assertEqual(detail_response.status_code, 200)

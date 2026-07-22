@@ -103,6 +103,7 @@ class AdminTestimonyListSerializer(serializers.ModelSerializer):
     category_slug = serializers.CharField(source="category.slug", read_only=True)
     comment_count = serializers.SerializerMethodField()
     thumbnail_url = serializers.SerializerMethodField()
+    source = serializers.SerializerMethodField()
 
     class Meta:
         model = Testimony
@@ -115,6 +116,7 @@ class AdminTestimonyListSerializer(serializers.ModelSerializer):
             "author_email",
             "category",
             "category_slug",
+            "source",
             "thumbnail_url",
             "view_count",
             "comment_count",
@@ -135,6 +137,13 @@ class AdminTestimonyListSerializer(serializers.ModelSerializer):
         if obj.thumbnail_url.strip():
             return obj.thumbnail_url
         return build_cloudinary_video_thumbnail_url(obj.video_url)
+
+    def get_source(self, obj: Testimony) -> str:
+        for line in obj.body.splitlines():
+            stripped = line.strip()
+            if stripped.lower().startswith("source:"):
+                return stripped[len("source:") :].strip()
+        return ""
 
 
 class AdminTestimonyDetailSerializer(AdminTestimonyListSerializer):

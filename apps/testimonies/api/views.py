@@ -2,6 +2,7 @@ from rest_framework import generics
 from rest_framework.authentication import SessionAuthentication, TokenAuthentication
 from rest_framework.parsers import FormParser, MultiPartParser
 from django.utils import timezone
+from django.utils.dateparse import parse_date
 from django.db.models import F
 from django.db.models import Count
 from django.db.models import Q
@@ -61,6 +62,18 @@ class TestimonyPagination(PageNumberPagination):
     page_size = 20
     page_size_query_param = "page_size"
     max_page_size = 100
+
+
+def _parse_admin_filter_date(value: str):
+    if not value:
+        return None
+    parsed = parse_date(value)
+    if parsed is not None:
+        return parsed
+    try:
+        return datetime.strptime(value, "%d/%m/%Y").date()
+    except ValueError:
+        return None
 
 
 class PublicCategoryListView(generics.ListAPIView):
@@ -371,6 +384,9 @@ class AdminTestimonyListView(generics.ListAPIView):
         category_slug = (self.request.query_params.get("category") or "").strip()
         search_text = (self.request.query_params.get("search") or "").strip()
         testimony_type = (self.request.query_params.get("testimony_type") or "").strip()
+        date_from = _parse_admin_filter_date((self.request.query_params.get("date_from") or "").strip())
+        date_to = _parse_admin_filter_date((self.request.query_params.get("date_to") or "").strip())
+        source_text = (self.request.query_params.get("source") or "").strip()
         if status_value:
             queryset = queryset.filter(status=status_value)
         if category_slug:
@@ -379,6 +395,12 @@ class AdminTestimonyListView(generics.ListAPIView):
             queryset = queryset.filter(testimony_type=testimony_type)
         if search_text:
             queryset = queryset.filter(title__icontains=search_text)
+        if date_from:
+            queryset = queryset.filter(created_at__date__gte=date_from)
+        if date_to:
+            queryset = queryset.filter(created_at__date__lte=date_to)
+        if source_text:
+            queryset = queryset.filter(body__icontains=f"Source: {source_text}")
         if status_value == TestimonyStatus.PENDING_REVIEW:
             return queryset.order_by("created_at", "id")
         return queryset.order_by("-created_at", "-id")
