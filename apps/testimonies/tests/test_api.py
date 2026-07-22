@@ -505,6 +505,9 @@ class TestimonyApiTests(TestCase):
         self.assertIn(top.id, ids)
         top_row = next(item for item in payload["results"] if item["id"] == top.id)
         self.assertEqual(top_row["replies_count"], 1)
+        self.assertEqual(len(top_row["replies"]), 1)
+        self.assertEqual(top_row["replies"][0]["body"], "Child reply.")
+        self.assertEqual(top_row["replies"][0]["parent_comment_id"], top.id)
 
     def test_comment_list_is_public_for_approved_testimony(self) -> None:
         testimony = Testimony.objects.get(title="God healed me")
@@ -542,6 +545,28 @@ class TestimonyApiTests(TestCase):
         rows = response.json()["results"]
         row = next(item for item in rows if item["id"] == comment.id)
         self.assertEqual(row["is_owner"], True)
+
+    def test_comment_list_sets_is_owner_false_for_other_users_comment(self) -> None:
+        testimony = Testimony.objects.get(title="God healed me")
+        owner = UserFactory(email="comment-owner-visible@example.com")
+        ProfileFactory(user=owner, full_name="Comment Owner")
+        reader = UserFactory(email="comment-reader-visible@example.com")
+        ProfileFactory(user=reader, full_name="Comment Reader")
+        token = Token.objects.create(user=reader)
+        comment = TestimonyComment.objects.create(
+            testimony=testimony,
+            author=owner,
+            body="Someone else's comment.",
+        )
+
+        response = self.client.get(
+            reverse("testimony-comment-list-create", kwargs={"testimony_id": testimony.id}),
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+        self.assertEqual(response.status_code, 200)
+        rows = response.json()["results"]
+        row = next(item for item in rows if item["id"] == comment.id)
+        self.assertEqual(row["is_owner"], False)
 
     def test_slice10_delete_only_own_comment(self) -> None:
         owner = UserFactory(email="owner@example.com")

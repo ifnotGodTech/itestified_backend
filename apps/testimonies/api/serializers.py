@@ -537,6 +537,7 @@ class TestimonyCommentSerializer(serializers.ModelSerializer):
     author_name = serializers.SerializerMethodField()
     is_owner = serializers.SerializerMethodField()
     replies_count = serializers.SerializerMethodField()
+    replies = serializers.SerializerMethodField()
 
     class Meta:
         model = TestimonyComment
@@ -548,6 +549,7 @@ class TestimonyCommentSerializer(serializers.ModelSerializer):
             "is_owner",
             "parent_comment_id",
             "replies_count",
+            "replies",
         )
 
     def get_author_name(self, obj: TestimonyComment) -> str:
@@ -564,6 +566,12 @@ class TestimonyCommentSerializer(serializers.ModelSerializer):
 
     def get_replies_count(self, obj: TestimonyComment) -> int:
         return obj.replies.count()
+
+    def get_replies(self, obj: TestimonyComment) -> list[dict]:
+        if obj.parent_comment_id is not None:
+            return []
+        replies = obj.replies.select_related("author", "author__profile").order_by("created_at")
+        return TestimonyCommentSerializer(replies, many=True, context=self.context).data
 
 
 class TestimonyCommentCreateSerializer(serializers.ModelSerializer):
