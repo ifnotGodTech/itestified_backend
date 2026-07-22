@@ -18,6 +18,7 @@ from apps.content.models import (
     ScriptureOfTheDay,
 )
 from apps.testimonies.models import Testimony, TestimonyStatus
+from apps.testimonies.services.media_uploads import build_cloudinary_video_thumbnail_url
 
 from .serializers import (
     FeaturedHomeTestimonySerializer,
@@ -143,7 +144,7 @@ class AdminHomeCurationView(APIView):
                 "testimony_type": row.testimony_type,
                 "body": row.body,
                 "video_url": row.video_url,
-                "thumbnail_url": row.thumbnail_url,
+                "thumbnail_url": row.thumbnail_url or build_cloudinary_video_thumbnail_url(row.video_url),
                 "created_at": row.created_at,
                 "author_name": row.author.get_full_name() or row.author.email,
             }
@@ -210,7 +211,7 @@ def mobile_home_feed_view(request):
             "body": row.testimony.body,
             "testimony_type": row.testimony.testimony_type,
             "video_url": row.testimony.video_url,
-            "thumbnail_url": row.testimony.thumbnail_url,
+            "thumbnail_url": row.testimony.thumbnail_url or build_cloudinary_video_thumbnail_url(row.testimony.video_url),
             "publish_at": row.testimony.publish_at,
             "created_at": row.testimony.created_at,
             "view_count": row.testimony.view_count,

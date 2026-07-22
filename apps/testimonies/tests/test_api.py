@@ -96,6 +96,28 @@ class TestimonyApiTests(TestCase):
         self.assertEqual(searched.json()["count"], 1)
         self.assertIn("Breakthrough", searched.json()["results"][0]["title"])
 
+    def test_public_video_list_returns_generated_cloudinary_thumbnail_when_missing(self) -> None:
+        author = UserFactory(email="video@author.com")
+        video = Testimony.objects.create(
+            author=author,
+            category=self.category_healing,
+            title="Cloudinary video",
+            body="A video testimony.",
+            testimony_type=TestimonyType.VIDEO,
+            status=TestimonyStatus.APPROVED,
+            video_url="https://res.cloudinary.com/itestified/video/upload/v1784671784/amtlhus0uyr7wovwvb6v.mp4",
+            thumbnail_url="",
+        )
+
+        response = self.client.get(reverse("testimony-list"))
+
+        self.assertEqual(response.status_code, 200)
+        payload = next(item for item in response.json()["results"] if item["id"] == video.id)
+        self.assertEqual(
+            payload["thumbnail_url"],
+            "https://res.cloudinary.com/itestified/video/upload/so_2,w_1280,h_720,c_fill,g_auto/v1784671784/amtlhus0uyr7wovwvb6v.jpg",
+        )
+
     def test_category_slug_auto_generates_when_missing(self) -> None:
         category = TestimonyCategory.objects.create(name="My New Category")
         self.assertEqual(category.slug, "my-new-category")

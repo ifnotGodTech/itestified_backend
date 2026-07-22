@@ -11,6 +11,7 @@ from apps.content.models import (
     ScriptureStatus,
 )
 from apps.testimonies.models import Testimony, TestimonyStatus
+from apps.testimonies.services.media_uploads import build_cloudinary_video_thumbnail_url
 
 
 class InspirationalPictureSerializer(serializers.ModelSerializer):
@@ -85,7 +86,7 @@ class FeaturedHomeTestimonySerializer(serializers.ModelSerializer):
     category = serializers.CharField(source="testimony.category.name", read_only=True)
     testimony_type = serializers.CharField(source="testimony.testimony_type", read_only=True)
     body = serializers.CharField(source="testimony.body", read_only=True)
-    thumbnail_url = serializers.CharField(source="testimony.thumbnail_url", read_only=True)
+    thumbnail_url = serializers.SerializerMethodField()
     video_url = serializers.CharField(source="testimony.video_url", read_only=True)
     created_at = serializers.DateTimeField(source="testimony.created_at", read_only=True)
 
@@ -103,6 +104,11 @@ class FeaturedHomeTestimonySerializer(serializers.ModelSerializer):
             "video_url",
             "created_at",
         )
+
+    def get_thumbnail_url(self, obj: FeaturedHomeTestimony) -> str:
+        if obj.testimony.thumbnail_url.strip():
+            return obj.testimony.thumbnail_url
+        return build_cloudinary_video_thumbnail_url(obj.testimony.video_url)
 
 
 class HomeCurationUpdateSerializer(serializers.Serializer):

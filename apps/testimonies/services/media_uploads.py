@@ -1,6 +1,7 @@
 import os
 import time
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 
 class CloudinaryUploadError(Exception):
@@ -20,6 +21,21 @@ class CloudinaryUploadSignature:
     timestamp: int
     folder: str
     signature: str
+
+
+def build_cloudinary_video_thumbnail_url(video_url: str) -> str:
+    parsed = urlparse((video_url or "").strip())
+    if parsed.scheme not in {"http", "https"} or parsed.netloc != "res.cloudinary.com":
+        return ""
+    marker = "/video/upload/"
+    if marker not in parsed.path:
+        return ""
+
+    prefix, delivery_path = parsed.path.split(marker, 1)
+    if "." not in delivery_path.rsplit("/", 1)[-1]:
+        return ""
+    public_path = delivery_path.rsplit(".", 1)[0]
+    return f"{parsed.scheme}://{parsed.netloc}{prefix}{marker}so_2,w_1280,h_720,c_fill,g_auto/{public_path}.jpg"
 
 
 def _require_env(name: str) -> str:

@@ -14,7 +14,11 @@ from apps.testimonies.models import (
     TestimonyType,
     normalize_testimony_category_name,
 )
-from apps.testimonies.services.media_uploads import CloudinaryUploadError, upload_testimony_media
+from apps.testimonies.services.media_uploads import (
+    CloudinaryUploadError,
+    build_cloudinary_video_thumbnail_url,
+    upload_testimony_media,
+)
 
 
 class TestimonyCategorySerializer(serializers.ModelSerializer):
@@ -49,6 +53,7 @@ class TestimonyListSerializer(serializers.ModelSerializer):
     author_name = serializers.SerializerMethodField()
     category = serializers.CharField(source="category.name", read_only=True)
     category_slug = serializers.CharField(source="category.slug", read_only=True)
+    thumbnail_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Testimony
@@ -74,6 +79,11 @@ class TestimonyListSerializer(serializers.ModelSerializer):
             return profile.full_name
         return obj.author.email
 
+    def get_thumbnail_url(self, obj: Testimony) -> str:
+        if obj.thumbnail_url.strip():
+            return obj.thumbnail_url
+        return build_cloudinary_video_thumbnail_url(obj.video_url)
+
 
 class TestimonyDetailSerializer(TestimonyListSerializer):
     class Meta(TestimonyListSerializer.Meta):
@@ -92,6 +102,7 @@ class AdminTestimonyListSerializer(serializers.ModelSerializer):
     category = serializers.CharField(source="category.name", read_only=True)
     category_slug = serializers.CharField(source="category.slug", read_only=True)
     comment_count = serializers.SerializerMethodField()
+    thumbnail_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Testimony
@@ -104,6 +115,7 @@ class AdminTestimonyListSerializer(serializers.ModelSerializer):
             "author_email",
             "category",
             "category_slug",
+            "thumbnail_url",
             "view_count",
             "comment_count",
             "created_at",
@@ -118,6 +130,11 @@ class AdminTestimonyListSerializer(serializers.ModelSerializer):
 
     def get_comment_count(self, obj: Testimony) -> int:
         return int(getattr(obj, "comment_count_total", obj.comment_count))
+
+    def get_thumbnail_url(self, obj: Testimony) -> str:
+        if obj.thumbnail_url.strip():
+            return obj.thumbnail_url
+        return build_cloudinary_video_thumbnail_url(obj.video_url)
 
 
 class AdminTestimonyDetailSerializer(AdminTestimonyListSerializer):
@@ -513,7 +530,8 @@ class AdminVideoTestimonyCreateFromUrlSerializer(serializers.Serializer):
             title=validated_data["title"],
             body=validated_data.get("body", ""),
             video_url=validated_data["video_url"],
-            thumbnail_url=validated_data.get("thumbnail_url", ""),
+            thumbnail_url=validated_data.get("thumbnail_url", "")
+            or build_cloudinary_video_thumbnail_url(validated_data["video_url"]),
             testimony_type=TestimonyType.VIDEO,
             status=status_value,
             publish_at=publish_at,

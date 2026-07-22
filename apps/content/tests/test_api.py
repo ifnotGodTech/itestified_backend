@@ -157,8 +157,10 @@ class ContentAdminApiTests(TestCase):
             category=category,
             title="Approved Home Testimony",
             body="A living testimony.",
-            testimony_type=TestimonyType.WRITTEN,
+            testimony_type=TestimonyType.VIDEO,
             status=TestimonyStatus.APPROVED,
+            video_url="https://res.cloudinary.com/itestified/video/upload/v1784672029/exmoriihzrotlki5en5k.mp4",
+            thumbnail_url="",
         )
         FeaturedHomeTestimony.objects.create(testimony=approved, position=0, created_by=self.admin, updated_by=self.admin)
         HomeSectionOrder.objects.create(section=HomeSectionKey.FEATURED_TESTIMONIES, position=0)
@@ -189,6 +191,10 @@ class ContentAdminApiTests(TestCase):
         self.assertEqual(home_feed.status_code, 200)
         self.assertEqual(home_feed.json()["section_order"][0], HomeSectionKey.FEATURED_TESTIMONIES)
         self.assertEqual(len(home_feed.json()["featured_testimonies"]), 1)
+        self.assertEqual(
+            home_feed.json()["featured_testimonies"][0]["thumbnail_url"],
+            "https://res.cloudinary.com/itestified/video/upload/so_2,w_1280,h_720,c_fill,g_auto/v1784672029/exmoriihzrotlki5en5k.jpg",
+        )
 
         pictures = self.client.get(reverse("mobile-inspirational-pictures"))
         self.assertEqual(pictures.status_code, 200)
