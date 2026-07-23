@@ -694,7 +694,7 @@ class AdminTestimonyApiTests(TestCase):
             author=self.author,
             category=self.category,
             title="Approved testimony",
-            body="Approved body\nSource: YouTube",
+            body="Approved body\nSource: Youtube",
             testimony_type=TestimonyType.VIDEO,
             status=TestimonyStatus.APPROVED,
             video_url="https://example.com/video.mp4",
@@ -779,6 +779,11 @@ class AdminTestimonyApiTests(TestCase):
         self.assertEqual(source_only.json()["results"][0]["title"], self.approved.title)
         self.assertEqual(source_only.json()["results"][0]["source"], "YouTube")
 
+        lower_source = self.client.get(f'{reverse("admin-testimony-list")}?testimony_type=video&source=youtube')
+        self.assertEqual(lower_source.status_code, 200)
+        self.assertEqual(lower_source.json()["count"], 1)
+        self.assertEqual(lower_source.json()["results"][0]["source"], "YouTube")
+
         missing_source = self.client.get(f'{reverse("admin-testimony-list")}?testimony_type=video&source=TikTok')
         self.assertEqual(missing_source.status_code, 200)
         self.assertEqual(missing_source.json()["count"], 0)
@@ -862,6 +867,25 @@ class AdminTestimonyApiTests(TestCase):
             },
         )
         signature_mock.assert_called_once_with(resource_type="video")
+
+    def test_admin_create_video_from_url_normalizes_source_in_body(self) -> None:
+        response = self.client.post(
+            reverse("admin-testimony-create-video-from-url"),
+            {
+                "title": "Video from URL",
+                "category_id": self.category.id,
+                "body": "Uploaded by admin.\nSource: youtube\nSource: YouTube",
+                "video_url": "https://res.cloudinary.com/demo/video/upload/v1/testimony-url.mp4",
+                "thumbnail_url": "",
+                "upload_status": "draft",
+            },
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        created = Testimony.objects.get(title="Video from URL")
+        self.assertEqual(created.body, "Uploaded by admin.\nSource: YouTube")
+        self.assertEqual(response.json()["source"], "YouTube")
 
     @patch("apps.testimonies.api.serializers.upload_testimony_media")
     def test_admin_upload_video_with_draft_status_persists_draft(self, upload_mock) -> None:

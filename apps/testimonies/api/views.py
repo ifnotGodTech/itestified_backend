@@ -54,6 +54,7 @@ from .serializers import (
     AdminVideoTestimonyUploadSerializer,
     AdminVideoTestimonyEditSerializer,
     AdminVideoTestimonyCreateFromUrlSerializer,
+    normalize_video_source,
 )
 from apps.testimonies.services.media_uploads import CloudinaryUploadError, create_direct_upload_signature
 
@@ -386,7 +387,7 @@ class AdminTestimonyListView(generics.ListAPIView):
         testimony_type = (self.request.query_params.get("testimony_type") or "").strip()
         date_from = _parse_admin_filter_date((self.request.query_params.get("date_from") or "").strip())
         date_to = _parse_admin_filter_date((self.request.query_params.get("date_to") or "").strip())
-        source_text = (self.request.query_params.get("source") or "").strip()
+        source_text = normalize_video_source(self.request.query_params.get("source") or "")
         if status_value:
             queryset = queryset.filter(status=status_value)
         if category_slug:

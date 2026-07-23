@@ -20,6 +20,48 @@ from apps.testimonies.services.media_uploads import (
     upload_testimony_media,
 )
 
+SOURCE_PREFIX = "source:"
+SOURCE_CANONICAL_NAMES = {
+    "youtube": "YouTube",
+    "you tube": "YouTube",
+    "you-tube": "YouTube",
+    "instagram": "Instagram",
+    "tiktok": "TikTok",
+    "tik tok": "TikTok",
+    "facebook": "Facebook",
+}
+
+
+def normalize_video_source(value: str) -> str:
+    trimmed = value.strip()
+    if not trimmed:
+        return ""
+    key = " ".join(trimmed.replace("_", " ").split()).lower()
+    return SOURCE_CANONICAL_NAMES.get(key, trimmed[:1].upper() + trimmed[1:])
+
+
+def extract_video_source(body: str) -> str:
+    for line in body.splitlines():
+        stripped = line.strip()
+        if stripped.lower().startswith(SOURCE_PREFIX):
+            return normalize_video_source(stripped[len(SOURCE_PREFIX) :])
+    return ""
+
+
+def normalize_video_source_lines(body: str) -> str:
+    lines = []
+    source_seen = False
+    for line in body.strip().splitlines():
+        stripped = line.strip()
+        if stripped.lower().startswith(SOURCE_PREFIX):
+            source = normalize_video_source(stripped[len(SOURCE_PREFIX) :])
+            if source and not source_seen:
+                lines.append(f"Source: {source}")
+                source_seen = True
+            continue
+        lines.append(line.rstrip())
+    return "\n".join(lines).strip()
+
 
 class TestimonyCategorySerializer(serializers.ModelSerializer):
     class Meta:
@@ -139,11 +181,7 @@ class AdminTestimonyListSerializer(serializers.ModelSerializer):
         return build_cloudinary_video_thumbnail_url(obj.video_url)
 
     def get_source(self, obj: Testimony) -> str:
-        for line in obj.body.splitlines():
-            stripped = line.strip()
-            if stripped.lower().startswith("source:"):
-                return stripped[len("source:") :].strip()
-        return ""
+        return extract_video_source(obj.body)
 
 
 class AdminTestimonyDetailSerializer(AdminTestimonyListSerializer):
@@ -318,7 +356,7 @@ class AdminVideoTestimonyUploadSerializer(serializers.Serializer):
         return trimmed
 
     def validate_body(self, value: str) -> str:
-        return value.strip()
+        return normalize_video_source_lines(value)
 
     def validate_video_file(self, value):
         content_type = (getattr(value, "content_type", "") or "").lower().strip()
@@ -497,7 +535,7 @@ class AdminVideoTestimonyCreateFromUrlSerializer(serializers.Serializer):
         return trimmed
 
     def validate_body(self, value: str) -> str:
-        return value.strip()
+        return normalize_video_source_lines(value)
 
     def validate(self, attrs):
         upload_status = attrs.get("upload_status", AdminVideoTestimonyUploadSerializer.UploadStatus.UPLOAD_NOW)
