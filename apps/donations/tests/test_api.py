@@ -329,9 +329,9 @@ class DonationApiTests(TestCase):
 
     def test_admin_can_view_all_donations_with_filters(self):
         admin_user = UserFactory(email="admin-donations@example.com")
-        admin_token = Token.objects.create(user=admin_user)
         AdminRoleFactory(code=AdminRoleCode.FINANCE_ADMIN)
         AdminAssignmentFactory(user=admin_user, role=AdminRoleFactory(code=AdminRoleCode.FINANCE_ADMIN))
+        self.client.force_login(admin_user)
         user = UserFactory(email="alpha@example.com")
         other = UserFactory(email="beta@example.com")
         Donation.objects.create(
@@ -352,7 +352,6 @@ class DonationApiTests(TestCase):
         response = self.client.get(
             reverse("admin-donation-list"),
             {"status": "successful", "q": "alpha"},
-            HTTP_AUTHORIZATION=f"Token {admin_token.key}",
         )
         self.assertEqual(response.status_code, 200)
         payload = response.json()
@@ -361,8 +360,8 @@ class DonationApiTests(TestCase):
 
     def test_admin_donation_list_totals_reflect_active_filters_across_currencies(self):
         admin_user = UserFactory(email="admin-donations-totals@example.com")
-        admin_token = Token.objects.create(user=admin_user)
         AdminAssignmentFactory(user=admin_user, role=AdminRoleFactory(code=AdminRoleCode.FINANCE_ADMIN))
+        self.client.force_login(admin_user)
         user = UserFactory(email="totals-user@example.com")
         Donation.objects.create(
             user=user,
@@ -389,7 +388,6 @@ class DonationApiTests(TestCase):
         response = self.client.get(
             reverse("admin-donation-list"),
             {"status": "successful"},
-            HTTP_AUTHORIZATION=f"Token {admin_token.key}",
         )
         self.assertEqual(response.status_code, 200)
         payload = response.json()
@@ -401,8 +399,8 @@ class DonationApiTests(TestCase):
 
     def test_admin_donation_list_search_by_donor_full_name_does_not_crash(self):
         admin_user = UserFactory(email="admin-search-name@example.com")
-        admin_token = Token.objects.create(user=admin_user)
         AdminAssignmentFactory(user=admin_user, role=AdminRoleFactory(code=AdminRoleCode.FINANCE_ADMIN))
+        self.client.force_login(admin_user)
         donor = UserFactory(email="findme@example.com")
         ProfileFactory(user=donor, full_name="Unique Searchable Name")
         Donation.objects.create(
@@ -416,7 +414,6 @@ class DonationApiTests(TestCase):
         response = self.client.get(
             reverse("admin-donation-list"),
             {"q": "Searchable"},
-            HTTP_AUTHORIZATION=f"Token {admin_token.key}",
         )
         self.assertEqual(response.status_code, 200)
         payload = response.json()
@@ -425,8 +422,8 @@ class DonationApiTests(TestCase):
 
     def test_admin_donation_list_shows_the_donor_profile_name_not_just_their_email(self):
         admin_user = UserFactory(email="admin-donor-name@example.com")
-        admin_token = Token.objects.create(user=admin_user)
         AdminAssignmentFactory(user=admin_user, role=AdminRoleFactory(code=AdminRoleCode.FINANCE_ADMIN))
+        self.client.force_login(admin_user)
         donor = UserFactory(email="donor-with-profile@example.com")
         ProfileFactory(user=donor, full_name="Grace Donor")
         donor_without_profile = UserFactory(email="donor-without-profile@example.com")
@@ -448,7 +445,6 @@ class DonationApiTests(TestCase):
         response = self.client.get(
             reverse("admin-donation-list"),
             {"status": "successful"},
-            HTTP_AUTHORIZATION=f"Token {admin_token.key}",
         )
         self.assertEqual(response.status_code, 200)
         results_by_reference = {row["payment_reference"]: row for row in response.json()["results"]}
@@ -458,17 +454,14 @@ class DonationApiTests(TestCase):
 
     def test_non_admin_cannot_access_admin_donation_list(self):
         user = UserFactory(email="plain@example.com")
-        token = Token.objects.create(user=user)
-        response = self.client.get(
-            reverse("admin-donation-list"),
-            HTTP_AUTHORIZATION=f"Token {token.key}",
-        )
+        self.client.force_login(user)
+        response = self.client.get(reverse("admin-donation-list"))
         self.assertEqual(response.status_code, 403)
 
     def test_admin_can_view_detail_and_reverse_successful_donation(self):
         admin_user = UserFactory(email="admin-reverse@example.com")
-        admin_token = Token.objects.create(user=admin_user)
         AdminAssignmentFactory(user=admin_user, role=AdminRoleFactory(code=AdminRoleCode.FINANCE_ADMIN))
+        self.client.force_login(admin_user)
 
         donor = UserFactory(email="donor@example.com")
         donation = Donation.objects.create(
@@ -483,7 +476,6 @@ class DonationApiTests(TestCase):
             reverse("admin-donation-reverse", kwargs={"donation_id": donation.id}),
             {"reason": "Duplicate charge reported by donor"},
             content_type="application/json",
-            HTTP_AUTHORIZATION=f"Token {admin_token.key}",
         )
         self.assertEqual(reverse_response.status_code, 200)
         donation.refresh_from_db()
@@ -491,7 +483,6 @@ class DonationApiTests(TestCase):
 
         detail_response = self.client.get(
             reverse("admin-donation-detail", kwargs={"pk": donation.id}),
-            HTTP_AUTHORIZATION=f"Token {admin_token.key}",
         )
         self.assertEqual(detail_response.status_code, 200)
         detail_payload = detail_response.json()
@@ -500,8 +491,8 @@ class DonationApiTests(TestCase):
 
     def test_admin_reverse_requires_successful_donation(self):
         admin_user = UserFactory(email="admin-reverse-pending@example.com")
-        admin_token = Token.objects.create(user=admin_user)
         AdminAssignmentFactory(user=admin_user, role=AdminRoleFactory(code=AdminRoleCode.FINANCE_ADMIN))
+        self.client.force_login(admin_user)
         donor = UserFactory(email="pending-donor@example.com")
         donation = Donation.objects.create(
             user=donor,
@@ -515,6 +506,48 @@ class DonationApiTests(TestCase):
             reverse("admin-donation-reverse", kwargs={"donation_id": donation.id}),
             {"reason": "Requested reversal"},
             content_type="application/json",
-            HTTP_AUTHORIZATION=f"Token {admin_token.key}",
         )
         self.assertEqual(response.status_code, 400)
+
+    def test_admin_donation_endpoints_reject_token_authentication(self):
+        # Regression coverage: these views previously fell through to the
+        # project-default authentication (Session + Token), so a user
+        # holding both a mobile API token and an admin role could call
+        # admin donation endpoints via Token auth, bypassing the CSRF
+        # protection Session auth enforces on state-changing requests.
+        # Now pinned to SessionAuthentication only, matching testimonies/authn.
+        # DRF returns 403 (not 401) here because SessionAuthentication has no
+        # WWW-Authenticate challenge to offer, so it can't be the DRF-standard
+        # 401 -- this matches the existing behavior of every other
+        # SessionAuthentication-only admin view in the codebase.
+        admin_user = UserFactory(email="admin-token-only@example.com")
+        admin_token = Token.objects.create(user=admin_user)
+        AdminAssignmentFactory(user=admin_user, role=AdminRoleFactory(code=AdminRoleCode.FINANCE_ADMIN))
+        donor = UserFactory(email="token-guard-donor@example.com")
+        donation = Donation.objects.create(
+            user=donor,
+            amount=1000,
+            currency="NGN",
+            payment_reference="DON-TOKEN-GUARD",
+            status=DonationStatus.SUCCESSFUL,
+        )
+
+        list_response = self.client.get(
+            reverse("admin-donation-list"),
+            HTTP_AUTHORIZATION=f"Token {admin_token.key}",
+        )
+        self.assertEqual(list_response.status_code, 403)
+
+        detail_response = self.client.get(
+            reverse("admin-donation-detail", kwargs={"pk": donation.id}),
+            HTTP_AUTHORIZATION=f"Token {admin_token.key}",
+        )
+        self.assertEqual(detail_response.status_code, 403)
+
+        reverse_response = self.client.post(
+            reverse("admin-donation-reverse", kwargs={"donation_id": donation.id}),
+            {"reason": "Should be rejected"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {admin_token.key}",
+        )
+        self.assertEqual(reverse_response.status_code, 403)

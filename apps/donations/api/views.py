@@ -1,7 +1,7 @@
 from rest_framework import generics, status
 from django.conf import settings
 from django.db.models import Q
-from rest_framework.authentication import TokenAuthentication
+from rest_framework.authentication import SessionAuthentication, TokenAuthentication
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -148,6 +148,7 @@ class DonationProviderCallbackView(APIView):
 
 
 class AdminDonationListView(generics.ListAPIView):
+    authentication_classes = [SessionAuthentication]
     permission_classes = [IsAuthenticated, IsActiveAdmin]
     serializer_class = AdminDonationListSerializer
     pagination_class = DonationPagination
@@ -192,12 +193,14 @@ class AdminDonationListView(generics.ListAPIView):
 
 
 class AdminDonationDetailView(generics.RetrieveAPIView):
+    authentication_classes = [SessionAuthentication]
     permission_classes = [IsAuthenticated, IsActiveAdmin]
     serializer_class = AdminDonationDetailSerializer
     queryset = Donation.objects.select_related("user", "user__profile").prefetch_related("status_history", "status_history__actor")
 
 
 class AdminDonationReverseView(APIView):
+    authentication_classes = [SessionAuthentication]
     permission_classes = [IsAuthenticated, IsActiveAdmin]
 
     def post(self, request, donation_id: int):
