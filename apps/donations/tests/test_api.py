@@ -158,6 +158,39 @@ class DonationApiTests(TestCase):
         self.assertEqual(donation.status, DonationStatus.SUCCESSFUL)
         self.assertEqual(donation.provider_transaction_id, "556677")
 
+    def test_provider_callback_maps_flutterwave_failed_status_to_declined(self):
+        # Regression coverage: Flutterwave's real webhook payload uses its own
+        # vocabulary ("successful"/"failed"), not our internal DonationStatus
+        # values ("successful"/"declined"). The callback serializer's status
+        # field previously only accepted our own two values, so a real
+        # failed-payment webhook (status="failed") would be rejected with a
+        # 400 instead of ever reaching the donation record.
+        user = UserFactory(email="provider5@example.com")
+        donation = Donation.objects.create(
+            user=user,
+            amount=1000,
+            currency="NGN",
+            payment_reference="DON-TESTREF-5",
+        )
+
+        with patch("apps.donations.api.views.settings.FLUTTERWAVE_SECRET_HASH", "secret-hash"):
+            callback = self.client.post(
+                reverse("donation-provider-callback"),
+                {
+                    "data": {
+                        "tx_ref": donation.payment_reference,
+                        "status": "failed",
+                        "id": "998877",
+                    },
+                },
+                content_type="application/json",
+                HTTP_VERIF_HASH="secret-hash",
+            )
+        self.assertEqual(callback.status_code, 200)
+        donation.refresh_from_db()
+        self.assertEqual(donation.status, DonationStatus.DECLINED)
+        self.assertEqual(donation.provider_transaction_id, "998877")
+
     def test_provider_callback_returns_503_when_secret_hash_not_configured(self):
         user = UserFactory(email="provider3@example.com")
         donation = Donation.objects.create(

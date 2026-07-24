@@ -89,7 +89,10 @@ class AdminDonationDetailSerializer(AdminDonationListSerializer):
 class DonationProviderCallbackSerializer(serializers.Serializer):
     payment_reference = serializers.CharField(max_length=80, required=False)
     tx_ref = serializers.CharField(max_length=80, required=False)
-    status = serializers.ChoiceField(choices=(DonationStatus.SUCCESSFUL, DonationStatus.DECLINED), required=False)
+    # Not a ChoiceField: Flutterwave's real webhook payload uses its own
+    # vocabulary (e.g. "successful"/"failed"), not our internal
+    # DonationStatus values. The view normalizes whatever arrives here.
+    status = serializers.CharField(required=False, allow_blank=True)
     transaction_id = serializers.CharField(max_length=80, required=False, allow_blank=True)
     provider_transaction_id = serializers.CharField(max_length=80, required=False, allow_blank=True)
     status_reason = serializers.CharField(required=False, allow_blank=True)

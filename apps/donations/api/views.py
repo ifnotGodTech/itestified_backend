@@ -126,12 +126,8 @@ class DonationProviderCallbackView(APIView):
         serializer = DonationProviderCallbackSerializer(data=payload)
         serializer.is_valid(raise_exception=True)
 
-        inbound_status = serializer.validated_data.get("status", "")
-        if inbound_status:
-            status_value = inbound_status
-        else:
-            status_value = str(payload.get("status", "")).lower()
-            status_value = "successful" if status_value == "successful" else "declined"
+        raw_status = serializer.validated_data.get("status") or str(payload.get("status", ""))
+        status_value = "successful" if raw_status.strip().lower() == "successful" else "declined"
         provider_txn_id = (
             serializer.validated_data.get("provider_transaction_id")
             or serializer.validated_data.get("transaction_id")
