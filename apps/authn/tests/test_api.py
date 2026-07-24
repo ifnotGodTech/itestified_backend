@@ -62,6 +62,7 @@ class AuthnApiTests(TestCase):
         self.assertEqual(session_response.status_code, 200)
         self.assertEqual(session_response.json()["email"], "admin@example.com")
         self.assertEqual(session_response.json()["role_code"], AdminRoleCode.SUPER_ADMIN)
+        self.assertEqual(session_response.json()["role_label"], "Super Admin")
         self.assertTrue(session_response.json()["must_change_password"])
         self.assertTrue(UserSession.objects.filter(user__email="admin@example.com").exists())
 

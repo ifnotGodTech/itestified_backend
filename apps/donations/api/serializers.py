@@ -74,7 +74,8 @@ class AdminDonationListSerializer(serializers.ModelSerializer):
         )
 
     def get_donor_name(self, obj: Donation) -> str:
-        full_name = getattr(obj.user, "full_name", "")
+        profile = getattr(obj.user, "profile", None)
+        full_name = profile.full_name if profile else ""
         return full_name or obj.user.email
 
 

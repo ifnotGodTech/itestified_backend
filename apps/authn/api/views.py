@@ -509,6 +509,7 @@ class AdminSessionView(APIView):
                 "full_name": profile.full_name if profile else "",
                 "role": "admin",
                 "role_code": assignment.role.code if assignment else None,
+                "role_label": assignment.role.name if assignment else None,
                 "must_change_password": bool(request.user.must_change_password),
             }
         )

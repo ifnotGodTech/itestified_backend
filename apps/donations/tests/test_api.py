@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from apps.donations.models import Donation, DonationStatus
 from apps.users.choices import AdminRoleCode
-from apps.users.tests.factories import AdminAssignmentFactory, AdminRoleFactory, UserFactory
+from apps.users.tests.factories import AdminAssignmentFactory, AdminRoleFactory, ProfileFactory, UserFactory
 
 
 class DonationApiTests(TestCase):
@@ -270,6 +270,103 @@ class DonationApiTests(TestCase):
         payload = response.json()
         self.assertEqual(payload["count"], 1)
         self.assertEqual(payload["results"][0]["payment_reference"], "DON-ADMIN-1")
+
+    def test_admin_donation_list_totals_reflect_active_filters_across_currencies(self):
+        admin_user = UserFactory(email="admin-donations-totals@example.com")
+        admin_token = Token.objects.create(user=admin_user)
+        AdminAssignmentFactory(user=admin_user, role=AdminRoleFactory(code=AdminRoleCode.FINANCE_ADMIN))
+        user = UserFactory(email="totals-user@example.com")
+        Donation.objects.create(
+            user=user,
+            amount=1000,
+            currency="NGN",
+            payment_reference="DON-TOTALS-NGN",
+            status=DonationStatus.SUCCESSFUL,
+        )
+        Donation.objects.create(
+            user=user,
+            amount=2500,
+            currency="USD",
+            payment_reference="DON-TOTALS-USD",
+            status=DonationStatus.SUCCESSFUL,
+        )
+        Donation.objects.create(
+            user=user,
+            amount=9999,
+            currency="NGN",
+            payment_reference="DON-TOTALS-PENDING",
+            status=DonationStatus.PENDING,
+        )
+
+        response = self.client.get(
+            reverse("admin-donation-list"),
+            {"status": "successful"},
+            HTTP_AUTHORIZATION=f"Token {admin_token.key}",
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["count"], 2)
+        self.assertEqual(
+            payload["totals"],
+            [{"currency": "NGN", "amount": 1000}, {"currency": "USD", "amount": 2500}],
+        )
+
+    def test_admin_donation_list_search_by_donor_full_name_does_not_crash(self):
+        admin_user = UserFactory(email="admin-search-name@example.com")
+        admin_token = Token.objects.create(user=admin_user)
+        AdminAssignmentFactory(user=admin_user, role=AdminRoleFactory(code=AdminRoleCode.FINANCE_ADMIN))
+        donor = UserFactory(email="findme@example.com")
+        ProfileFactory(user=donor, full_name="Unique Searchable Name")
+        Donation.objects.create(
+            user=donor,
+            amount=1000,
+            currency="NGN",
+            payment_reference="DON-SEARCH-NAME",
+            status=DonationStatus.SUCCESSFUL,
+        )
+
+        response = self.client.get(
+            reverse("admin-donation-list"),
+            {"q": "Searchable"},
+            HTTP_AUTHORIZATION=f"Token {admin_token.key}",
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["count"], 1)
+        self.assertEqual(payload["results"][0]["payment_reference"], "DON-SEARCH-NAME")
+
+    def test_admin_donation_list_shows_the_donor_profile_name_not_just_their_email(self):
+        admin_user = UserFactory(email="admin-donor-name@example.com")
+        admin_token = Token.objects.create(user=admin_user)
+        AdminAssignmentFactory(user=admin_user, role=AdminRoleFactory(code=AdminRoleCode.FINANCE_ADMIN))
+        donor = UserFactory(email="donor-with-profile@example.com")
+        ProfileFactory(user=donor, full_name="Grace Donor")
+        donor_without_profile = UserFactory(email="donor-without-profile@example.com")
+        Donation.objects.create(
+            user=donor,
+            amount=1000,
+            currency="NGN",
+            payment_reference="DON-NAME-1",
+            status=DonationStatus.SUCCESSFUL,
+        )
+        Donation.objects.create(
+            user=donor_without_profile,
+            amount=2000,
+            currency="NGN",
+            payment_reference="DON-NAME-2",
+            status=DonationStatus.SUCCESSFUL,
+        )
+
+        response = self.client.get(
+            reverse("admin-donation-list"),
+            {"status": "successful"},
+            HTTP_AUTHORIZATION=f"Token {admin_token.key}",
+        )
+        self.assertEqual(response.status_code, 200)
+        results_by_reference = {row["payment_reference"]: row for row in response.json()["results"]}
+        self.assertEqual(results_by_reference["DON-NAME-1"]["donor_name"], "Grace Donor")
+        # A donor with no Profile row yet should fall back to their email, not crash.
+        self.assertEqual(results_by_reference["DON-NAME-2"]["donor_name"], "donor-without-profile@example.com")
 
     def test_non_admin_cannot_access_admin_donation_list(self):
         user = UserFactory(email="plain@example.com")

@@ -14,6 +14,7 @@ from apps.donations.exceptions import (
     DonationNotReversibleError,
 )
 from apps.donations.models import Donation, DonationStatus
+from apps.donations.selectors import get_donation_totals_by_currency
 from apps.donations.services.commands import (
     apply_provider_callback,
     create_donation,
@@ -152,7 +153,7 @@ class AdminDonationListView(generics.ListAPIView):
     pagination_class = DonationPagination
 
     def get_queryset(self):
-        queryset = Donation.objects.select_related("user")
+        queryset = Donation.objects.select_related("user", "user__profile")
         status_filter = (self.request.query_params.get("status") or "").strip().lower()
         q = (self.request.query_params.get("q") or "").strip()
         date_from = (self.request.query_params.get("from") or "").strip()
@@ -169,7 +170,7 @@ class AdminDonationListView(generics.ListAPIView):
         if q:
             queryset = queryset.filter(
                 Q(user__email__icontains=q)
-                | Q(user__full_name__icontains=q)
+                | Q(user__profile__full_name__icontains=q)
                 | Q(payment_reference__icontains=q)
             )
         if date_from:
@@ -178,11 +179,22 @@ class AdminDonationListView(generics.ListAPIView):
             queryset = queryset.filter(created_at__date__lte=date_to)
         return queryset.order_by("-created_at")
 
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        totals = get_donation_totals_by_currency(queryset)
+        page = self.paginate_queryset(queryset)
+        serializer = self.get_serializer(page, many=True)
+        response = self.get_paginated_response(serializer.data)
+        response.data["totals"] = [
+            {"currency": row["currency"], "amount": row["total_amount"]} for row in totals
+        ]
+        return response
+
 
 class AdminDonationDetailView(generics.RetrieveAPIView):
     permission_classes = [IsAuthenticated, IsActiveAdmin]
     serializer_class = AdminDonationDetailSerializer
-    queryset = Donation.objects.select_related("user").prefetch_related("status_history", "status_history__actor")
+    queryset = Donation.objects.select_related("user", "user__profile").prefetch_related("status_history", "status_history__actor")
 
 
 class AdminDonationReverseView(APIView):

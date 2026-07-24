@@ -577,16 +577,30 @@ Build:
 
 Sub-slices:
 
+Naming note: this phase has two distinct entities both called "review" —
+keep them separate, do not merge:
+- the **testimony peer review** (Slices 1-2 below): an admin-authored
+  quality note (rating + text) attached to one specific testimony, visible
+  to other admins on that testimony's detail view.
+- the **submitted review** (Slices 2a-2b below): the standalone `Review`
+  entity from `PHASE0_DOMAIN_DISCOVERY.md` (`name`, `email`, `rating`,
+  `review text`, `created_at` — no testimony reference at all). This is
+  what `dashboard/frontend/src/features/admin/domain/entities/reviews.ts`
+  and the `/reviews` admin page are already built against (see
+  `dashboard/frontend/UI_UX_REVIEW_TODO.md` B6, now folded into this plan).
+
 #### Admin Flows
 
 - **Slice 1 — Review a testimony** — admin reads a testimony and leaves a rating (1–5) and written notes as an internal review record; each admin can review a given testimony only once but can update their own review
 - **Slice 2 — View all reviews for a testimony** — admin opens a testimony detail and sees the list of all internal reviews left by other admins with ratings and notes
+- **Slice 2a — View submitted reviews** — admin opens the reviews screen and sees a paginated list of submitted reviews (name, email, rating 1–5, review text, submission date); can search by name/email and filter by rating and date range
+- **Slice 2b — Delete a submitted review** — admin removes a single submitted review, or bulk-deletes multiple selected reviews
 - **Slice 3 — Deactivate an admin** — super admin deactivates an existing admin account; the deactivated user is immediately blocked from logging in and their session is revoked
 - **Slice 4 — Reactivate an admin** — super admin reactivates a previously deactivated admin account so they can log in again
 - **Slice 5 — View the admin list** — super admin views all admin accounts with their roles and current status (invited, active, deactivated), filterable by role
 - **Slice 6 — View analytics overview** — admin opens the dashboard home and sees key metrics: total registered users, total testimonies, count pending moderation, and total donation amounts by currency
 - **Slice 7 — View testimony analytics** — admin opens the testimony analytics screen, selects a time period (7, 30, or 90 days), and sees a breakdown of testimonies by status and by category for that period
-- **Slice 8 — View donation analytics** — admin opens the donations analytics screen, selects a time period, and sees total donation amounts grouped by status and currency
+- **Slice 8 — View donation analytics** — admin opens the donations analytics screen, selects a time period, and sees total donation amounts grouped by status and currency, including the period-over-period percentage change (trend) needed by the dashboard's donations hero card
 - **Slice 9 — View user registration trend** — admin sees a chart of new user registrations over time with a period filter
 
 Test:
