@@ -33,6 +33,9 @@ def _gateway() -> FlutterwaveGateway:
 
 @transaction.atomic
 def create_donation(*, user, amount: int, currency: str) -> Donation:
+    if not settings.FLUTTERWAVE_SECRET_KEY:
+        raise DonationGatewayNotConfiguredError()
+
     reference = Donation.generate_reference()
     donation = Donation.objects.create(
         user=user,
@@ -40,11 +43,6 @@ def create_donation(*, user, amount: int, currency: str) -> Donation:
         currency=currency,
         payment_reference=reference,
     )
-    if not settings.FLUTTERWAVE_SECRET_KEY:
-        donation.checkout_url = f"https://checkout.flutterwave.com/pay/{reference.lower()}"
-        donation.status_reason = "Flutterwave secret key not configured."
-        donation.save(update_fields=["checkout_url", "status_reason", "updated_at"])
-        return donation
 
     redirect_url = settings.FLUTTERWAVE_REDIRECT_URL or "https://www.itestified.app/giving/return"
     try:

@@ -65,9 +65,12 @@ class FlutterwaveGateway:
         customer_name: str,
         redirect_url: str,
     ) -> FlutterwaveInitResult:
+        # `amount` is in minor currency units (kobo/cents) per our internal convention,
+        # but Flutterwave's payment-initialization API expects the major unit (naira/dollars).
+        major_unit_amount = amount / 100
         payload = {
             "tx_ref": tx_ref,
-            "amount": str(amount),
+            "amount": f"{major_unit_amount:.2f}",
             "currency": currency,
             "redirect_url": redirect_url,
             "customer": {

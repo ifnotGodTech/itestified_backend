@@ -24,7 +24,13 @@ class DonationApiTests(TestCase):
         user = UserFactory(email="giver@example.com")
         token = Token.objects.create(user=user)
 
-        with patch("apps.donations.api.views.settings.FLUTTERWAVE_SECRET_KEY", ""):
+        with (
+            patch("apps.donations.api.views.settings.FLUTTERWAVE_SECRET_KEY", "sk_test"),
+            patch("apps.donations.services.flutterwave.FlutterwaveGateway._post") as post_mock,
+        ):
+            post_mock.return_value = {
+                "data": {"link": "https://checkout.flutterwave.com/v3/hosted/pay/abc123", "id": "999"}
+            }
             response = self.client.post(
                 reverse("donation-create"),
                 {"amount": 5000, "currency": "NGN"},
@@ -35,7 +41,56 @@ class DonationApiTests(TestCase):
         payload = response.json()
         self.assertEqual(payload["status"], DonationStatus.PENDING)
         self.assertTrue(payload["payment_reference"].startswith("DON-"))
-        self.assertIn("checkout_url", payload)
+        self.assertEqual(payload["checkout_url"], "https://checkout.flutterwave.com/v3/hosted/pay/abc123")
+
+    def test_create_donation_returns_503_when_gateway_not_configured(self):
+        # Regression coverage: when FLUTTERWAVE_SECRET_KEY is missing, donation
+        # creation must fail explicitly rather than fabricating a checkout_url
+        # that looks plausible but points nowhere real (it previously built
+        # "https://checkout.flutterwave.com/pay/{reference}", which loads as a
+        # 404 on Flutterwave's own server since that path was never issued by
+        # their API).
+        user = UserFactory(email="giver-no-gateway@example.com")
+        token = Token.objects.create(user=user)
+
+        with patch("apps.donations.api.views.settings.FLUTTERWAVE_SECRET_KEY", ""):
+            response = self.client.post(
+                reverse("donation-create"),
+                {"amount": 5000, "currency": "NGN"},
+                content_type="application/json",
+                HTTP_AUTHORIZATION=f"Token {token.key}",
+            )
+        self.assertEqual(response.status_code, 503)
+        self.assertFalse(Donation.objects.filter(user=user).exists())
+
+    def test_phase5_slice1_create_donation_sends_major_unit_amount_to_flutterwave(self):
+        # Regression coverage: `amount` is stored internally in minor currency units
+        # (kobo/cents) per our own convention, but Flutterwave's payment-initialization
+        # API expects the major unit. A donation of 500000 (kobo) must reach Flutterwave
+        # as "5000.00" (naira), not "500000".
+        user = UserFactory(email="giver-major-unit@example.com")
+        token = Token.objects.create(user=user)
+
+        with (
+            patch("apps.donations.api.views.settings.FLUTTERWAVE_SECRET_KEY", "sk_test"),
+            patch("apps.donations.services.flutterwave.FlutterwaveGateway._post") as post_mock,
+        ):
+            post_mock.return_value = {"data": {"link": "https://checkout.flutterwave.com/pay/abc123", "id": "999"}}
+            response = self.client.post(
+                reverse("donation-create"),
+                {"amount": 500000, "currency": "NGN"},
+                content_type="application/json",
+                HTTP_AUTHORIZATION=f"Token {token.key}",
+            )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(post_mock.call_count, 1)
+        _path, sent_payload = post_mock.call_args[0]
+        self.assertEqual(sent_payload["amount"], "5000.00")
+        self.assertEqual(sent_payload["currency"], "NGN")
+
+        donation = Donation.objects.get(payment_reference=response.json()["payment_reference"])
+        self.assertEqual(donation.amount, 500000)
 
     def test_create_donation_rejects_non_integer_amount(self):
         user = UserFactory(email="giver-decimal@example.com")

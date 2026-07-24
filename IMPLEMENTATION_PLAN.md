@@ -500,19 +500,38 @@ Sub-slices:
 
 - **Slice 1 — Give a donation** — authenticated user enters an amount and currency and submits; the backend creates a donation record in `pending` status and returns a payment reference or redirect URL from the payment provider
   - Amount convention: `amount` is in minor currency units (`kobo` for NGN, `cents` for USD).
+  - Reviewed 2026-07-24 — Confirmed bug, not fixed. Backend (`apps/donations/services/commands.py::create_donation`) is correct: creates a `pending` `Donation`, returns reference/`checkout_url`. Mobile (`mobile/lib/features/giving/presentation/state/giving_controller.dart`) calls the right endpoint with the right fields, but sends the raw digits the user typed as `amount` with **no minor-unit conversion** (`int.tryParse(amountText...)`, no `× 100` anywhere in the feature). See Slice 2 for the matching backend-side half of this bug.
+  - Fixed 2026-07-24 — see post-implementation review note below.
+  - Found and fixed 2026-07-24 (post-deploy report): on the deployed backend, `FLUTTERWAVE_SECRET_KEY` was unset, so `create_donation()` took a silent fallback path that fabricated `checkout_url` as `https://checkout.flutterwave.com/pay/{reference}` and returned 201 as if the donation were ready to pay. That URL was never issued by Flutterwave's API, so the mobile checkout WebView loaded it and got "Cannot GET /pay/{reference}" from Flutterwave's own server — reproduced live on an emulator against the deployed backend. Fixed `create_donation` to raise `DonationGatewayNotConfiguredError` when the key is missing (matching `verify_donation`'s existing behavior) instead of fabricating a non-functional URL; `DonationCreateView` now returns 503 with a clear message in that case. This is a code-level fix only — the underlying cause is that the deployed backend's `FLUTTERWAVE_SECRET_KEY` env var is still not set, which is an operator/deployment task, not something fixable from the codebase.
 - **Slice 2 — Complete payment** — user is redirected to the payment provider and completes or cancels the transaction; the provider notifies the backend and the donation status updates to `successful` or `declined`
+  - Reviewed 2026-07-24 — Confirmed bug, not fixed. `services/flutterwave.py::initialize()` forwards `donation.amount` (minor units) to Flutterwave's `amount` field unconverted; Flutterwave's API expects the major unit. Combined with Slice 1's missing mobile-side conversion, the amount convention is broken at both ends of the round trip — untested anywhere (no test mocks the Flutterwave call and asserts the payload). Separately, mobile's "complete payment" is not a real payment flow: no WebView/browser redirect to `checkout_url` exists anywhere in the app (`pubspec.yaml` has no `webview_flutter`/`url_launcher`/deep-link package); the user manually types in a transaction ID after paying elsewhere, and the verify response's status is never inspected (`giving_checkout_screen.dart` treats any non-throwing `POST /donations/verify/` as success, so a `declined` result would be silently shown as success).
+  - Fixed 2026-07-24 — see post-implementation review note below.
 - **Slice 3 — View giving history** — user opens the giving/history screen and sees a paginated list of their own donations with amount, date, and current status for each
+  - Reviewed 2026-07-24 — Confirmed gap, not fixed. Backend pagination (`DonationMineListView` + `DonationPagination`) is correct. Mobile (`GiftHistoryController.refresh()`) never sends a `page` param and has no scroll-driven fetch — only page 1 is ever reachable. The date field is captured on the entity but not rendered on the list row (only used in the filter UI), so the row itself shows amount + status but not date as the slice requires.
+  - Fixed 2026-07-24 — see post-implementation review note below.
 - **Slice 4 — View a donation detail** — user taps a donation record and sees the full detail including payment reference and status
+  - Reviewed 2026-07-24 — Confirmed gap, not fixed. Backend `GET /donations/mine/<pk>/` exists and returns the full record, but mobile never calls it — the detail view is a bottom sheet built from the list item already in memory, with no per-id endpoint used at all. Status and payment reference are shown as required, but amount is not shown anywhere in the detail view; "Recipient Details" (`'iTestified'`) and "Transaction Type" (`'Flutterwave'`) are hardcoded strings rather than derived from API data; "Report an issue"/"Share Receipt" buttons are non-functional stubs (`pop()` only).
+  - Fixed 2026-07-24 — see post-implementation review note below. "Report an issue"/"Share Receipt" stubs were intentionally left as-is (out of the slice's stated scope — "full detail including payment reference and status").
 
 Access-control contract for this phase:
 - guest/unauthenticated users must be denied donation creation/history/detail endpoints
 - authenticated users can act only on their own donation records
+- Reviewed 2026-07-24 — Confirmed gap, not fixed. Backend enforces this correctly (`IsAuthenticated` + own-user filtering on all three endpoints, covered by `test_donation_endpoints_require_authentication`). Mobile does not enforce it client-side: no route guard on `/giving` or `/giving-history` in `app_router.dart`, and the feature doesn't reuse the app's own established guest-gating pattern ("Join Our Community" modal, used elsewhere for testimonies/home). A guest can reach both screens and attempt to donate; the resulting 401 only ever surfaces as a raw error string, not a deliberate prompt. The gift-history guest screen's "View Gift History" and "Create an Account" buttons are empty no-ops.
+- Fixed 2026-07-24 — see post-implementation review note below. Note: there is still no route guard in `app_router.dart` itself; the fix is the in-screen "Join Our Community" prompt on both `giving_screen.dart` and `gift_history_screen.dart`, matching the existing testimony-submission pattern rather than adding a new router-level mechanism.
 
 #### Admin Flows
 
 - **Slice 5 — View all donations** — admin opens the donations list and sees all donations across all users; filters by status (pending, successful, declined, reversed, refunded), date range, and donor name
+  - Reviewed 2026-07-24 — Solid. Implemented and tested end-to-end (`AdminDonationListView`, status/date-range/donor-name filters, admin-only via `IsActiveAdmin`, paginated). Dashboard integration confirmed working during this session's earlier B4/B9 passes.
 - **Slice 6 — View donation detail** — admin opens a specific donation and sees the full record including donor identity, amount, payment reference, provider, and status history
+  - Reviewed 2026-07-24 — Solid. `AdminDonationDetailView` + `AdminDonationDetailSerializer` return donor identity, amount, payment reference, provider, and full status history; tested.
 - **Slice 7 — Reverse a donation** — admin marks a successful donation as reversed and records a reason; the status updates and the record is preserved for audit purposes
+  - Reviewed 2026-07-24 — Confirmed bug, not fixed, backend/frontend split. Backend (`reverse_donation`) is solid: validates the transition (`DonationNotReversibleError` unless `SUCCESSFUL`), uses `select_for_update()` row locking, records audit history, and has both allowed- and blocked-transition tests. `dashboard/frontend`'s reversal confirmation modal (`donations-overlays.tsx`, the `showReasonModal` step) does not match: it displays a hardcoded donor name/email/transaction ID instead of the real selected donation's fields (which are available and correctly used elsewhere on the same page), and "Reason for Reversal" — marked required in the UI — is a static label, not an input; every reversal is submitted with the same hardcoded reason string (`"Admin verification request"`) regardless of what the admin intends, defeating the audit-trail purpose the backend correctly built.
+
+Cross-cutting findings (not specific to one slice), reviewed 2026-07-24:
+- Backend admin donation views (`AdminDonationListView`/`AdminDonationDetailView`/`AdminDonationReverseView`) don't pin `authentication_classes`, unlike the equivalent views in `testimonies`/`authn` (which explicitly restrict to `SessionAuthentication`). They fall through to the project default (Session **+ Token**), so a user holding both a mobile API token and an admin role could call `AdminDonationReverseView` via Token auth, bypassing the CSRF protection Session auth enforces on state-changing requests. Still open — Slice 7's dashboard bug (below) was the priority for this review pass, not this backend hardening item.
+- Mobile had an entirely orphaned mock layer for this feature (`giving/data/datasources/giving_local_datasource.dart`, `giving_repository_impl.dart`, `giving_repository.dart`, `get_gift_history.dart`) — hardcoded `GiftRecord`s, never registered in DI, never called. Removed 2026-07-24 as part of the mobile Slice 1-4 rebuild; see post-implementation review note below.
+- No mobile test exercised `startPayment()`, the amount conversion, the checkout/verify flow, guest denial, or pagination for this feature — the one relevant test (`test/features/part6/part6_flow_test.dart`) only asserted that `/giving` and `/giving-history` resolve to the right widget type. Fixed 2026-07-24 — see post-implementation review note below.
 
 Test:
 - model tests for donation invariants
@@ -520,8 +539,68 @@ Test:
 - API tests for donation history, admin filtering, and permission enforcement
 - replace giving and donation-history mocks in the connected UI scope
 - verify giving submission/history in `mobile/` and donation review/filtering in `dashboard/frontend/`
+- Reviewed 2026-07-24: backend model/service/API tests for slices 5-7 are solid, including blocked-transition coverage. No test anywhere (backend or mobile) covers the Flutterwave amount payload, which is exactly where the critical Slice 1/2 bug lives — this is the highest-priority test gap to close before fixing that bug.
+- Closed 2026-07-24: added a backend regression test asserting the exact Flutterwave payload amount, and a mobile test suite for the giving feature (entity mapping, use cases, repository guard behavior, amount-conversion/truncation, controller `startPayment()`, and gift-history pagination/filtering) — see post-implementation review note below.
 
-Status: in progress (Slices 1-7 implemented)
+Status: in progress — Slices 1-6 are now solid; Slice 7 (admin reversal dashboard) still has a confirmed, unfixed bug. See the post-implementation review note below for what changed in this pass. Not ready to mark Completed until Slice 7's dashboard fix and the cross-cutting admin-auth hardening item are addressed.
+
+Post-implementation review note (2026-07-24): implemented Slices 1-4 for
+real, backend first then mobile, following `mobile/AGENTS.md`'s Clean
+Architecture spec.
+- Backend: fixed `services/flutterwave.py::initialize()` to convert
+  `amount` from minor units to major units (`amount / 100`, formatted
+  `"%.2f"`) before sending it to Flutterwave — this was the critical bug
+  spanning Slices 1-2, since Flutterwave's API expects major units but our
+  internal convention (and the mobile client) used minor units. Added a
+  regression test (`test_phase5_slice1_create_donation_sends_major_unit_amount_to_flutterwave`)
+  asserting the exact payload sent to the gateway. Full backend suite still
+  passes (146 tests; the pre-existing 10 failures/10 errors are unrelated
+  SMTP config issues, confirmed via `git stash` before this work started).
+- Mobile: rebuilt the `giving` feature from the ground up as Clean
+  Architecture (`domain/{entities,repositories,usecases,failures}`,
+  `data/{datasources,repositories}`, `presentation/{state,screens,widgets}`),
+  replacing the old feature that mixed dead mock code with direct
+  `ApiClient` calls from the UI layer. Removed the orphaned mock
+  datasource/repository entirely.
+  - Slice 1: `GivingState.setAmount()` now accepts digits and a single
+    decimal point (max 2 decimal places) and converts to minor units via
+    `(amountMajorUnits * 100).round()` — the raw-digit bug is fixed at the
+    input boundary, not patched downstream.
+  - Slice 2: added a real in-app WebView checkout (`webview_flutter`)
+    that loads the donation's `checkout_url`, intercepts Flutterwave's
+    redirect back via a navigation delegate, and calls
+    `POST /donations/verify/` — the verified donation's `status` (not just
+    "the request didn't throw") now determines whether the success or
+    declined screen is shown.
+  - Slice 3: `GiftHistoryController` now tracks `page`/`hasNextPage` and
+    exposes `loadMore()`, wired to a scroll listener in
+    `gift_history_screen.dart`; the list row shows the donation date
+    alongside amount and status.
+  - Slice 4: tapping a donation now calls
+    `GET /donations/mine/<id>/` for the real record instead of reusing the
+    in-memory list item; the detail sheet shows amount (previously
+    missing entirely) alongside status, payment reference, and date.
+    "Recipient Details"/"Transaction Type" remain hardcoded
+    ("iTestified"/"Flutterwave") deliberately — this is a single-recipient,
+    single-provider system, so those values are genuinely static, not a
+    gap.
+  - Access control: added the app's existing "Join Our Community" guest
+    prompt to both `giving_screen.dart` and `gift_history_screen.dart`,
+    matching the pattern already used for testimony submission.
+  - Added `GiftStatus.reversed`/`GiftStatus.refunded` (previously missing
+    from the entity entirely, so those donations would have silently
+    rendered as "Pending").
+  - Added 40 new mobile tests across entity mapping, all four use cases,
+    repository guard behavior, amount-conversion/truncation edge cases,
+    `GivingController.startPayment()`, and `GiftHistoryController`
+    pagination/filtering, using the codebase's existing hand-rolled-fake
+    pattern (no mocking library is installed). Full mobile suite and
+    `flutter analyze` pass with no new regressions.
+
+Open follow-up (not blocking Slices 1-4, tracked above as still-open
+items): Slice 7's dashboard reversal-modal bug and the admin
+donation-views `authentication_classes` hardening item are unchanged by
+this pass.
 
 ### Phase 6: Notifications And User Activity
 

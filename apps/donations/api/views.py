@@ -54,6 +54,10 @@ class DonationCreateView(APIView):
                 amount=serializer.validated_data["amount"],
                 currency=serializer.validated_data["currency"],
             )
+        except DonationGatewayNotConfiguredError:
+            return Response(
+                {"message": "Flutterwave is not configured."}, status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
         except FlutterwaveGatewayError as exc:
             return Response({"message": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
 
