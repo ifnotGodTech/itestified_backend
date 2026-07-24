@@ -602,6 +602,42 @@ items): Slice 7's dashboard reversal-modal bug and the admin
 donation-views `authentication_classes` hardening item are unchanged by
 this pass.
 
+Post-deploy live verification (2026-07-24): after pushing the Slice 1-4
+fixes, ran the actual mobile app on an Android emulator against the live
+Render backend (not just local tests) and found two more issues that only
+showed up under real deployment conditions, both now fixed and pushed:
+- The deployed backend had `FLUTTERWAVE_SECRET_KEY` unset (an env var gap,
+  not a code bug — see Slice 1's note above) — once set, live-tested a full
+  donation in both **NGN and USD** and confirmed the correct major-unit
+  amount reached Flutterwave's real checkout page for both currencies, and
+  confirmed USD is enabled on the Flutterwave merchant account (it was an
+  open question, not a known gap).
+- Discovered a client-side reliability gap by reproducing it live: if a
+  user leaves the checkout WebView before Flutterwave's redirect fires
+  (closes the app, backgrounds it, etc.), the donation stays `pending`
+  forever, since redirect-based verification is the only path that updates
+  it. Set up the Flutterwave webhook (`FLUTTERWAVE_SECRET_HASH` +
+  `DonationProviderCallbackView`, which already existed from Phase 5's
+  original build) as the fix — it lets Flutterwave notify the backend
+  independently of the client. While wiring it up, found and fixed a real
+  bug in the webhook itself: `DonationProviderCallbackSerializer.status`
+  was a `ChoiceField` restricted to our own `DonationStatus` values
+  (`"successful"`/`"declined"`), but Flutterwave's real webhook payload uses
+  its own vocabulary (`"successful"`/`"failed"`) — a real failed-payment
+  webhook would have been rejected with a 400 instead of ever marking the
+  donation declined. Fixed by making `status` a plain `CharField` and
+  normalizing once in the view regardless of Flutterwave's exact wording.
+  Added a regression test using Flutterwave's real `"failed"` value.
+  Verified live by sending real webhook calls (matching two donations stuck
+  from manual testing) against the deployed backend — one correctly
+  resolved to `successful`, the other to `declined`, both matching the
+  transactions' true state on Flutterwave's side.
+- Not yet live-verified: the guest-gating access-control fix (the "Join Our
+  Community" prompts on `giving_screen.dart`/`gift_history_screen.dart`).
+  All live testing this pass was done as a registered user; guest-path
+  behavior is covered by the code change and existing pattern reuse but has
+  not been exercised on-device.
+
 ### Phase 6: Notifications And User Activity
 
 Build:
