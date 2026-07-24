@@ -5,6 +5,7 @@ from datetime import datetime
 from django.db import transaction
 from django.utils import timezone
 
+from apps.testimonies.exceptions import TestimonyTransitionNotAllowedError
 from apps.testimonies.models import (
     ModerationAction,
     Testimony,
@@ -42,6 +43,8 @@ def _record_history(
 
 @transaction.atomic
 def approve_testimony(*, testimony: Testimony, actor) -> Testimony:
+    if testimony.status != TestimonyStatus.PENDING_REVIEW:
+        raise TestimonyTransitionNotAllowedError("Only pending testimonies can be approved.")
     from_status = testimony.status
     testimony.status = TestimonyStatus.APPROVED
     testimony.rejection_reason = ""
@@ -65,6 +68,8 @@ def approve_testimony(*, testimony: Testimony, actor) -> Testimony:
 
 @transaction.atomic
 def reject_testimony(*, testimony: Testimony, actor, reason: str) -> Testimony:
+    if testimony.status != TestimonyStatus.PENDING_REVIEW:
+        raise TestimonyTransitionNotAllowedError("Only pending testimonies can be rejected.")
     from_status = testimony.status
     testimony.status = TestimonyStatus.REJECTED
     testimony.rejection_reason = reason
@@ -89,6 +94,8 @@ def reject_testimony(*, testimony: Testimony, actor, reason: str) -> Testimony:
 
 @transaction.atomic
 def schedule_testimony(*, testimony: Testimony, actor, publish_at: datetime) -> Testimony:
+    if testimony.status != TestimonyStatus.PENDING_REVIEW:
+        raise TestimonyTransitionNotAllowedError("Only pending testimonies can be scheduled.")
     from_status = testimony.status
     testimony.status = TestimonyStatus.SCHEDULED
     testimony.publish_at = publish_at
@@ -108,6 +115,8 @@ def schedule_testimony(*, testimony: Testimony, actor, publish_at: datetime) -> 
 
 @transaction.atomic
 def archive_testimony(*, testimony: Testimony, actor, reason: str = "") -> Testimony:
+    if testimony.status not in (TestimonyStatus.APPROVED, TestimonyStatus.SCHEDULED):
+        raise TestimonyTransitionNotAllowedError("Only approved or scheduled testimonies can be archived.")
     from_status = testimony.status
     testimony.status = TestimonyStatus.ARCHIVED
     testimony.archived_at = timezone.now()
@@ -120,6 +129,27 @@ def archive_testimony(*, testimony: Testimony, actor, reason: str = "") -> Testi
         to_status=TestimonyStatus.ARCHIVED,
         actor=actor,
         reason=reason,
+    )
+    return testimony
+
+
+@transaction.atomic
+def upload_now_video_testimony(*, testimony: Testimony, actor) -> Testimony:
+    if testimony.testimony_type != TestimonyType.VIDEO:
+        raise TestimonyTransitionNotAllowedError("Only video testimonies can be uploaded now.")
+    if testimony.status not in (TestimonyStatus.DRAFT, TestimonyStatus.SCHEDULED):
+        raise TestimonyTransitionNotAllowedError("Only draft or scheduled video testimonies can be uploaded now.")
+    from_status = testimony.status
+    testimony.status = TestimonyStatus.APPROVED
+    testimony.publish_at = None
+    testimony.save(update_fields=["status", "publish_at", "updated_at"])
+    _record_history(
+        testimony=testimony,
+        action=ModerationAction.APPROVED,
+        from_status=from_status,
+        to_status=TestimonyStatus.APPROVED,
+        actor=actor,
+        reason="Uploaded now from draft/scheduled via admin modal.",
     )
     return testimony
 

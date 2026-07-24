@@ -1,0 +1,2 @@
+class TestimonyTransitionNotAllowedError(Exception):
+    pass

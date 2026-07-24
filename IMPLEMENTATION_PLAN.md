@@ -80,7 +80,7 @@ Important constraint:
 - Phase 1: Completed
 - Phase 2: Completed
 - Phase 3: Completed
-- Phase 4: In progress (Slices 1-11 implemented)
+- Phase 4: Completed (Slices 1-11 implemented)
 - Phase 5: In progress (Slices 1-7 implemented)
 - Phase 6: In progress (Slices 1-7 implemented)
 - Phase 7: In progress (Slices 1-8 implemented)
@@ -450,7 +450,39 @@ Test:
 - replace moderation mocks in the connected UI scope
 - verify moderation actions in `dashboard/frontend/` and confirm resulting visibility in `mobile/` where applicable
 
-Status: in progress (Slices 1-9 implemented)
+Status: Completed (Slices 1-11 implemented)
+
+Post-implementation review note (2026-07-24): audited this phase against the
+implemented code (`apps/testimonies/models.py`, `services/commands.py`,
+`api/views.py`, `api/serializers.py`, `api/urls.py`, the scheduled-publish
+cron job, and all tests). Findings addressed as part of the review:
+- Transition-validity checks (e.g. "only pending testimonies can be
+  approved") previously lived only in the views, not the services — any
+  future caller of `approve_testimony`/`reject_testimony`/
+  `schedule_testimony`/`archive_testimony` could have silently skipped the
+  guard. Moved into `services/commands.py` itself, raising a new
+  `TestimonyTransitionNotAllowedError` (`apps/testimonies/exceptions.py`),
+  caught and translated to a 400 at the view layer — matching the existing
+  `donations` app's exception-handling convention.
+- Added the missing "blocked transition" tests the Test section above always
+  called for (e.g. approving an already-approved testimony returns 400) —
+  previously only the allowed side of each transition was tested.
+- Added permission-denial tests for approve/reject/schedule/archive (only
+  delete and video-upload had them before).
+- `AdminUploadNowVideoTestimonyView` duplicated moderation-history-writing
+  inline instead of going through a service; extracted into
+  `upload_now_video_testimony()` alongside the other transition commands.
+- Renamed `AdminDeleteVideoTestimonyView` / `admin-testimony-delete-video` to
+  `AdminDeleteTestimonyView` / `admin-testimony-delete` — the endpoint always
+  deleted both video and text testimonies (correct per Slice 11), the old
+  name just implied video-only.
+
+Open follow-up (not blocking): Slice 11's spec text calls for "role
+enforcement" on delete. Today that's just `IsActiveAdmin` — any active admin
+role (including finance_admin) can permanently delete a testimony record.
+Left as-is since the plan doesn't specify which roles should be restricted;
+revisit if delete should be limited to specific roles (e.g. content_admin/
+super_admin only).
 
 ### Phase 5: Donations And Giving
 

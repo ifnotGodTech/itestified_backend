@@ -1019,14 +1019,14 @@ class AdminTestimonyApiTests(TestCase):
 
     def test_admin_delete_video_testimony(self) -> None:
         response = self.client.delete(
-            reverse("admin-testimony-delete-video", kwargs={"testimony_id": self.approved.id})
+            reverse("admin-testimony-delete", kwargs={"testimony_id": self.approved.id})
         )
         self.assertEqual(response.status_code, 200)
         self.assertFalse(Testimony.objects.filter(id=self.approved.id).exists())
 
     def test_admin_delete_text_testimony(self) -> None:
         response = self.client.delete(
-            reverse("admin-testimony-delete-video", kwargs={"testimony_id": self.pending.id})
+            reverse("admin-testimony-delete", kwargs={"testimony_id": self.pending.id})
         )
         self.assertEqual(response.status_code, 200)
         self.assertFalse(Testimony.objects.filter(id=self.pending.id).exists())
@@ -1036,7 +1036,7 @@ class AdminTestimonyApiTests(TestCase):
         non_admin = UserFactory(email="nonadmin-delete@example.com")
         self.client.force_login(non_admin)
         response = self.client.delete(
-            reverse("admin-testimony-delete-video", kwargs={"testimony_id": self.approved.id})
+            reverse("admin-testimony-delete", kwargs={"testimony_id": self.approved.id})
         )
         self.assertEqual(response.status_code, 403)
 
@@ -1289,6 +1289,76 @@ class AdminTestimonyApiTests(TestCase):
         archived_row = next(item for item in payload if item["action"] == "archived")
         self.assertEqual(archived_row["reason"], "Archive for policy clean-up")
         self.assertIn("actor_name", archived_row)
+
+    def test_phase4_admin_actions_reject_invalid_status_transitions(self) -> None:
+        approve_on_non_pending = self.client.post(
+            reverse("admin-testimony-approve", kwargs={"testimony_id": self.approved.id})
+        )
+        self.assertEqual(approve_on_non_pending.status_code, 400)
+        self.assertEqual(approve_on_non_pending.json()["message"], "Only pending testimonies can be approved.")
+
+        reject_on_non_pending = self.client.post(
+            reverse("admin-testimony-reject", kwargs={"testimony_id": self.approved.id}),
+            {"reason": "Does not matter."},
+            content_type="application/json",
+        )
+        self.assertEqual(reject_on_non_pending.status_code, 400)
+        self.assertEqual(reject_on_non_pending.json()["message"], "Only pending testimonies can be rejected.")
+
+        schedule_on_non_pending = self.client.post(
+            reverse("admin-testimony-schedule", kwargs={"testimony_id": self.approved.id}),
+            {"publish_at": (timezone.now() + timezone.timedelta(hours=1)).isoformat()},
+            content_type="application/json",
+        )
+        self.assertEqual(schedule_on_non_pending.status_code, 400)
+        self.assertEqual(schedule_on_non_pending.json()["message"], "Only pending testimonies can be scheduled.")
+
+        archive_on_pending = self.client.post(
+            reverse("admin-testimony-archive", kwargs={"testimony_id": self.pending.id}),
+            {},
+            content_type="application/json",
+        )
+        self.assertEqual(archive_on_pending.status_code, 400)
+        self.assertEqual(
+            archive_on_pending.json()["message"], "Only approved or scheduled testimonies can be archived."
+        )
+
+        # Confirm none of the blocked attempts mutated state.
+        self.approved.refresh_from_db()
+        self.assertEqual(self.approved.status, TestimonyStatus.APPROVED)
+        self.pending.refresh_from_db()
+        self.assertEqual(self.pending.status, TestimonyStatus.PENDING_REVIEW)
+
+    def test_phase4_admin_actions_require_admin_session(self) -> None:
+        self.client.logout()
+        non_admin = UserFactory(email="nonadmin-moderation@example.com")
+        self.client.force_login(non_admin)
+
+        approve_response = self.client.post(
+            reverse("admin-testimony-approve", kwargs={"testimony_id": self.pending.id})
+        )
+        self.assertEqual(approve_response.status_code, 403)
+
+        reject_response = self.client.post(
+            reverse("admin-testimony-reject", kwargs={"testimony_id": self.pending.id}),
+            {"reason": "n/a"},
+            content_type="application/json",
+        )
+        self.assertEqual(reject_response.status_code, 403)
+
+        schedule_response = self.client.post(
+            reverse("admin-testimony-schedule", kwargs={"testimony_id": self.pending.id}),
+            {"publish_at": (timezone.now() + timezone.timedelta(hours=1)).isoformat()},
+            content_type="application/json",
+        )
+        self.assertEqual(schedule_response.status_code, 403)
+
+        archive_response = self.client.post(
+            reverse("admin-testimony-archive", kwargs={"testimony_id": self.approved.id}),
+            {},
+            content_type="application/json",
+        )
+        self.assertEqual(archive_response.status_code, 403)
 
     def test_phase4_slice7_author_my_testimonies_reflects_approved_and_rejected_with_reason(self) -> None:
         author_token = Token.objects.create(user=self.author)

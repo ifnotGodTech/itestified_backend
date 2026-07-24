@@ -17,7 +17,7 @@ from .views import (
     AdminVideoTestimonyUploadSignatureView,
     AdminVideoTestimonyUploadView,
     AdminVideoTestimonyCreateFromUrlView,
-    AdminDeleteVideoTestimonyView,
+    AdminDeleteTestimonyView,
     AuthenticatedMyTestimonyListView,
     AuthenticatedMyTestimonyDeleteView,
     AuthenticatedRejectedTestimonyResubmitView,
@@ -72,7 +72,7 @@ urlpatterns = [
     path("admin/testimonies/<int:testimony_id>/reject/", AdminRejectTestimonyView.as_view(), name="admin-testimony-reject"),
     path("admin/testimonies/<int:testimony_id>/schedule/", AdminScheduleTestimonyView.as_view(), name="admin-testimony-schedule"),
     path("admin/testimonies/<int:testimony_id>/archive/", AdminArchiveTestimonyView.as_view(), name="admin-testimony-archive"),
-    path("admin/testimonies/<int:testimony_id>/delete/", AdminDeleteVideoTestimonyView.as_view(), name="admin-testimony-delete-video"),
+    path("admin/testimonies/<int:testimony_id>/delete/", AdminDeleteTestimonyView.as_view(), name="admin-testimony-delete"),
     path("admin/testimonies/<int:testimony_id>/edit/", AdminUpdateVideoTestimonyView.as_view(), name="admin-testimony-edit-video"),
     path("admin/testimonies/<int:testimony_id>/upload-now/", AdminUploadNowVideoTestimonyView.as_view(), name="admin-testimony-upload-now-video"),
     path(

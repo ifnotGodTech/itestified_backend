@@ -14,8 +14,8 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.views import APIView
 
+from apps.testimonies.exceptions import TestimonyTransitionNotAllowedError
 from apps.testimonies.models import (
-    ModerationAction,
     Testimony,
     TestimonyCategory,
     TestimonyComment,
@@ -30,6 +30,7 @@ from apps.testimonies.services.commands import (
     archive_testimony,
     reject_testimony,
     schedule_testimony,
+    upload_now_video_testimony,
 )
 from apps.notifications.services import (
     notify_new_video_testimony_published,
@@ -443,12 +444,10 @@ class AdminApproveTestimonyView(APIView):
         testimony = Testimony.objects.filter(id=testimony_id).first()
         if testimony is None:
             return Response({"message": "Testimony not found."}, status=status.HTTP_404_NOT_FOUND)
-        if testimony.status != TestimonyStatus.PENDING_REVIEW:
-            return Response(
-                {"message": "Only pending testimonies can be approved."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        approve_testimony(testimony=testimony, actor=request.user)
+        try:
+            approve_testimony(testimony=testimony, actor=request.user)
+        except TestimonyTransitionNotAllowedError as exc:
+            return Response({"message": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(AdminTestimonyDetailSerializer(testimony).data, status=status.HTTP_200_OK)
 
 
@@ -460,15 +459,13 @@ class AdminRejectTestimonyView(APIView):
         testimony = Testimony.objects.filter(id=testimony_id).first()
         if testimony is None:
             return Response({"message": "Testimony not found."}, status=status.HTTP_404_NOT_FOUND)
-        if testimony.status != TestimonyStatus.PENDING_REVIEW:
-            return Response(
-                {"message": "Only pending testimonies can be rejected."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
         reason = str(request.data.get("reason", "")).strip()
         if not reason:
             return Response({"message": "Rejection reason is required."}, status=status.HTTP_400_BAD_REQUEST)
-        reject_testimony(testimony=testimony, actor=request.user, reason=reason)
+        try:
+            reject_testimony(testimony=testimony, actor=request.user, reason=reason)
+        except TestimonyTransitionNotAllowedError as exc:
+            return Response({"message": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(AdminTestimonyDetailSerializer(testimony).data, status=status.HTTP_200_OK)
 
 
@@ -480,11 +477,6 @@ class AdminScheduleTestimonyView(APIView):
         testimony = Testimony.objects.filter(id=testimony_id).first()
         if testimony is None:
             return Response({"message": "Testimony not found."}, status=status.HTTP_404_NOT_FOUND)
-        if testimony.status != TestimonyStatus.PENDING_REVIEW:
-            return Response(
-                {"message": "Only pending testimonies can be scheduled."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
         raw_publish_at = str(request.data.get("publish_at", "")).strip()
         if not raw_publish_at:
             return Response({"message": "publish_at is required."}, status=status.HTTP_400_BAD_REQUEST)
@@ -496,7 +488,10 @@ class AdminScheduleTestimonyView(APIView):
             publish_at = timezone.make_aware(publish_at, timezone.get_current_timezone())
         if publish_at <= timezone.now():
             return Response({"message": "publish_at must be in the future."}, status=status.HTTP_400_BAD_REQUEST)
-        schedule_testimony(testimony=testimony, actor=request.user, publish_at=publish_at)
+        try:
+            schedule_testimony(testimony=testimony, actor=request.user, publish_at=publish_at)
+        except TestimonyTransitionNotAllowedError as exc:
+            return Response({"message": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(AdminTestimonyDetailSerializer(testimony).data, status=status.HTTP_200_OK)
 
 
@@ -508,13 +503,11 @@ class AdminArchiveTestimonyView(APIView):
         testimony = Testimony.objects.filter(id=testimony_id).first()
         if testimony is None:
             return Response({"message": "Testimony not found."}, status=status.HTTP_404_NOT_FOUND)
-        if testimony.status not in (TestimonyStatus.APPROVED, TestimonyStatus.SCHEDULED):
-            return Response(
-                {"message": "Only approved or scheduled testimonies can be archived."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
         reason = str(request.data.get("reason", "")).strip()
-        archive_testimony(testimony=testimony, actor=request.user, reason=reason)
+        try:
+            archive_testimony(testimony=testimony, actor=request.user, reason=reason)
+        except TestimonyTransitionNotAllowedError as exc:
+            return Response({"message": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(AdminTestimonyDetailSerializer(testimony).data, status=status.HTTP_200_OK)
 
 
@@ -583,7 +576,7 @@ class AdminVideoTestimonyCreateFromUrlView(generics.CreateAPIView):
         return Response(AdminTestimonyDetailSerializer(testimony).data, status=status.HTTP_201_CREATED)
 
 
-class AdminDeleteVideoTestimonyView(APIView):
+class AdminDeleteTestimonyView(APIView):
     authentication_classes = [SessionAuthentication]
     permission_classes = [IsActiveAdmin]
 
@@ -619,26 +612,9 @@ class AdminUploadNowVideoTestimonyView(APIView):
         testimony = Testimony.objects.filter(id=testimony_id).first()
         if testimony is None:
             return Response({"message": "Testimony not found."}, status=status.HTTP_404_NOT_FOUND)
-        if testimony.testimony_type != TestimonyType.VIDEO:
-            return Response({"message": "Only video testimonies can be uploaded here."}, status=status.HTTP_400_BAD_REQUEST)
-        if testimony.status not in (TestimonyStatus.DRAFT, TestimonyStatus.SCHEDULED):
-            return Response(
-                {"message": "Only draft or scheduled video testimonies can be uploaded now."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        from_status = testimony.status
-        testimony.status = TestimonyStatus.APPROVED
-        testimony.publish_at = None
-        testimony.save(update_fields=["status", "publish_at", "updated_at"])
-
-        TestimonyModerationHistory.objects.create(
-            testimony=testimony,
-            action=ModerationAction.APPROVED,
-            actor=request.user,
-            from_status=from_status,
-            to_status=TestimonyStatus.APPROVED,
-            reason="Uploaded now from draft/scheduled via admin modal.",
-        )
+        try:
+            upload_now_video_testimony(testimony=testimony, actor=request.user)
+        except TestimonyTransitionNotAllowedError as exc:
+            return Response({"message": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         notify_new_video_testimony_published(testimony=testimony, actor=request.user)
         return Response(AdminTestimonyDetailSerializer(testimony).data, status=status.HTTP_200_OK)
