@@ -10,9 +10,14 @@ from django.db.models import Q
 
 from apps.authn.api.permissions import IsActiveAdmin
 
-from apps.notifications.models import NotificationType, UserNotification, UserNotificationPreference
+from apps.notifications.models import DeviceToken, NotificationType, UserNotification, UserNotificationPreference
 
-from .serializers import UserNotificationPreferenceSerializer, UserNotificationSerializer
+from .serializers import (
+    DeviceTokenDeregisterSerializer,
+    DeviceTokenRegisterSerializer,
+    UserNotificationPreferenceSerializer,
+    UserNotificationSerializer,
+)
 
 
 class NotificationPagination(PageNumberPagination):
@@ -122,3 +127,32 @@ class MyNotificationPreferencesView(APIView):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class DeviceTokenView(APIView):
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = DeviceTokenRegisterSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        # Keyed by token, not (user, platform): if this token was previously
+        # registered to a different account (same physical device, different
+        # login), this reassigns it to the current user instead of leaving
+        # a stale cross-account row.
+        DeviceToken.objects.update_or_create(
+            token=serializer.validated_data["token"],
+            defaults={
+                "user": request.user,
+                "platform": serializer.validated_data["platform"],
+            },
+        )
+        return Response({"message": "Device registered."}, status=status.HTTP_200_OK)
+
+    def delete(self, request):
+        serializer = DeviceTokenDeregisterSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        DeviceToken.objects.filter(
+            token=serializer.validated_data["token"], user=request.user
+        ).delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)

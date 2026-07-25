@@ -42,6 +42,32 @@ class UserNotification(models.Model):
         return f"UserNotification<{self.recipient_id}:{self.notification_type}>"
 
 
+class DevicePlatform(models.TextChoices):
+    IOS = "ios", "iOS"
+    ANDROID = "android", "Android"
+    WEB = "web", "Web"
+
+
+class DeviceToken(models.Model):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="device_tokens",
+    )
+    # Unique by the token string itself, not by (user, platform): if this
+    # physical device is later used to log into a different account, the OS
+    # hands the app the same FCM token, and re-registering it here must
+    # reassign ownership -- otherwise the previous account would keep
+    # receiving push notifications meant for whoever uses the device next.
+    token = models.CharField(max_length=255, unique=True)
+    platform = models.CharField(max_length=10, choices=DevicePlatform.choices)
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_seen_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self) -> str:
+        return f"DeviceToken<{self.user_id}:{self.platform}>"
+
+
 class UserNotificationPreference(models.Model):
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
