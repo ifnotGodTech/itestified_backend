@@ -698,14 +698,21 @@ Additive to everything above — the existing in-app notification centre, the 30
 
 Current state, confirmed 2026-07-25: `firebase_core` is a mobile dependency and `Firebase.initializeApp()` is called in `lib/app/bootstrap.dart`, but nothing beyond that exists — no `firebase_messaging` package, no Android `POST_NOTIFICATIONS` permission, no iOS remote-notification background mode, no push-handling code anywhere in `mobile/lib/`, and the backend has zero device-token infrastructure (no model, no registration endpoint, nothing that could call FCM's send API). Firebase's presence is almost certainly leftover from Google Sign-In setup, not prior push work.
 
-Domain questions to lock before implementation begins (per this plan's own Working Mode rule — resolve ambiguity before schema/irreversible decisions):
-- Does push respect the existing `UserNotificationPreference` fields, or does it need its own `allow_push_notifications`-style toggle? (`allow_email_notifications` today only gates the donation thank-you email.)
-- Do all `NotificationType`s push, or only a subset (e.g. testimony approved/rejected always; testimony comments maybe not)?
-- One device token per user, or multiple (a user logged into more than one device)? What happens to a token on logout/uninstall?
-- Who owns the Apple Developer account / APNs key that Firebase needs for iOS push? (Required before iOS push can work at all, independent of any code written here.)
+Domain decisions (locked 2026-07-25):
+- **Preference toggle**: push gets its own new preference, not a reuse of `allow_email_notifications` (which stays scoped to email only — currently just the donation thank-you email). Working name: `allow_push_notifications` on `UserNotificationPreference`, default `True` to match the model's existing default pattern for the other opt-out-style toggles. Exact field name/default to be confirmed at migration time.
+- **Which notification types push**: `NEW_VIDEO_TESTIMONY`, `TESTIMONY_APPROVED`, and `TESTIMONY_COMMENT` only. `TESTIMONY_REJECTED`, `TESTIMONY_SUBMITTED`, and `DONATION_RECEIVED` stay in-app-only for now (not pushed) — revisit if that turns out to be wrong once this ships.
+- **Device token model, best practice locked**:
+  - One user → many `DeviceToken` rows (a user can have a phone + tablet, or reinstall and get a fresh token on the same device); never a single token field on `User`.
+  - Unique by the token string itself, not by (user, device). This is what makes device reassignment safe: if User A logs out and User B logs into the same physical device, the OS hands the app the same token going forward — registering it for B just reassigns that row's `user`, so A can never keep receiving B's pushes.
+  - FCM tokens rotate independently of login/logout (`onTokenRefresh` in Flutter) — every refresh must re-register with the backend, not just the initial one at login.
+  - Deregister (delete) the token row on logout, so a signed-out device stops receiving pushes for that account.
+  - Self-clean on send failure: when FCM's send API returns `UNREGISTERED`/`NotRegistered` for a token, delete that row immediately rather than letting dead tokens accumulate and fail every future send.
+  - Batch sends via FCM's multicast API when a recipient has multiple devices, rather than one HTTP call per token.
+  - The token's owner is always derived from the authenticated request (`request.user`), never accepted as a user_id in the request body.
+- **Still open, deferred**: who owns the Apple Developer account / APNs key Firebase needs for iOS push — required before iOS push can work at all, independent of any code written here.
 
-- **Slice 9 — Register a device for push notifications** — when an authenticated user opens the app (or logs in), the app obtains an FCM device token and registers it with the backend against that user's account, so the backend knows where to deliver pushes for them
-- **Slice 10 — Receive a push notification while the app is backgrounded or closed** — when a notification-worthy event occurs (testimony approved/rejected/comment, new video, donation received, etc. — the same events already flowing through `apps/notifications/services.py`), the backend sends a push via FCM in addition to creating the existing in-app `UserNotification` record, and the OS displays it even if the app isn't running
+- **Slice 9 — Register a device for push notifications** — when an authenticated user opens the app (or logs in), the app obtains an FCM device token and registers it with the backend against that user's account, so the backend knows where to deliver pushes for them; token refresh and logout deregistration are part of this slice's acceptance criteria, not a follow-up
+- **Slice 10 — Receive a push notification while the app is backgrounded or closed** — when a `NEW_VIDEO_TESTIMONY`, `TESTIMONY_APPROVED`, or `TESTIMONY_COMMENT` event occurs (the same events already flowing through `apps/notifications/services.py`) for a recipient with `allow_push_notifications` enabled, the backend sends a push via FCM in addition to creating the existing in-app `UserNotification` record, and the OS displays it even if the app isn't running
 - **Slice 11 — Tap a notification to open the app** — tapping a push notification (from a backgrounded app, or a cold start from fully closed) opens the app and navigates directly to the relevant screen (the notification centre, or the specific content the notification refers to) via the app's existing router
 
 Access-control contract for these slices:
