@@ -257,7 +257,7 @@ class AuthnApiTests(TestCase):
         self.assertNotIn("otp_hint", body)
         self.assertNotIn("email", body)
 
-    @patch("apps.authn.services.commands.EmailMultiAlternatives.send", side_effect=Exception("smtp down"))
+    @patch("apps.common.services.email.EmailMultiAlternatives.send", side_effect=Exception("smtp down"))
     def test_registration_start_returns_503_when_email_delivery_fails(self, _mock_send_mail) -> None:
         response = self.client.post(
             reverse("auth-mobile-register-start"),

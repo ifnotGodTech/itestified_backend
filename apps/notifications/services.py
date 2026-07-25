@@ -1,4 +1,4 @@
-from apps.notifications.models import NotificationType, UserNotification
+from apps.notifications.models import NotificationType, UserNotification, UserNotificationPreference
 from apps.users.choices import AdminAssignmentStatus, UserAccountStatus
 from apps.users.models import AdminAssignment
 from apps.users.models import User
@@ -74,6 +74,42 @@ def notify_new_video_testimony_published(*, testimony, actor=None) -> int:
         )
         for user_id in recipient_ids
     ]
+    UserNotification.objects.bulk_create(rows)
+    return len(rows)
+
+
+def notify_admins_of_new_donation(*, donor, donor_label: str, amount_label: str) -> int:
+    """Notify each active admin that a donation was submitted, honoring each
+    admin's own notify_new_donation_received preference (default: opted in,
+    matching the model default for admins with no preference row yet)."""
+    admin_assignments = (
+        AdminAssignment.objects.filter(status=AdminAssignmentStatus.ACTIVE)
+        .exclude(user_id=donor.id)
+        .select_related("user")
+    )
+    admin_users = [assignment.user for assignment in admin_assignments]
+    if not admin_users:
+        return 0
+
+    preferences = {
+        preference.user_id: preference
+        for preference in UserNotificationPreference.objects.filter(user__in=admin_users)
+    }
+    title = "New donation received"
+    message = f"{donor_label} submitted a donation of {amount_label} for verification."
+    rows = [
+        UserNotification(
+            recipient=user,
+            actor=donor,
+            notification_type=NotificationType.DONATION_RECEIVED,
+            title=title,
+            message=message,
+        )
+        for user in admin_users
+        if (preference := preferences.get(user.id)) is None or preference.notify_new_donation_received
+    ]
+    if not rows:
+        return 0
     UserNotification.objects.bulk_create(rows)
     return len(rows)
 

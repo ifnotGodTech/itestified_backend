@@ -10,6 +10,10 @@ from apps.donations.exceptions import (
 )
 from apps.donations.models import Donation, DonationStatus, DonationStatusHistory
 from apps.donations.services.flutterwave import FlutterwaveGateway, FlutterwaveGatewayError
+from apps.donations.services.notifications import (
+    maybe_notify_new_donation,
+    maybe_send_donation_thank_you_email,
+)
 
 
 def _log_status_history(*, donation: Donation, from_status: str, to_status: str, reason: str = "", actor=None) -> None:
@@ -71,6 +75,7 @@ def create_donation(*, user, amount: int, currency: str) -> Donation:
     donation.checkout_url = init_result.checkout_url
     donation.provider_transaction_id = init_result.provider_transaction_id
     donation.save(update_fields=["checkout_url", "provider_transaction_id", "updated_at"])
+    transaction.on_commit(lambda: maybe_notify_new_donation(donation))
     return donation
 
 
@@ -99,6 +104,8 @@ def verify_donation(*, user, payment_reference: str, transaction_id: str) -> Don
         reason=donation.status_reason,
         actor=user,
     )
+    if from_status != DonationStatus.SUCCESSFUL and donation.status == DonationStatus.SUCCESSFUL:
+        transaction.on_commit(lambda: maybe_send_donation_thank_you_email(donation))
     return donation
 
 
@@ -129,6 +136,8 @@ def apply_provider_callback(
         to_status=donation.status,
         reason=donation.status_reason,
     )
+    if from_status != DonationStatus.SUCCESSFUL and donation.status == DonationStatus.SUCCESSFUL:
+        transaction.on_commit(lambda: maybe_send_donation_thank_you_email(donation))
     return donation
 
 

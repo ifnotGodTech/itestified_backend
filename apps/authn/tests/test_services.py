@@ -287,7 +287,7 @@ class AuthnServiceTests(TestCase):
         RESEND_FROM_EMAIL="iTestified <onboarding@example.com>",
         DEFAULT_FROM_EMAIL="iTestified <no-reply@example.com>",
     )
-    @patch("apps.authn.services.commands.requests.post")
+    @patch("apps.common.services.email.requests.post")
     def test_start_password_reset_can_send_email_with_resend_provider(self, mock_post) -> None:
         user = UserFactory(email="resend-reset@example.com")
         response = Mock()
@@ -309,7 +309,7 @@ class AuthnServiceTests(TestCase):
         RESEND_API_KEY="re_test",
         RESEND_FROM_EMAIL="iTestified <onboarding@example.com>",
     )
-    @patch("apps.authn.services.commands.requests.post")
+    @patch("apps.common.services.email.requests.post")
     def test_start_password_reset_raises_delivery_error_when_resend_fails(self, mock_post) -> None:
         user = UserFactory(email="resend-failure@example.com")
         response = Mock()
@@ -325,7 +325,7 @@ class AuthnServiceTests(TestCase):
         BREVO_FROM_EMAIL="iTestified <no-reply@example.com>",
         DEFAULT_FROM_EMAIL="iTestified <fallback@example.com>",
     )
-    @patch("apps.authn.services.commands.requests.post")
+    @patch("apps.common.services.email.requests.post")
     def test_start_password_reset_can_send_email_with_brevo_provider(self, mock_post) -> None:
         user = UserFactory(email="brevo-reset@example.com")
         response = Mock()
@@ -349,7 +349,7 @@ class AuthnServiceTests(TestCase):
         BREVO_API_KEY="xkeysib-test",
         BREVO_FROM_EMAIL="iTestified <no-reply@example.com>",
     )
-    @patch("apps.authn.services.commands.requests.post")
+    @patch("apps.common.services.email.requests.post")
     def test_start_password_reset_raises_delivery_error_when_brevo_fails(self, mock_post) -> None:
         user = UserFactory(email="brevo-failure@example.com")
         response = Mock()
