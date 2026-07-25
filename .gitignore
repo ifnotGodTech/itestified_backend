@@ -11,6 +11,10 @@ media/
 .env.*
 !.env.example
 
+# Secrets
+*firebase-adminsdk*.json
+*serviceAccountKey*.json
+
 # Python
 *.egg-info/
 dist/
