@@ -143,6 +143,14 @@ RESEND_FROM_EMAIL = os.environ.get("RESEND_FROM_EMAIL", DEFAULT_FROM_EMAIL)
 BREVO_API_KEY = os.environ.get("BREVO_API_KEY", "")
 BREVO_FROM_EMAIL = os.environ.get("BREVO_FROM_EMAIL", DEFAULT_FROM_EMAIL)
 
+# Raw JSON content of a Firebase service account key (Firebase Console ->
+# Project Settings -> Service Accounts -> Generate new private key), used to
+# send push notifications via the Admin SDK. Not SMTP/APNs -- this is a
+# separate credential from the client-side google-services.json /
+# GoogleService-Info.plist already in the mobile app. Left unset until
+# provided; push sending fails closed (logged, not raised) until then.
+FIREBASE_CREDENTIALS_JSON = os.environ.get("FIREBASE_CREDENTIALS_JSON", "")
+
 GOOGLE_OAUTH_CLIENT_IDS = get_list("GOOGLE_OAUTH_CLIENT_IDS")
 GOOGLE_OAUTH_ALLOWED_ISSUERS = get_list(
     "GOOGLE_OAUTH_ALLOWED_ISSUERS",

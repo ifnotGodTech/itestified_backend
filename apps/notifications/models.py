@@ -75,6 +75,7 @@ class UserNotificationPreference(models.Model):
         related_name="notification_preferences",
     )
     allow_email_notifications = models.BooleanField(default=True)
+    allow_push_notifications = models.BooleanField(default=True)
     notify_new_donation_received = models.BooleanField(default=True)
     send_donation_thank_you_email = models.BooleanField(default=False)
     updated_at = models.DateTimeField(auto_now=True)

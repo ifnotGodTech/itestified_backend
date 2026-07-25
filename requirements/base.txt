@@ -4,3 +4,4 @@ cloudinary>=1.40,<2
 psycopg[binary]>=3.2,<3.3
 google-auth>=2.40,<3
 requests>=2.31,<3
+firebase-admin>=6.5,<8

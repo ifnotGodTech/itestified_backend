@@ -39,6 +39,7 @@ class UserNotificationPreferenceSerializer(serializers.ModelSerializer):
         model = UserNotificationPreference
         fields = (
             "allow_email_notifications",
+            "allow_push_notifications",
             "notify_new_donation_received",
             "send_donation_thank_you_email",
             "updated_at",

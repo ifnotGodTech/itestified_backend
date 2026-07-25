@@ -1,17 +1,97 @@
-from apps.notifications.models import NotificationType, UserNotification, UserNotificationPreference
+import logging
+from typing import Iterable, Optional
+
+from django.db import transaction
+
+from apps.common.exceptions import PushProviderNotConfiguredError
+from apps.common.services.push import chunked, send_push_to_tokens
+from apps.notifications.models import DeviceToken, NotificationType, UserNotification, UserNotificationPreference
 from apps.users.choices import AdminAssignmentStatus, UserAccountStatus
 from apps.users.models import AdminAssignment
 from apps.users.models import User
 
+logger = logging.getLogger(__name__)
 
+
+def send_push_to_users(
+    *,
+    user_ids: Iterable[int],
+    title: str,
+    body: str,
+    data: Optional[dict[str, str]] = None,
+) -> None:
+    """Sends a push to every device of every user in `user_ids`, honoring each
+    user's own allow_push_notifications preference (default opted-in). The
+    actual send is deferred to transaction.on_commit -- if called from inside
+    an atomic block, the push only fires once the underlying write (the
+    testimony approval, the comment, etc.) actually commits, and never at all
+    if it rolls back. Outside a transaction, on_commit runs immediately, so
+    this is safe to call unconditionally regardless of caller context.
+
+    Failures (no credentials configured, FCM error) are logged, never raised
+    -- a broken push integration must never affect the notification-worthy
+    action that triggered it.
+    """
+    user_id_list = list(dict.fromkeys(user_ids))
+    if not user_id_list:
+        return
+
+    opted_out_user_ids = set(
+        UserNotificationPreference.objects.filter(
+            user_id__in=user_id_list, allow_push_notifications=False
+        ).values_list("user_id", flat=True)
+    )
+    eligible_user_ids = [uid for uid in user_id_list if uid not in opted_out_user_ids]
+    if not eligible_user_ids:
+        return
+
+    tokens = list(
+        DeviceToken.objects.filter(user_id__in=eligible_user_ids).values_list("token", flat=True)
+    )
+    if not tokens:
+        return
+
+    transaction.on_commit(
+        lambda: _dispatch_push(tokens=tokens, title=title, body=body, data=data)
+    )
+
+
+def _dispatch_push(
+    *, tokens: list[str], title: str, body: str, data: Optional[dict[str, str]]
+) -> None:
+    try:
+        invalid_tokens: list[str] = []
+        for chunk in chunked(tokens, 500):
+            invalid_tokens.extend(
+                send_push_to_tokens(tokens=chunk, title=title, body=body, data=data)
+            )
+    except PushProviderNotConfiguredError:
+        logger.warning("notifications.push.provider_not_configured")
+        return
+    except Exception:
+        logger.exception("notifications.push.send_failed")
+        return
+
+    if invalid_tokens:
+        DeviceToken.objects.filter(token__in=invalid_tokens).delete()
+
+
+# Phase 6 Slice 10 domain decision: only testimony-approved, testimony-comment,
+# and new-video-testimony push. Rejections, submissions, and donation-received
+# stay in-app-only -- see notify_testimony_rejected / notify_testimony_submitted_to_admins
+# / notify_admins_of_new_donation below, none of which call send_push_to_users.
 def notify_testimony_approved(*, recipient, actor, testimony_title: str) -> UserNotification:
-    return UserNotification.objects.create(
+    title = "Your testimony was approved"
+    message = f'"{testimony_title}" has been approved and is now visible to others.'
+    notification = UserNotification.objects.create(
         recipient=recipient,
         actor=actor,
         notification_type=NotificationType.TESTIMONY_APPROVED,
-        title="Your testimony was approved",
-        message=f'"{testimony_title}" has been approved and is now visible to others.',
+        title=title,
+        message=message,
     )
+    send_push_to_users(user_ids=[recipient.id], title=title, body=message)
+    return notification
 
 
 def notify_testimony_rejected(*, recipient, actor, testimony_title: str, reason: str) -> UserNotification:
@@ -64,17 +144,20 @@ def notify_new_video_testimony_published(*, testimony, actor=None) -> int:
     if not recipient_ids:
         return 0
 
+    title = "New video testimony"
+    message = f'New video testimony published: "{testimony.title}".'
     rows = [
         UserNotification(
             recipient_id=user_id,
             actor=actor,
             notification_type=NotificationType.NEW_VIDEO_TESTIMONY,
-            title="New video testimony",
-            message=f'New video testimony published: "{testimony.title}".',
+            title=title,
+            message=message,
         )
         for user_id in recipient_ids
     ]
     UserNotification.objects.bulk_create(rows)
+    send_push_to_users(user_ids=recipient_ids, title=title, body=message)
     return len(rows)
 
 
@@ -116,10 +199,14 @@ def notify_admins_of_new_donation(*, donor, donor_label: str, amount_label: str)
 
 def notify_testimony_comment(*, recipient, actor, testimony_title: str) -> UserNotification:
     actor_name = getattr(actor, "full_name", "") or actor.email
-    return UserNotification.objects.create(
+    title = "New comment on your testimony"
+    message = f"{actor_name} commented on your testimony \"{testimony_title}\"."
+    notification = UserNotification.objects.create(
         recipient=recipient,
         actor=actor,
         notification_type=NotificationType.TESTIMONY_COMMENT,
-        title="New comment on your testimony",
-        message=f"{actor_name} commented on your testimony \"{testimony_title}\".",
+        title=title,
+        message=message,
     )
+    send_push_to_users(user_ids=[recipient.id], title=title, body=message)
+    return notification
