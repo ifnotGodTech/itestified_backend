@@ -43,14 +43,25 @@ def send_push_to_users(
     )
     eligible_user_ids = [uid for uid in user_id_list if uid not in opted_out_user_ids]
     if not eligible_user_ids:
+        logger.info(
+            "notifications.push.skipped_all_opted_out user_ids=%s", user_id_list
+        )
         return
 
     tokens = list(
         DeviceToken.objects.filter(user_id__in=eligible_user_ids).values_list("token", flat=True)
     )
     if not tokens:
+        logger.info(
+            "notifications.push.skipped_no_device_tokens user_ids=%s", eligible_user_ids
+        )
         return
 
+    logger.info(
+        "notifications.push.scheduled user_ids=%s token_count=%s",
+        eligible_user_ids,
+        len(tokens),
+    )
     transaction.on_commit(
         lambda: _dispatch_push(tokens=tokens, title=title, body=body, data=data)
     )
@@ -72,6 +83,11 @@ def _dispatch_push(
         logger.exception("notifications.push.send_failed")
         return
 
+    logger.info(
+        "notifications.push.sent token_count=%s invalid_count=%s",
+        len(tokens),
+        len(invalid_tokens),
+    )
     if invalid_tokens:
         DeviceToken.objects.filter(token__in=invalid_tokens).delete()
 
