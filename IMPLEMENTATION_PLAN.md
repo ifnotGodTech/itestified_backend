@@ -651,6 +651,7 @@ Build:
 - decide whether notifications are direct records, event-derived, or hybrid
 - implement unread/read and deletion/archive behavior if required
 - wire user notifications into `mobile/` and admin notifications history into `dashboard/frontend/`
+- added 2026-07-25 (not yet implemented): extend delivery beyond in-app polling to real push notifications (FCM), so users receive notifications while the app is backgrounded or fully closed, and tapping one opens the app to the relevant screen — see the new "Push Notifications" sub-slices below. This is additive: the existing in-app notification centre, polling, and everything already shipped for Slices 1-8 stays as-is and is not being removed or replaced.
 
 Sub-slices:
 
@@ -691,6 +692,26 @@ Access-control contract for this phase:
     - Both new side effects are wrapped in try/except and logged rather than raised: a failed admin notification or a failed thank-you email (e.g. Brevo down) must never roll back or fail an otherwise-successful donation write. `transaction.on_commit` (not a direct call) was used deliberately so these side effects run only after the donation's DB transaction actually commits, and never hold that transaction open during the outbound HTTP call.
     - Added `apps/donations/tests/test_notifications.py` (14 tests): preference-gating truth table for both new behaviors (opted in/out, no preference row, master-switch-off-but-specific-switch-on and vice versa), donor-exclusion when the donor is themselves an admin, failure-swallowing, and — critically — wiring tests using Django's `TestCase.captureOnCommitCallbacks(execute=True)` to prove `create_donation`/`verify_donation`/`apply_provider_callback` actually schedule these callbacks at the right transition (not just that the standalone helper functions work in isolation). Full backend suite: 163 tests (149 baseline + 14 new), same pre-existing 10 failures/10 errors in `apps.authn` (unrelated live-Brevo-in-tests issue, tracked separately), zero new regressions. `manage.py check` and `makemigrations --check` clean.
 
+#### Push Notifications (added 2026-07-25, not yet implemented)
+
+Additive to everything above — the existing in-app notification centre, the 30s foreground polling in `NotificationsController`, and all of Slices 1-8 stay exactly as they are. Today's delivery mechanism only reaches a user while the app process is alive; it cannot wake a backgrounded or fully-closed app, and never opens the app to anything. These slices add a second delivery channel (push, via FCM) alongside the existing in-app one, not a replacement for it.
+
+Current state, confirmed 2026-07-25: `firebase_core` is a mobile dependency and `Firebase.initializeApp()` is called in `lib/app/bootstrap.dart`, but nothing beyond that exists — no `firebase_messaging` package, no Android `POST_NOTIFICATIONS` permission, no iOS remote-notification background mode, no push-handling code anywhere in `mobile/lib/`, and the backend has zero device-token infrastructure (no model, no registration endpoint, nothing that could call FCM's send API). Firebase's presence is almost certainly leftover from Google Sign-In setup, not prior push work.
+
+Domain questions to lock before implementation begins (per this plan's own Working Mode rule — resolve ambiguity before schema/irreversible decisions):
+- Does push respect the existing `UserNotificationPreference` fields, or does it need its own `allow_push_notifications`-style toggle? (`allow_email_notifications` today only gates the donation thank-you email.)
+- Do all `NotificationType`s push, or only a subset (e.g. testimony approved/rejected always; testimony comments maybe not)?
+- One device token per user, or multiple (a user logged into more than one device)? What happens to a token on logout/uninstall?
+- Who owns the Apple Developer account / APNs key that Firebase needs for iOS push? (Required before iOS push can work at all, independent of any code written here.)
+
+- **Slice 9 — Register a device for push notifications** — when an authenticated user opens the app (or logs in), the app obtains an FCM device token and registers it with the backend against that user's account, so the backend knows where to deliver pushes for them
+- **Slice 10 — Receive a push notification while the app is backgrounded or closed** — when a notification-worthy event occurs (testimony approved/rejected/comment, new video, donation received, etc. — the same events already flowing through `apps/notifications/services.py`), the backend sends a push via FCM in addition to creating the existing in-app `UserNotification` record, and the OS displays it even if the app isn't running
+- **Slice 11 — Tap a notification to open the app** — tapping a push notification (from a backgrounded app, or a cold start from fully closed) opens the app and navigates directly to the relevant screen (the notification centre, or the specific content the notification refers to) via the app's existing router
+
+Access-control contract for these slices:
+- guests/unauthenticated users never receive push (no account to register a token against)
+- a device token must be removed/invalidated on logout, so a signed-out device stops receiving another user's pushes
+
 Test:
 - tests for notification creation and read-state transitions
 - API tests for list, mark-read, and admin history access
@@ -704,7 +725,7 @@ Test:
   - `notifications_screen_actions_test.dart`'s search assertion checked for `NotificationItem.subtitle` text (`"Building on what you said about resilience..."`) as a rendered widget — but `NotificationTile` never renders `subtitle` at all (it's search-index-only, combined into the haystack with `senderName`/`message`). The assertion could never have genuinely passed. Fixed to assert on the sender name that's actually visible on the surviving tile.
   - All five notification test files now pass individually in true isolation (`flutter test <single-file>`, not just batched), confirmed with repeated runs.
 
-Status: Completed. Slices 1-3 and 7 were solid as reviewed; Slice 4's mobile pagination gap, the mobile access-control gap (no client-side guest gate), and the Slice 5/6 swallowed-write-error gap were found and fixed 2026-07-24 (across two passes). Slice 8, identified 2026-07-24, is now fixed 2026-07-25 — the admin "New Donation Received" in-app notification and the donor "Thank You Email" are both wired to real behavior and gated on the correct preferences. Two follow-ups are tracked but explicitly out of scope for this phase, not blocking completion: (1) dead SMTP/Resend email-provider settings should be removed now that Brevo is confirmed as the sole live provider (`backend/.env` cleanup, user-flagged, to be discussed separately); (2) `config/settings/test.py` doesn't force a safe `EMAIL_PROVIDER` for tests, so `apps.authn`'s test suite unintentionally live-calls the real Brevo API and gets a 401 (10 pre-existing failures/errors, confirmed unrelated to this phase's changes) — worth a dedicated fix in a Phase 2/authn pass.
+Status: in progress. Slices 1-8 (in-app notifications, mobile flows, admin flows, and preference-driven donation notifications) are complete and were reviewed/fixed across three passes on 2026-07-24 and 2026-07-25 — see each slice's notes above. Slices 9-11 (push notifications via FCM), added 2026-07-25, are scoped but not yet implemented; the domain questions listed under "Push Notifications" above need answers before implementation starts. Two smaller follow-ups remain tracked, not blocking: (1) dead SMTP/Resend email-provider settings should be removed now that Brevo is confirmed as the sole live provider (`backend/.env` cleanup, to be discussed separately); (2) `config/settings/test.py` doesn't force a safe `EMAIL_PROVIDER` for tests, so `apps.authn`'s test suite unintentionally live-calls the real Brevo API and gets a 401 (10 pre-existing failures/errors, confirmed unrelated to this phase's changes) — worth a dedicated fix in a Phase 2/authn pass.
 
 ### Phase 7: Content Management Domains
 
