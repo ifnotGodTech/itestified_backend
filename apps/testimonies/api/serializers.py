@@ -93,6 +93,7 @@ class AdminTestimonyCategorySerializer(serializers.ModelSerializer):
 
 class TestimonyListSerializer(serializers.ModelSerializer):
     author_name = serializers.SerializerMethodField()
+    author_avatar = serializers.SerializerMethodField()
     category = serializers.CharField(source="category.name", read_only=True)
     category_slug = serializers.CharField(source="category.slug", read_only=True)
     thumbnail_url = serializers.SerializerMethodField()
@@ -104,6 +105,7 @@ class TestimonyListSerializer(serializers.ModelSerializer):
             "title",
             "testimony_type",
             "author_name",
+            "author_avatar",
             "category",
             "category_slug",
             "body",
@@ -120,6 +122,10 @@ class TestimonyListSerializer(serializers.ModelSerializer):
         if profile and profile.full_name.strip():
             return profile.full_name
         return obj.author.email
+
+    def get_author_avatar(self, obj: Testimony) -> str:
+        profile = getattr(obj.author, "profile", None)
+        return profile.avatar if profile else ""
 
     def get_thumbnail_url(self, obj: Testimony) -> str:
         if obj.thumbnail_url.strip():
@@ -602,6 +608,7 @@ class FavoriteTestimonySerializer(TestimonyListSerializer):
 
 class TestimonyCommentSerializer(serializers.ModelSerializer):
     author_name = serializers.SerializerMethodField()
+    author_avatar = serializers.SerializerMethodField()
     is_owner = serializers.SerializerMethodField()
     replies_count = serializers.SerializerMethodField()
     replies = serializers.SerializerMethodField()
@@ -611,6 +618,7 @@ class TestimonyCommentSerializer(serializers.ModelSerializer):
         fields = (
             "id",
             "author_name",
+            "author_avatar",
             "body",
             "created_at",
             "is_owner",
@@ -624,6 +632,10 @@ class TestimonyCommentSerializer(serializers.ModelSerializer):
         if profile and profile.full_name.strip():
             return profile.full_name
         return obj.author.email
+
+    def get_author_avatar(self, obj: TestimonyComment) -> str:
+        profile = getattr(obj.author, "profile", None)
+        return profile.avatar if profile else ""
 
     def get_is_owner(self, obj: TestimonyComment) -> bool:
         request = self.context.get("request")

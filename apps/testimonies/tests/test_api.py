@@ -131,9 +131,34 @@ class TestimonyApiTests(TestCase):
         self.assertEqual(body["title"], testimony.title)
         self.assertEqual(body["body"], testimony.body)
         self.assertEqual(body["author_name"], "Approved Author")
+        self.assertEqual(body["author_avatar"], "")
         self.assertEqual(body["category"], testimony.category.name)
         self.assertEqual(body["view_count"], testimony.view_count)
         self.assertEqual(body["comment_count"], testimony.comment_count)
+
+    def test_author_avatar_is_included_when_set(self) -> None:
+        author = UserFactory(email="avatar-author@example.com")
+        ProfileFactory(
+            user=author,
+            full_name="Avatar Author",
+            avatar="https://res.cloudinary.com/demo/image/upload/avatar.jpg",
+        )
+        testimony = Testimony.objects.create(
+            author=author,
+            category=self.category_faith,
+            title="Testimony with an avatar",
+            body="Body text.",
+            testimony_type=TestimonyType.WRITTEN,
+            status=TestimonyStatus.APPROVED,
+        )
+
+        response = self.client.get(reverse("testimony-detail", kwargs={"pk": testimony.pk}))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["author_avatar"],
+            "https://res.cloudinary.com/demo/image/upload/avatar.jpg",
+        )
 
     def test_view_increment_increases_view_count(self) -> None:
         testimony = Testimony.objects.get(title="God healed me")
@@ -537,7 +562,11 @@ class TestimonyApiTests(TestCase):
     def test_comment_list_returns_top_level_only_with_replies_count(self) -> None:
         testimony = Testimony.objects.get(title="God healed me")
         user = UserFactory(email="reply-reader@example.com")
-        ProfileFactory(user=user, full_name="Reply Reader")
+        ProfileFactory(
+            user=user,
+            full_name="Reply Reader",
+            avatar="https://res.cloudinary.com/demo/image/upload/reader.jpg",
+        )
         top = TestimonyComment.objects.create(
             testimony=testimony,
             author=user,
@@ -559,9 +588,14 @@ class TestimonyApiTests(TestCase):
         self.assertIn(top.id, ids)
         top_row = next(item for item in payload["results"] if item["id"] == top.id)
         self.assertEqual(top_row["replies_count"], 1)
+        self.assertEqual(top_row["author_avatar"], "https://res.cloudinary.com/demo/image/upload/reader.jpg")
         self.assertEqual(len(top_row["replies"]), 1)
         self.assertEqual(top_row["replies"][0]["body"], "Child reply.")
         self.assertEqual(top_row["replies"][0]["parent_comment_id"], top.id)
+        self.assertEqual(
+            top_row["replies"][0]["author_avatar"],
+            "https://res.cloudinary.com/demo/image/upload/reader.jpg",
+        )
 
     def test_comment_list_is_public_for_approved_testimony(self) -> None:
         testimony = Testimony.objects.get(title="God healed me")
