@@ -7,6 +7,7 @@ from rest_framework.views import APIView
 from django.db.models import Q
 
 from apps.authn.api.permissions import IsActiveAdmin
+from apps.common.services.media_uploads import CloudinaryUploadError, create_direct_upload_signature
 from apps.users.choices import UserAccountStatus
 from apps.users.models import Profile
 from apps.users.models import User
@@ -24,6 +25,43 @@ class CurrentProfileView(APIView):
         )
         serializer = ProfileSerializer(profile)
         return Response(serializer.data)
+
+    def patch(self, request):
+        profile, _ = Profile.objects.get_or_create(
+            user=request.user,
+            defaults={"full_name": request.user.email},
+        )
+        serializer = ProfileSerializer(profile, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class ProfileAvatarUploadSignatureView(APIView):
+    """Issues a signed Cloudinary direct-upload payload so the mobile app
+    can upload an avatar image straight to Cloudinary without proxying the
+    file bytes through this server -- same pattern as testimony media
+    uploads (see apps.common.services.media_uploads)."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        try:
+            upload_signature = create_direct_upload_signature(resource_type="avatar")
+        except CloudinaryUploadError as exc:
+            return Response({"message": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(
+            {
+                "cloud_name": upload_signature.cloud_name,
+                "api_key": upload_signature.api_key,
+                "timestamp": upload_signature.timestamp,
+                "folder": upload_signature.folder,
+                "signature": upload_signature.signature,
+                "resource_type": "image",
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class AdminUserPagination(PageNumberPagination):

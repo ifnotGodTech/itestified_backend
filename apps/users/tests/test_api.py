@@ -1,7 +1,10 @@
+from unittest.mock import patch
+
 from django.test import TestCase
 from django.urls import reverse
 from rest_framework.authtoken.models import Token
 
+from apps.common.services.media_uploads import CloudinaryUploadError, CloudinaryUploadSignature
 from apps.users.choices import AdminRoleCode, UserAccountStatus
 from apps.users.models import Profile
 from apps.users.tests.factories import AdminAssignmentFactory, AdminRoleFactory, ProfileFactory, UserFactory
@@ -25,6 +28,128 @@ class UsersApiTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["email"], user.email)
         self.assertTrue(Profile.objects.filter(user=user).exists())
+
+    def test_profile_me_patch_requires_authentication(self) -> None:
+        response = self.client.patch(
+            reverse("profile-me"),
+            {"full_name": "New Name"},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_profile_me_patch_updates_full_name_and_avatar(self) -> None:
+        user = UserFactory(email="patch-profile@example.com")
+        ProfileFactory(user=user, full_name="Old Name", avatar="")
+        token = Token.objects.create(user=user)
+
+        response = self.client.patch(
+            reverse("profile-me"),
+            {"full_name": "New Name", "avatar": "https://res.cloudinary.com/demo/image/upload/avatar.jpg"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["full_name"], "New Name")
+        self.assertEqual(response.json()["avatar"], "https://res.cloudinary.com/demo/image/upload/avatar.jpg")
+        profile = Profile.objects.get(user=user)
+        self.assertEqual(profile.full_name, "New Name")
+        self.assertEqual(profile.avatar, "https://res.cloudinary.com/demo/image/upload/avatar.jpg")
+
+    def test_profile_me_patch_supports_partial_update(self) -> None:
+        user = UserFactory(email="partial-patch@example.com")
+        ProfileFactory(user=user, full_name="Keep Me", avatar="https://res.cloudinary.com/demo/image/upload/old.jpg")
+        token = Token.objects.create(user=user)
+
+        response = self.client.patch(
+            reverse("profile-me"),
+            {"avatar": "https://res.cloudinary.com/demo/image/upload/new.jpg"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        profile = Profile.objects.get(user=user)
+        self.assertEqual(profile.full_name, "Keep Me")
+        self.assertEqual(profile.avatar, "https://res.cloudinary.com/demo/image/upload/new.jpg")
+
+    def test_profile_me_patch_rejects_empty_full_name(self) -> None:
+        user = UserFactory(email="empty-name@example.com")
+        ProfileFactory(user=user, full_name="Has A Name")
+        token = Token.objects.create(user=user)
+
+        response = self.client.patch(
+            reverse("profile-me"),
+            {"full_name": ""},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(Profile.objects.get(user=user).full_name, "Has A Name")
+
+    def test_profile_me_patch_rejects_non_url_avatar(self) -> None:
+        user = UserFactory(email="bad-avatar@example.com")
+        ProfileFactory(user=user)
+        token = Token.objects.create(user=user)
+
+        response = self.client.patch(
+            reverse("profile-me"),
+            {"avatar": "not-a-url"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_avatar_upload_signature_requires_authentication(self) -> None:
+        response = self.client.post(reverse("profile-avatar-upload-signature"))
+        self.assertEqual(response.status_code, 403)
+
+    @patch("apps.users.api.views.create_direct_upload_signature")
+    def test_avatar_upload_signature_returns_signed_cloudinary_payload(self, signature_mock) -> None:
+        user = UserFactory(email="avatar-signature@example.com")
+        token = Token.objects.create(user=user)
+        signature_mock.return_value = CloudinaryUploadSignature(
+            cloud_name="demo",
+            api_key="12345",
+            timestamp=1784720000,
+            folder="itestified/profile/avatars",
+            signature="signed-payload",
+        )
+
+        response = self.client.post(
+            reverse("profile-avatar-upload-signature"),
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {
+                "cloud_name": "demo",
+                "api_key": "12345",
+                "timestamp": 1784720000,
+                "folder": "itestified/profile/avatars",
+                "signature": "signed-payload",
+                "resource_type": "image",
+            },
+        )
+        signature_mock.assert_called_once_with(resource_type="avatar")
+
+    @patch("apps.users.api.views.create_direct_upload_signature")
+    def test_avatar_upload_signature_surfaces_configuration_error(self, signature_mock) -> None:
+        user = UserFactory(email="avatar-signature-error@example.com")
+        token = Token.objects.create(user=user)
+        signature_mock.side_effect = CloudinaryUploadError("Cloudinary direct upload credentials are incomplete.")
+
+        response = self.client.post(
+            reverse("profile-avatar-upload-signature"),
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Cloudinary", response.json()["message"])
 
     def test_admin_can_list_filter_and_deactivate_reactivate_users(self) -> None:
         admin = UserFactory(email="admin-users@example.com")

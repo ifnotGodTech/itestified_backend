@@ -6,10 +6,12 @@ from .views import (
     AdminUserListView,
     AdminUserReactivateView,
     CurrentProfileView,
+    ProfileAvatarUploadSignatureView,
 )
 
 urlpatterns = [
     path("me/", CurrentProfileView.as_view(), name="profile-me"),
+    path("me/avatar-upload-signature/", ProfileAvatarUploadSignatureView.as_view(), name="profile-avatar-upload-signature"),
     path("admin/users/", AdminUserListView.as_view(), name="admin-user-list"),
     path("admin/users/<int:user_id>/", AdminUserDetailView.as_view(), name="admin-user-detail"),
     path("admin/users/<int:user_id>/deactivate/", AdminUserDeactivateView.as_view(), name="admin-user-deactivate"),
