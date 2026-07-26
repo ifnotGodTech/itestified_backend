@@ -337,6 +337,11 @@ Mobile auth strategy note:
 - **Slice 7 — Verify reset OTP** — user enters the reset code; the backend validates it and marks it as verified
 - **Slice 8 — Set new password** — user enters a new password; the backend updates it, revokes all existing tokens and sessions, and the user must log in again with the new password
 - **Slice 9 — View own profile** — authenticated user opens the profile screen and sees their full name, email, phone number, and avatar
+- **Slice 17 — Edit own profile name and picture** — authenticated user updates their full name and/or profile picture from the Edit Profile screen; both changes are saved to the backend and persist across sessions and devices, on any device they log into
+  - Reviewed 2026-07-26 — Confirmed gap, not yet built. The "Edit Profile" screen (`account_update_edit_profile_screen.dart`) has real, reachable UI for both — tap the avatar to open a "Choose Picture"/"Delete Picture" sheet, or tap "Full Name" to edit it — but neither persists anywhere. `ProfileAccountController.choosePicture()`/`deletePicture()`/`updateName()` only mutate local in-memory state; `CurrentProfileView` (`apps/users/api/views.py`) is GET-only, so there's no backend endpoint to save to even if the mobile side were wired up. "Delete Picture" additionally shows a "Profile Picture Deleted!" success snackbar despite nothing being deleted. Bundling both fields into one slice since they're the same screen, same controller, and the same root cause (no profile update endpoint) — not worth splitting.
+  - Backend: extend `CurrentProfileView` with a `patch` accepting `full_name` and `avatar` (mirrors the existing `MyNotificationPreferencesView` GET/PATCH shape). For avatar upload itself, follow the existing Cloudinary direct-upload-signature pattern already used for testimony video/thumbnail uploads (`create_direct_upload_signature` in `apps/testimonies/services/media_uploads.py`) rather than proxying image bytes through Django — needs a new folder (e.g. `itestified/profile/avatars`); since this becomes shared between two unrelated domains, worth relocating that helper to `apps/common/` at implementation time rather than importing across app boundaries.
+  - Mobile: needs an image-picker dependency added (none exists in `pubspec.yaml` today) to let the user actually select/take a photo, plus wiring `DeviceTokenController`-style real GET/PATCH persistence into `ProfileAccountController` in place of the current local-only mutations.
+  - Explicitly out of scope: email (already has its own working, separately-designed OTP-verified update flow — do not touch) and phone number (model field exists and is exposed via the read-only GET, but no edit UI/flow exists in the app today, and none was requested).
 
 #### Admin Flows
 
@@ -356,7 +361,7 @@ Test:
 - replace auth mocks in the client(s) covered by this slice
 - verify sign-up, sign-in, Google sign-in, sign-out, protected-route, and password-reset behavior end-to-end in the connected UI(s)
 
-Status: completed
+Status: Core auth is completed and live. Slice 17 (edit own profile name/picture) added 2026-07-26, found during pre-store-submission review, not yet built — see its notes above.
 
 ### Phase 3: Testimonies Core Domain
 
