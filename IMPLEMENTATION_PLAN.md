@@ -420,6 +420,8 @@ Test:
 
 Status: completed
 
+Post-completion fix, 2026-07-26 (found via user report of "avatar doesn't show in my post"): `TestimonyListSerializer`/`TestimonyDetailSerializer`/`FavoriteTestimonySerializer` and `TestimonyCommentSerializer` computed `author_name` from `author.profile` but never exposed `author.profile.avatar` alongside it — no client could ever show a real author photo anywhere, only initials or generic icons. Added `author_avatar` to both, reusing the already-`select_related("author", "author__profile")` querysets (no new N+1). Mobile: `Testimony` gained `speakerAvatarUrl` (mapped in the single shared `_fromApiPayload` used by list/detail/search/favorites everywhere), rendered via `NetworkImage` in the testimony detail byline and home discover cards. `CommentThread.authorImageUrl` already existed and `comment_thread_card.dart` was already built to render it — it was simply never populated from real API data (`comment_thread_controller.dart::_fromApiComment`) until now. New tests: 3 backend (`test_api.py`), 2 mobile (`testimony_detail_remote_provider_test.dart`, `comment_threads_provider_test.dart`).
+
 ### Phase 4: Moderation And Review Workflows
 
 Build:
