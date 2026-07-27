@@ -901,6 +901,7 @@ Sub-slices:
 #### Admin Flows
 
 - **Slice 1 — Set the minimum supported app version** — admin opens the version settings screen and sets the minimum version required to use the app, per platform; any user on a version below this is blocked from using the app until they update
+  - Implemented 2026-07-27. New `apps.app_versions` app: `AppVersionConfig` (one row per platform, unique on `platform`), `updated_by` tracked for audit. `GET /api/v1/app-versions/admin/requirements/` always returns both platforms (blank/`null` if never configured, not a 404) so the settings screen can render both rows from the first load. `PUT /api/v1/app-versions/admin/requirements/<platform>/` validates `MAJOR.MINOR.PATCH` format before writing anything — deliberately looks up the existing row without `get_or_create` so a rejected (invalid-version) request never leaves a blank row behind. `IsAuthenticated, IsActiveAdmin, IsSuperAdmin` — this is an app-wide lever a moderator/content-admin should not have access to. Dashboard: new "App version" settings screen (`/app-version`, linked from the settings nav group alongside "My profile"/"Notification settings") — no Figma reference exists for this new feature, so it follows the existing notification-settings page's layout/style. 9 backend tests (auth/permission matrix, create, overwrite, malformed version, unknown platform), 3 dashboard tests. Full backend suite: 209 tests, same pre-existing 10/10 `apps.authn` failures/errors (live Brevo calls), zero new regressions. Full dashboard suite: 156 tests, all passing.
 - **Slice 2 — Set the latest available app version** — admin sets the latest published version, per platform; users on a version at or above the minimum but below latest see a dismissible "update available" prompt, not a block
 
 #### Mobile User Flows
@@ -914,7 +915,7 @@ Test:
 - mobile tests for both the hard-block and soft-nudge states, including guest access being blocked too
 - verify the dashboard flow end-to-end and confirm the mobile gate/nudge actually appears against a real configured value
 
-Status: not started
+Status: in progress (Slice 1 implemented 2026-07-27; Slices 2-4 not started)
 
 ## Risks To Watch Early
 
