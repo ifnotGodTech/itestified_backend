@@ -2,9 +2,10 @@ from unittest.mock import patch
 
 from django.test import TestCase
 
-from apps.notifications.models import DeviceToken, UserNotificationPreference
+from apps.notifications.models import DeviceToken, NotificationType, UserNotification, UserNotificationPreference
 from apps.notifications.services import (
     notify_admins_of_new_donation,
+    notify_all_users_of_app_update,
     notify_new_video_testimony_published,
     notify_testimony_approved,
     notify_testimony_comment,
@@ -12,6 +13,7 @@ from apps.notifications.services import (
     notify_testimony_submitted_to_admins,
     send_push_to_users,
 )
+from apps.users.choices import UserAccountStatus
 from apps.users.tests.factories import UserFactory
 
 
@@ -109,6 +111,18 @@ class SendPushToUsersTests(TestCase):
 
         self.assertTrue(DeviceToken.objects.filter(token="tok-fails").exists())
 
+    def test_platform_filter_only_targets_that_platforms_tokens(self):
+        user = UserFactory(email="cross-platform@example.com")
+        DeviceToken.objects.create(user=user, token="tok-android", platform="android")
+        DeviceToken.objects.create(user=user, token="tok-ios", platform="ios")
+
+        with patch("apps.notifications.services.send_push_to_tokens", return_value=[]) as send_mock:
+            with self.captureOnCommitCallbacks(execute=True):
+                send_push_to_users(user_ids=[user.id], title="Hi", body="Hello", platform="android")
+
+        send_mock.assert_called_once()
+        self.assertEqual(send_mock.call_args.kwargs["tokens"], ["tok-android"])
+
 
 class NotifyFunctionsPushWiringTests(TestCase):
     """Confirms only the three Slice 10-approved notification types push."""
@@ -189,4 +203,53 @@ class NotifyFunctionsPushWiringTests(TestCase):
                     donor=donor, donor_label="A Donor", amount_label="NGN 5,000.00"
                 )
 
+        send_mock.assert_not_called()
+
+
+class NotifyAllUsersOfAppUpdateTests(TestCase):
+    def test_notifies_only_users_with_a_device_on_the_target_platform(self):
+        actor = UserFactory(email="release-admin@example.com")
+        android_user = UserFactory(email="android-user@example.com")
+        DeviceToken.objects.create(user=android_user, token="tok-android-only", platform="android")
+        ios_user = UserFactory(email="ios-user@example.com")
+        DeviceToken.objects.create(user=ios_user, token="tok-ios-only", platform="ios")
+        no_device_user = UserFactory(email="no-device-user@example.com")
+
+        with patch("apps.notifications.services.send_push_to_tokens", return_value=[]) as send_mock:
+            with self.captureOnCommitCallbacks(execute=True):
+                notified_count = notify_all_users_of_app_update(actor=actor, platform="android")
+
+        self.assertEqual(notified_count, 1)
+        send_mock.assert_called_once()
+        self.assertEqual(send_mock.call_args.kwargs["tokens"], ["tok-android-only"])
+        self.assertTrue(
+            UserNotification.objects.filter(
+                recipient=android_user, notification_type=NotificationType.APP_UPDATE_AVAILABLE
+            ).exists()
+        )
+        self.assertFalse(UserNotification.objects.filter(recipient=ios_user).exists())
+        self.assertFalse(UserNotification.objects.filter(recipient=no_device_user).exists())
+
+    def test_excludes_inactive_users(self):
+        actor = UserFactory(email="release-admin-2@example.com")
+        deactivated_user = UserFactory(
+            email="deactivated-user@example.com", account_status=UserAccountStatus.DEACTIVATED
+        )
+        DeviceToken.objects.create(user=deactivated_user, token="tok-deactivated", platform="android")
+
+        with patch("apps.notifications.services.send_push_to_tokens", return_value=[]) as send_mock:
+            with self.captureOnCommitCallbacks(execute=True):
+                notified_count = notify_all_users_of_app_update(actor=actor, platform="android")
+
+        self.assertEqual(notified_count, 0)
+        send_mock.assert_not_called()
+
+    def test_returns_zero_when_no_devices_registered_for_the_platform(self):
+        actor = UserFactory(email="release-admin-3@example.com")
+
+        with patch("apps.notifications.services.send_push_to_tokens") as send_mock:
+            with self.captureOnCommitCallbacks(execute=True):
+                notified_count = notify_all_users_of_app_update(actor=actor, platform="android")
+
+        self.assertEqual(notified_count, 0)
         send_mock.assert_not_called()

@@ -1,8 +1,11 @@
+from unittest.mock import patch
+
 from django.test import TestCase
 from django.urls import reverse
 
 from apps.app_versions.choices import AppPlatform
 from apps.app_versions.models import AppVersionConfig
+from apps.notifications.models import DeviceToken
 from apps.users.choices import AdminRoleCode
 from apps.users.tests.factories import AdminAssignmentFactory, AdminRoleFactory, UserFactory
 
@@ -201,6 +204,63 @@ class AppVersionAdminApiTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 403)
+
+
+class AppVersionNotifyApiTests(TestCase):
+    def _super_admin(self, email: str):
+        admin = UserFactory(email=email)
+        AdminAssignmentFactory(user=admin, role=AdminRoleFactory(code=AdminRoleCode.SUPER_ADMIN))
+        return admin
+
+    def test_notify_requires_authentication(self) -> None:
+        response = self.client.post(
+            reverse("admin-app-version-notify", kwargs={"platform": AppPlatform.ANDROID})
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_notify_denies_active_admin_who_is_not_super_admin(self) -> None:
+        moderator = UserFactory(email="moderator-notify@example.com")
+        AdminAssignmentFactory(user=moderator, role=AdminRoleFactory(code=AdminRoleCode.MODERATOR))
+        self.client.force_login(moderator)
+
+        response = self.client.post(
+            reverse("admin-app-version-notify", kwargs={"platform": AppPlatform.ANDROID})
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_notify_rejects_unknown_platform(self) -> None:
+        admin = self._super_admin("super-notify-platform@example.com")
+        self.client.force_login(admin)
+
+        response = self.client.post(
+            reverse("admin-app-version-notify", kwargs={"platform": "windows"})
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_notify_rejects_a_never_configured_platform(self) -> None:
+        admin = self._super_admin("super-notify-unconfigured@example.com")
+        self.client.force_login(admin)
+
+        response = self.client.post(
+            reverse("admin-app-version-notify", kwargs={"platform": AppPlatform.ANDROID})
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_notify_broadcasts_to_users_on_that_platform(self) -> None:
+        admin = self._super_admin("super-notify@example.com")
+        self.client.force_login(admin)
+        AppVersionConfig.objects.create(platform=AppPlatform.ANDROID, minimum_version="1.0.0")
+        recipient = UserFactory(email="notify-recipient@example.com")
+        DeviceToken.objects.create(user=recipient, token="tok-notify", platform="android")
+
+        with patch("apps.notifications.services.send_push_to_tokens", return_value=[]):
+            with self.captureOnCommitCallbacks(execute=True):
+                response = self.client.post(
+                    reverse("admin-app-version-notify", kwargs={"platform": AppPlatform.ANDROID})
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["notified_count"], 1)
 
 
 class MobileAppVersionRequirementApiTests(TestCase):

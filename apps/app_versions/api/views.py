@@ -8,6 +8,7 @@ from rest_framework.views import APIView
 from apps.authn.api.permissions import IsActiveAdmin, IsSuperAdmin
 from apps.app_versions.choices import AppPlatform
 from apps.app_versions.models import AppVersionConfig
+from apps.notifications.services import notify_all_users_of_app_update
 
 from .serializers import AppVersionConfigSerializer
 
@@ -60,6 +61,28 @@ class AdminAppVersionUpdateView(APIView):
         serializer.is_valid(raise_exception=True)
         serializer.save(platform=platform, updated_by=request.user)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class AdminAppVersionNotifyView(APIView):
+    """Explicitly triggered by an admin -- never fired automatically when
+    saving a version, so a typo fix or minor tweak doesn't mass-notify every
+    user on this platform."""
+
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsAuthenticated, IsActiveAdmin, IsSuperAdmin]
+
+    def post(self, request, platform: str):
+        if platform not in AppPlatform.values:
+            return Response(
+                {"message": "Unknown platform."}, status=status.HTTP_400_BAD_REQUEST
+            )
+        if not AppVersionConfig.objects.filter(platform=platform).exists():
+            return Response(
+                {"message": "Set a version for this platform before notifying users."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        notified_count = notify_all_users_of_app_update(actor=request.user, platform=platform)
+        return Response({"notified_count": notified_count}, status=status.HTTP_200_OK)
 
 
 @api_view(["GET"])

@@ -19,10 +19,13 @@ def send_push_to_users(
     title: str,
     body: str,
     data: Optional[dict[str, str]] = None,
+    platform: Optional[str] = None,
 ) -> None:
     """Sends a push to every device of every user in `user_ids`, honoring each
-    user's own allow_push_notifications preference (default opted-in). The
-    actual send is deferred to transaction.on_commit -- if called from inside
+    user's own allow_push_notifications preference (default opted-in). Pass
+    `platform` to only push to that platform's device tokens (e.g. an
+    Android-only release shouldn't nudge someone's iOS device). The actual
+    send is deferred to transaction.on_commit -- if called from inside
     an atomic block, the push only fires once the underlying write (the
     testimony approval, the comment, etc.) actually commits, and never at all
     if it rolls back. Outside a transaction, on_commit runs immediately, so
@@ -48,9 +51,10 @@ def send_push_to_users(
         )
         return
 
-    tokens = list(
-        DeviceToken.objects.filter(user_id__in=eligible_user_ids).values_list("token", flat=True)
-    )
+    tokens_qs = DeviceToken.objects.filter(user_id__in=eligible_user_ids)
+    if platform is not None:
+        tokens_qs = tokens_qs.filter(platform=platform)
+    tokens = list(tokens_qs.values_list("token", flat=True))
     if not tokens:
         logger.info(
             "notifications.push.skipped_no_device_tokens user_ids=%s", eligible_user_ids
@@ -210,6 +214,41 @@ def notify_admins_of_new_donation(*, donor, donor_label: str, amount_label: str)
     if not rows:
         return 0
     UserNotification.objects.bulk_create(rows)
+    return len(rows)
+
+
+def notify_all_users_of_app_update(*, actor, platform: str) -> int:
+    """Broadcasts an in-app + push notification to every active user with a
+    registered device on `platform`. Admin-triggered explicitly via a
+    dedicated "Notify users" action -- deliberately decoupled from saving the
+    version config itself, so correcting a typo or tweaking a version number
+    doesn't mass-notify everyone. Scoped to `platform` because an Android-only
+    release shouldn't nudge iOS users (and vice versa)."""
+    recipient_ids = list(
+        User.objects.filter(
+            account_status=UserAccountStatus.ACTIVE,
+            device_tokens__platform=platform,
+        )
+        .values_list("id", flat=True)
+        .distinct()
+    )
+    if not recipient_ids:
+        return 0
+
+    title = "New version available"
+    message = "A new version of iTestified is available. Update now to get the latest experience."
+    rows = [
+        UserNotification(
+            recipient_id=user_id,
+            actor=actor,
+            notification_type=NotificationType.APP_UPDATE_AVAILABLE,
+            title=title,
+            message=message,
+        )
+        for user_id in recipient_ids
+    ]
+    UserNotification.objects.bulk_create(rows)
+    send_push_to_users(user_ids=recipient_ids, title=title, body=message, platform=platform)
     return len(rows)
 
 

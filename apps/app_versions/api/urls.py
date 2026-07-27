@@ -2,6 +2,7 @@ from django.urls import path
 
 from .views import (
     AdminAppVersionListView,
+    AdminAppVersionNotifyView,
     AdminAppVersionUpdateView,
     mobile_app_version_requirement_view,
 )
@@ -12,6 +13,11 @@ urlpatterns = [
         "admin/requirements/<str:platform>/",
         AdminAppVersionUpdateView.as_view(),
         name="admin-app-version-update",
+    ),
+    path(
+        "admin/requirements/<str:platform>/notify/",
+        AdminAppVersionNotifyView.as_view(),
+        name="admin-app-version-notify",
     ),
     path(
         "requirements/<str:platform>/",
