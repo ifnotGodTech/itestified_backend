@@ -888,6 +888,34 @@ Test:
 
 Status: not started
 
+### Phase 10: App Release & Version Management
+
+Build:
+- implement a per-platform version requirement config (Android and iOS tracked separately, since they can ship independently)
+- implement an admin-facing screen to set/update it
+- implement a public, unauthenticated endpoint mobile can check on every launch (must work for guests too, before login)
+- wire mobile to check on launch/resume and gate or nudge accordingly
+
+Sub-slices:
+
+#### Admin Flows
+
+- **Slice 1 — Set the minimum supported app version** — admin opens the version settings screen and sets the minimum version required to use the app, per platform; any user on a version below this is blocked from using the app until they update
+- **Slice 2 — Set the latest available app version** — admin sets the latest published version, per platform; users on a version at or above the minimum but below latest see a dismissible "update available" prompt, not a block
+
+#### Mobile User Flows
+
+- **Slice 3 — Blocked on an outdated required version** — user opens the app below the configured minimum version; sees a full-screen, non-dismissible update-required screen with a button linking to the app's store listing; cannot reach any other screen (including guest browsing) until they update
+- **Slice 4 — Reminded of an available update** — user opens the app at or above minimum but below latest; sees a dismissible banner suggesting they update, with a link to the store listing; can dismiss it and continue using the app normally, and it doesn't reappear again this session once dismissed
+
+Test:
+- API tests for the admin-only write endpoint and the public read endpoint
+- version-comparison unit tests (equal, above, below, malformed input)
+- mobile tests for both the hard-block and soft-nudge states, including guest access being blocked too
+- verify the dashboard flow end-to-end and confirm the mobile gate/nudge actually appears against a real configured value
+
+Status: not started
+
 ## Risks To Watch Early
 
 - building schema directly from UI mocks instead of real domain needs
