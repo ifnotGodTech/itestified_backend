@@ -43,6 +43,7 @@ class AppVersionAdminApiTests(TestCase):
         platforms = {row["platform"]: row for row in payload}
         self.assertEqual(set(platforms.keys()), {AppPlatform.ANDROID, AppPlatform.IOS})
         self.assertEqual(platforms[AppPlatform.ANDROID]["minimum_version"], "")
+        self.assertEqual(platforms[AppPlatform.ANDROID]["latest_version"], "")
         self.assertIsNone(platforms[AppPlatform.ANDROID]["updated_at"])
 
     def test_update_creates_a_new_requirement_and_records_who_set_it(self) -> None:
@@ -102,6 +103,78 @@ class AppVersionAdminApiTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 400)
+
+    def test_update_sets_latest_version_alongside_minimum(self) -> None:
+        admin = self._super_admin("super-latest@example.com")
+        self.client.force_login(admin)
+
+        response = self.client.put(
+            reverse("admin-app-version-update", kwargs={"platform": AppPlatform.ANDROID}),
+            {"minimum_version": "1.0.0", "latest_version": "1.5.0"},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        instance = AppVersionConfig.objects.get(platform=AppPlatform.ANDROID)
+        self.assertEqual(instance.minimum_version, "1.0.0")
+        self.assertEqual(instance.latest_version, "1.5.0")
+
+    def test_update_allows_blank_latest_version(self) -> None:
+        admin = self._super_admin("super-blank-latest@example.com")
+        self.client.force_login(admin)
+
+        response = self.client.put(
+            reverse("admin-app-version-update", kwargs={"platform": AppPlatform.ANDROID}),
+            {"minimum_version": "1.0.0", "latest_version": ""},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            AppVersionConfig.objects.get(platform=AppPlatform.ANDROID).latest_version, ""
+        )
+
+    def test_update_rejects_malformed_latest_version(self) -> None:
+        admin = self._super_admin("super-malformed-latest@example.com")
+        self.client.force_login(admin)
+
+        response = self.client.put(
+            reverse("admin-app-version-update", kwargs={"platform": AppPlatform.ANDROID}),
+            {"minimum_version": "1.0.0", "latest_version": "not-a-version"},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(AppVersionConfig.objects.filter(platform=AppPlatform.ANDROID).exists())
+
+    def test_update_rejects_latest_version_lower_than_minimum(self) -> None:
+        admin = self._super_admin("super-inverted@example.com")
+        self.client.force_login(admin)
+
+        response = self.client.put(
+            reverse("admin-app-version-update", kwargs={"platform": AppPlatform.ANDROID}),
+            {"minimum_version": "2.0.0", "latest_version": "1.9.0"},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(AppVersionConfig.objects.filter(platform=AppPlatform.ANDROID).exists())
+
+    def test_update_rejects_latest_lower_than_existing_minimum_when_only_latest_submitted(self) -> None:
+        admin = self._super_admin("super-partial-inverted@example.com")
+        self.client.force_login(admin)
+        AppVersionConfig.objects.create(platform=AppPlatform.ANDROID, minimum_version="3.0.0")
+
+        response = self.client.put(
+            reverse("admin-app-version-update", kwargs={"platform": AppPlatform.ANDROID}),
+            {"latest_version": "2.0.0"},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            AppVersionConfig.objects.get(platform=AppPlatform.ANDROID).latest_version, ""
+        )
 
     def test_update_denies_active_admin_who_is_not_super_admin(self) -> None:
         moderator = UserFactory(email="moderator-update@example.com")

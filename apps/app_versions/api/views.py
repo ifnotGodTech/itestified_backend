@@ -30,7 +30,12 @@ class AdminAppVersionListView(APIView):
                 payload.append(AppVersionConfigSerializer(instance).data)
             else:
                 payload.append(
-                    {"platform": platform, "minimum_version": "", "updated_at": None}
+                    {
+                        "platform": platform,
+                        "minimum_version": "",
+                        "latest_version": "",
+                        "updated_at": None,
+                    }
                 )
         return Response(payload, status=status.HTTP_200_OK)
 
