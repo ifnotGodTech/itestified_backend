@@ -56,6 +56,22 @@ class UsersApiTests(TestCase):
         self.assertEqual(profile.full_name, "New Name")
         self.assertEqual(profile.avatar, "https://res.cloudinary.com/demo/image/upload/avatar.jpg")
 
+    def test_profile_me_patch_normalizes_full_name_casing(self) -> None:
+        user = UserFactory(email="caps-name@example.com")
+        ProfileFactory(user=user, full_name="Old Name")
+        token = Token.objects.create(user=user)
+
+        response = self.client.patch(
+            reverse("profile-me"),
+            {"full_name": "AIGUOSATILE AISOSA"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["full_name"], "Aiguosatile Aisosa")
+        self.assertEqual(Profile.objects.get(user=user).full_name, "Aiguosatile Aisosa")
+
     def test_profile_me_patch_supports_partial_update(self) -> None:
         user = UserFactory(email="partial-patch@example.com")
         ProfileFactory(user=user, full_name="Keep Me", avatar="https://res.cloudinary.com/demo/image/upload/old.jpg")

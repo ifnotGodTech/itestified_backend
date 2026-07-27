@@ -21,6 +21,7 @@ from apps.common.services.email import send_email as _shared_send_email
 from apps.users.choices import AdminAssignmentStatus, AdminRoleCode
 from apps.users.models import AdminAssignment, AdminRole, Profile, User
 from apps.users.selectors import get_active_admin_assignment
+from apps.users.validators import normalize_full_name
 
 from ..choices import ChallengePurpose
 from ..exceptions import AuthnError, ChallengeVerificationError, EmailDeliveryError
@@ -216,7 +217,7 @@ def start_registration(*, full_name: str, email: str) -> EmailChallenge:
     challenge = EmailChallenge.objects.create(
         email=email.lower(),
         purpose=ChallengePurpose.REGISTRATION,
-        full_name=full_name.strip(),
+        full_name=normalize_full_name(full_name),
         code=_generate_otp(),
         expires_at=_challenge_expiry(),
     )
@@ -310,7 +311,7 @@ def login_mobile_user_with_google(*, id_token: str, platform: Optional[str] = No
     issuer = str(payload.get("iss", "")).strip()
     email = str(payload.get("email", "")).strip().lower()
     email_verified = payload.get("email_verified")
-    full_name = str(payload.get("name", "")).strip()
+    full_name = normalize_full_name(str(payload.get("name", "")))
 
     if audience not in settings.GOOGLE_OAUTH_CLIENT_IDS:
         raise AuthnError("Google token audience is not allowed.")
@@ -341,7 +342,7 @@ def login_mobile_user_with_google(*, id_token: str, platform: Optional[str] = No
             user.username = email
             user.save(update_fields=["email", "username"])
 
-    profile_full_name = full_name if full_name else email.split("@")[0].replace(".", " ").title()
+    profile_full_name = full_name if full_name else normalize_full_name(email.split("@")[0].replace(".", " "))
     profile, _created = Profile.objects.get_or_create(user=user, defaults={"full_name": profile_full_name})
     if full_name and not profile.full_name.strip():
         profile.full_name = full_name

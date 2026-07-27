@@ -5,7 +5,7 @@ from django.urls import reverse
 from django.test.client import Client
 
 from apps.users.choices import AdminRoleCode
-from apps.users.models import AdminRole
+from apps.users.models import AdminRole, Profile
 from apps.authn.exceptions import AuthnError
 from apps.authn.models import UserSession
 from apps.users.tests.factories import UserFactory
@@ -45,6 +45,29 @@ class AuthnApiTests(TestCase):
         )
         self.assertEqual(login_response.status_code, 200)
         self.assertIn("token", login_response.json())
+
+    @override_settings(OTP_HINT_IN_RESPONSE=True)
+    def test_mobile_registration_normalizes_full_name_casing(self) -> None:
+        start_response = self.client.post(
+            reverse("auth-mobile-register-start"),
+            {"full_name": "AIGUOSATILE AISOSA", "email": "aiguosatile@example.com"},
+            content_type="application/json",
+        )
+        otp = start_response.json()["otp_hint"]
+
+        self.client.post(
+            reverse("auth-mobile-register-verify"),
+            {"email": "aiguosatile@example.com", "otp": otp},
+            content_type="application/json",
+        )
+        self.client.post(
+            reverse("auth-mobile-register-complete"),
+            {"email": "aiguosatile@example.com", "password": "StrongPass!1"},
+            content_type="application/json",
+        )
+
+        profile = Profile.objects.get(user__email="aiguosatile@example.com")
+        self.assertEqual(profile.full_name, "Aiguosatile Aisosa")
 
     def test_super_admin_login_and_session_flow(self) -> None:
         _user, temporary_password = bootstrap_super_admin(email="admin@example.com", full_name="Admin One")
@@ -92,6 +115,30 @@ class AuthnApiTests(TestCase):
         self.assertIn("phone_number", body["user"])
         self.assertIn("avatar_url", body["user"])
         self.assertTrue(body["is_new_user"])
+
+    @override_settings(
+        GOOGLE_OAUTH_CLIENT_IDS=["android-client-id.apps.googleusercontent.com"],
+        GOOGLE_OAUTH_ALLOWED_ISSUERS=["https://accounts.google.com", "accounts.google.com"],
+    )
+    @patch("apps.authn.services.commands._verify_google_id_token_payload")
+    def test_mobile_google_sign_in_normalizes_full_name_casing(self, mock_verify) -> None:
+        mock_verify.return_value = {
+            "aud": "android-client-id.apps.googleusercontent.com",
+            "iss": "https://accounts.google.com",
+            "email": "google-caps@example.com",
+            "email_verified": True,
+            "name": "JOHN DOE",
+        }
+
+        response = self.client.post(
+            reverse("auth-mobile-google"),
+            {"id_token": "valid-token", "platform": "android"},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        profile = Profile.objects.get(user__email="google-caps@example.com")
+        self.assertEqual(profile.full_name, "John Doe")
 
     @override_settings(OTP_HINT_IN_RESPONSE=True)
     def test_admin_invitation_requires_csrf_token(self) -> None:
