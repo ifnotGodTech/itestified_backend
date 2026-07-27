@@ -926,6 +926,33 @@ Status: Completed. All 5 slices implemented 2026-07-27 — see each slice's note
 
 Post-completion review (2026-07-27): audited the admin write path across backend/dashboard and found two related correctness gaps, both fixed. (1) Submitting only `latest_version` for a never-configured platform was silently accepted and persisted a row with a blank `minimum_version`, contradicting the model's own invariant that "no minimum required" means no row at all — `partial=True` skipped the required-field check and the cross-field validator short-circuited with nothing to fall back on. Fixed by rejecting creation when `minimum_version` is missing and there's no existing instance; regression test added. (2) The dashboard route omitted `minimum_version` from the PUT body whenever the input was blank, so clearing that field on an already-configured platform and saving silently left the old value untouched while still reporting "updated successfully" — fixed by always sending the field as submitted, letting the backend's own validation reject it. Also fixed non-format failures (e.g. an expired admin session) being bucketed into the same "enter valid versions" message as a real validation error, and a bug where the redirect-carried error state was silently dropped once the follow-up page-load GET succeeded.
 
+Post-completion refinement (2026-07-27): added an optional build-number tie-breaker to the version comparison (`MAJOR.MINOR.PATCH+BUILD`, e.g. `1.0.0+40`), raised by the admin after trying to enter a pubspec-style version string. Without this, two installs on the same `MAJOR.MINOR.PATCH` but different build numbers (common on Play Store, where a metadata-only resubmission bumps `versionCode` without a real version bump) were indistinguishable — there was no way to force everyone below a specific build to update. Build number is compared only as a tie-breaker when the three-part version is equal, and defaults to 0 when omitted on either side, so every existing bare `1.2.0`-style entry keeps working unchanged. Mobile now reads `PackageInfo.fromPlatform().buildNumber` (previously unused) alongside `.version` and combines them before comparing. Backend regex, dashboard input validation/copy, and the mobile comparator were all updated together; 5 new backend tests, 6 new mobile unit tests, 1 new mobile controller test proving the build number is actually read from `PackageInfo` and used end-to-end.
+
+### Phase 11: Testimony Sharing
+
+Build:
+- a public, branded web page per testimony (video or written) — Open Graph tags for a rich preview (thumbnail for video, cover text for written), title, "Get the app" store badges; new public route on the existing dashboard Next.js app, at a dedicated subdomain (e.g. `share.itestified.app`) rather than the apex domain, so it's isolated from any future marketing site; backed by the existing `PublicTestimonyDetailView` API — no new backend endpoint needed
+- Android App Links (`intent-filter` + `assetlinks.json` hosted at that subdomain) so tapping a shared link opens the app directly to that testimony if installed, or the web fallback page if not; reuses Phase 9's `navigatorKey` pattern for in-app routing
+- iOS gets the same web page as a plain browser fallback for now — Universal Links deferred until the Apple Developer account question (same open blocker as iOS push, Phase 9) is resolved
+- wire the mobile share sheet for real: WhatsApp (pre-filled caption + link via `wa.me`) + native OS share sheet via `share_plus` for everything else (Facebook, Twitter, SMS, copy-link, Instagram-as-manual-paste); caption includes the testimony title and iTestified branding alongside the link
+
+Context: the existing share bottom sheet (`showTestimonyShareMenu`) is a decorative mockup — WhatsApp/Instagram/Facebook/More icons render but none have an `onTap` handler, no share package is even a dependency, and nothing is ever actually shared. Fixing that in isolation would just leak a raw, unbranded `res.cloudinary.com` CDN URL with no path back to the platform — hence the public branded page and deep-link work, not just wiring the existing buttons.
+
+Sub-slices:
+
+- **Slice 1 — Public testimony share page** — a public, unauthenticated web page per testimony (video or written) exists at the new subdomain, with Open Graph tags so pasting the link into WhatsApp/Facebook/etc shows a branded preview (thumbnail/title), plus "Get the app" store badges for a visitor without the app installed
+- **Slice 2 — Share a testimony from the app** — user taps share on a testimony and gets a real WhatsApp share (pre-filled caption + link) or the native OS share sheet, both carrying a branded caption and the Slice 1 link — replaces the current decorative bottom sheet
+- **Slice 3 — Open a shared link directly into the app (Android)** — on Android, tapping a shared testimony link opens the app straight to that testimony if installed (verified App Links), rather than the browser page
+- **Slice 4 — Open a shared link directly into the app (iOS)** — same as Slice 3 for iOS via Universal Links; blocked until the Apple Developer account is resolved, not started
+
+Test:
+- Open Graph tags render correctly for both video and written testimonies (title, thumbnail/cover, description)
+- share flow produces the correct caption + link for both WhatsApp and the OS share sheet
+- Android App Links verification (`assetlinks.json` matches the release signing certificate) and that the link opens the correct testimony in-app
+- link opened without the app installed lands on the fallback web page with working store badges
+
+Status: not started — planning complete, sequencing agreed (Android now, iOS deferred to the Apple Developer account resolution), domain confirmed available (`itestified.app`, admin controls DNS).
+
 ## Risks To Watch Early
 
 - building schema directly from UI mocks instead of real domain needs

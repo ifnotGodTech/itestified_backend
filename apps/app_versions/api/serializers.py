@@ -4,12 +4,19 @@ from rest_framework import serializers
 
 from apps.app_versions.models import AppVersionConfig
 
-VERSION_PATTERN = re.compile(r"^\d+\.\d+\.\d+$")
+VERSION_PATTERN = re.compile(r"^\d+\.\d+\.\d+(\+\d+)?$")
 
 
-def _version_tuple(value: str) -> tuple[int, int, int]:
-    major, minor, patch = value.split(".")
-    return (int(major), int(minor), int(patch))
+def _version_tuple(value: str) -> tuple[int, int, int, int]:
+    # Build number is an optional tie-breaker: apps that ship multiple
+    # builds under the same MAJOR.MINOR.PATCH (e.g. a Play Store metadata
+    # resubmission) can still be gated on a specific build. Omitted on
+    # either side defaults to 0, so bare "1.2.0" entries keep working
+    # exactly as before.
+    version_part, _, build_part = value.partition("+")
+    major, minor, patch = version_part.split(".")
+    build = int(build_part) if build_part else 0
+    return (int(major), int(minor), int(patch), build)
 
 
 class AppVersionConfigSerializer(serializers.ModelSerializer):
@@ -22,7 +29,8 @@ class AppVersionConfigSerializer(serializers.ModelSerializer):
         value = value.strip()
         if not VERSION_PATTERN.match(value):
             raise serializers.ValidationError(
-                "Version must be in the form MAJOR.MINOR.PATCH, e.g. 1.2.0."
+                "Version must be in the form MAJOR.MINOR.PATCH, e.g. 1.2.0 "
+                "(optionally with a build number, e.g. 1.2.0+40)."
             )
         return value
 

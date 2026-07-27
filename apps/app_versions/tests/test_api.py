@@ -179,6 +179,62 @@ class AppVersionAdminApiTests(TestCase):
             AppVersionConfig.objects.get(platform=AppPlatform.ANDROID).latest_version, ""
         )
 
+    def test_update_accepts_a_version_with_a_build_number(self) -> None:
+        admin = self._super_admin("super-build-number@example.com")
+        self.client.force_login(admin)
+
+        response = self.client.put(
+            reverse("admin-app-version-update", kwargs={"platform": AppPlatform.ANDROID}),
+            {"minimum_version": "1.0.0+40", "latest_version": "1.0.0+40"},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        instance = AppVersionConfig.objects.get(platform=AppPlatform.ANDROID)
+        self.assertEqual(instance.minimum_version, "1.0.0+40")
+        self.assertEqual(instance.latest_version, "1.0.0+40")
+
+    def test_update_rejects_latest_build_lower_than_minimum_build_at_the_same_version(self) -> None:
+        admin = self._super_admin("super-build-inverted@example.com")
+        self.client.force_login(admin)
+
+        response = self.client.put(
+            reverse("admin-app-version-update", kwargs={"platform": AppPlatform.ANDROID}),
+            {"minimum_version": "1.0.0+40", "latest_version": "1.0.0+10"},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(AppVersionConfig.objects.filter(platform=AppPlatform.ANDROID).exists())
+
+    def test_update_treats_a_bare_version_as_build_zero_for_comparison(self) -> None:
+        admin = self._super_admin("super-build-bare@example.com")
+        self.client.force_login(admin)
+
+        # minimum has no build number (implicit 0); latest at the same
+        # version but an explicit build of 0 is not "lower", so this must
+        # be accepted rather than rejected as an inverted pair.
+        response = self.client.put(
+            reverse("admin-app-version-update", kwargs={"platform": AppPlatform.ANDROID}),
+            {"minimum_version": "1.0.0", "latest_version": "1.0.0+0"},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_update_rejects_malformed_build_number(self) -> None:
+        admin = self._super_admin("super-build-malformed@example.com")
+        self.client.force_login(admin)
+
+        response = self.client.put(
+            reverse("admin-app-version-update", kwargs={"platform": AppPlatform.ANDROID}),
+            {"minimum_version": "1.0.0+abc"},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(AppVersionConfig.objects.filter(platform=AppPlatform.ANDROID).exists())
+
     def test_update_rejects_latest_only_submission_for_a_never_configured_platform(self) -> None:
         admin = self._super_admin("super-latest-only-new@example.com")
         self.client.force_login(admin)
