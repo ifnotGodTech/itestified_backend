@@ -1,5 +1,6 @@
 from rest_framework import status
 from rest_framework.authentication import SessionAuthentication
+from rest_framework.decorators import api_view, authentication_classes, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -59,3 +60,24 @@ class AdminAppVersionUpdateView(APIView):
         serializer.is_valid(raise_exception=True)
         serializer.save(platform=platform, updated_by=request.user)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+@api_view(["GET"])
+@authentication_classes([])
+@permission_classes([])
+def mobile_app_version_requirement_view(request, platform: str):
+    """Public, unauthenticated per-platform version check -- called by the
+    mobile app on every launch/resume, including guests before login."""
+    if platform not in AppPlatform.values:
+        return Response({"message": "Unknown platform."}, status=status.HTTP_404_NOT_FOUND)
+    instance = AppVersionConfig.objects.filter(platform=platform).first()
+    if instance is not None:
+        data = AppVersionConfigSerializer(instance).data
+    else:
+        data = {
+            "platform": platform,
+            "minimum_version": "",
+            "latest_version": "",
+            "updated_at": None,
+        }
+    return Response({"result": data}, status=status.HTTP_200_OK)

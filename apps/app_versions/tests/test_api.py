@@ -188,3 +188,38 @@ class AppVersionAdminApiTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 403)
+
+
+class MobileAppVersionRequirementApiTests(TestCase):
+    def test_returns_blank_defaults_when_platform_never_configured(self) -> None:
+        response = self.client.get(
+            reverse("mobile-app-version-requirement", kwargs={"platform": AppPlatform.ANDROID})
+        )
+
+        self.assertEqual(response.status_code, 200)
+        result = response.json()["result"]
+        self.assertEqual(result["platform"], AppPlatform.ANDROID)
+        self.assertEqual(result["minimum_version"], "")
+        self.assertEqual(result["latest_version"], "")
+        self.assertIsNone(result["updated_at"])
+
+    def test_returns_configured_values_without_authentication(self) -> None:
+        AppVersionConfig.objects.create(
+            platform=AppPlatform.IOS, minimum_version="1.0.0", latest_version="1.5.0"
+        )
+
+        response = self.client.get(
+            reverse("mobile-app-version-requirement", kwargs={"platform": AppPlatform.IOS})
+        )
+
+        self.assertEqual(response.status_code, 200)
+        result = response.json()["result"]
+        self.assertEqual(result["minimum_version"], "1.0.0")
+        self.assertEqual(result["latest_version"], "1.5.0")
+
+    def test_rejects_unknown_platform(self) -> None:
+        response = self.client.get(
+            reverse("mobile-app-version-requirement", kwargs={"platform": "windows"})
+        )
+
+        self.assertEqual(response.status_code, 404)
