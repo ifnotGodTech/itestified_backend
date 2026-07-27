@@ -805,7 +805,9 @@ Test:
 - replace content mocks in the connected UI scope
 - verify dashboard publishing/curation actions and resulting mobile content visibility
 
-Status: in progress (Slices 1-8 implemented)
+Status: Completed. All 8 slices implemented.
+
+Post-completion review (2026-07-27): live-testing Slice 1's upload form surfaced three gaps, all fixed. (1) Category was a free-text `CharField` with no dropdown, unlike testimonies which have a full managed category model — added `InspirationalPictureCategory` (mirroring `TestimonyCategory`: slug auto-generation, `is_active`, admin CRUD endpoints) and converted `InspirationalPicture.category` to a FK via a 3-step migration (add FK alongside the old field, backfill by matching/creating categories from existing free-text values, drop the old field and rename) so already-typed category strings survive the change. (2) The "choose or drag file to upload" box was decorative markup — no `<input type="file">`, no handlers, nothing behind it; the only way to add a picture was pasting an already-hosted URL. Added a picture-scoped Cloudinary direct-upload-signature endpoint (reusing the existing generic `create_direct_upload_signature` helper, which already supported `"image"`, just needed its own folder) and converted the dashboard upload screen to a client component that uploads the file directly to Cloudinary before submitting — same proven pattern as testimony video uploads. (3) The "Picture Source" field's placeholder (`"https://..."`) was confusingly identical to the image-URL field's; fixed with a concrete example and clarifying label now that the real upload flow replaces the old dual-URL-input confusion entirely. Also added a "Manage Categories" entry point (create/rename/deactivate/reactivate) matching the existing testimony-category management UI, and the edit modal's category field got the same dropdown treatment.
 
 ### Phase 8: Reviews, Analytics, And Operational Admin Features
 
