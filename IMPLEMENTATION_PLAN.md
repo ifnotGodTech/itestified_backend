@@ -424,6 +424,8 @@ Status: completed
 
 Post-completion fix, 2026-07-26 (found via user report of "avatar doesn't show in my post"): `TestimonyListSerializer`/`TestimonyDetailSerializer`/`FavoriteTestimonySerializer` and `TestimonyCommentSerializer` computed `author_name` from `author.profile` but never exposed `author.profile.avatar` alongside it — no client could ever show a real author photo anywhere, only initials or generic icons. Added `author_avatar` to both, reusing the already-`select_related("author", "author__profile")` querysets (no new N+1). Mobile: `Testimony` gained `speakerAvatarUrl` (mapped in the single shared `_fromApiPayload` used by list/detail/search/favorites everywhere), rendered via `NetworkImage` in the testimony detail byline and home discover cards. `CommentThread.authorImageUrl` already existed and `comment_thread_card.dart` was already built to render it — it was simply never populated from real API data (`comment_thread_controller.dart::_fromApiComment`) until now. New tests: 3 backend (`test_api.py`), 2 mobile (`testimony_detail_remote_provider_test.dart`, `comment_threads_provider_test.dart`).
 
+Follow-up fix, 2026-07-26: user reported the avatar showed correctly on testimonies/comments but not on their own home screen. Found a third, separate avatar rendering site missed in the pass above — `RegisteredHeader` (the home screen's "Welcome, X!" greeting banner, `home_discover_headers.dart`) renders its own independent fake letter-avatar and was never wired to `account.avatarUrl` even though that data was already available via `profileAccountProvider` on that same screen. Added an `avatarUrl` parameter and `NetworkImage`-backed rendering, matching the pattern used everywhere else. 2 new widget tests (`registered_header_test.dart`).
+
 ### Phase 4: Moderation And Review Workflows
 
 Build:
@@ -463,6 +465,8 @@ Test:
 - verify moderation actions in `dashboard/frontend/` and confirm resulting visibility in `mobile/` where applicable
 
 Status: Completed (Slices 1-11 implemented)
+
+Post-completion fix, 2026-07-26 (user report: "I can't edit my written testimonies and send for approval"): the backend's resubmit endpoint (`AuthenticatedRejectedTestimonyResubmitView`) has always correctly rejected anything except a rejected written testimony — by design, pending ones are mid-review and approved ones are already public. But the mobile "more actions" sheet on both `my_testimonies_screen.dart` and `my_testimony_detail_screen.dart` offered "Edit" unconditionally regardless of status, so tapping it on a pending/approved testimony always failed with a 400 "Only rejected testimonies can be resubmitted." Gated the Edit option behind the same rejected-status check both screens already use elsewhere (`isRejected`/`item.status == ModerationStatus.rejected`). 3 new widget tests (`edit_action_gating_test.dart`) covering rejected (offered), pending (hidden), and approved (hidden).
 
 Post-implementation review note (2026-07-24): audited this phase against the
 implemented code (`apps/testimonies/models.py`, `services/commands.py`,
