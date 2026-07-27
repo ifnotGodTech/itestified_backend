@@ -9,11 +9,13 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.authn.api.permissions import IsActiveAdmin
+from apps.common.services.media_uploads import CloudinaryUploadError, create_direct_upload_signature
 from apps.content.models import (
     FeaturedHomeTestimony,
     HomeSectionKey,
     HomeSectionOrder,
     InspirationalPicture,
+    InspirationalPictureCategory,
     InspirationalPictureStatus,
     ScriptureOfTheDay,
 )
@@ -24,6 +26,7 @@ from .serializers import (
     FeaturedHomeTestimonySerializer,
     HomeCurationUpdateSerializer,
     HomeSectionOrderSerializer,
+    InspirationalPictureCategorySerializer,
     InspirationalPictureSerializer,
     ScriptureSerializer,
 )
@@ -33,6 +36,72 @@ class ContentPagination(PageNumberPagination):
     page_size = 20
     page_size_query_param = "page_size"
     max_page_size = 100
+
+
+class AdminInspirationalPictureCategoryListCreateView(generics.ListCreateAPIView):
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsAuthenticated, IsActiveAdmin]
+    serializer_class = InspirationalPictureCategorySerializer
+    queryset = InspirationalPictureCategory.objects.all().order_by("name")
+    pagination_class = None
+
+
+class AdminInspirationalPictureCategoryDetailView(generics.RetrieveUpdateAPIView):
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsAuthenticated, IsActiveAdmin]
+    serializer_class = InspirationalPictureCategorySerializer
+    queryset = InspirationalPictureCategory.objects.all()
+
+
+class AdminInspirationalPictureCategoryActivationView(APIView):
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsAuthenticated, IsActiveAdmin]
+
+    def post(self, request, category_id: int):
+        category = InspirationalPictureCategory.objects.filter(id=category_id).first()
+        if category is None:
+            return Response({"message": "Category not found."}, status=status.HTTP_404_NOT_FOUND)
+        serializer = InspirationalPictureCategorySerializer(category, data={"is_active": True}, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def delete(self, request, category_id: int):
+        category = InspirationalPictureCategory.objects.filter(id=category_id).first()
+        if category is None:
+            return Response({"message": "Category not found."}, status=status.HTTP_404_NOT_FOUND)
+        serializer = InspirationalPictureCategorySerializer(category, data={"is_active": False}, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class AdminInspirationalPictureUploadSignatureView(APIView):
+    """Issues a signed Cloudinary direct-upload payload so the dashboard can
+    upload a picture file straight to Cloudinary without proxying the bytes
+    through this server -- same pattern as testimony/avatar media uploads
+    (see apps.common.services.media_uploads)."""
+
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsAuthenticated, IsActiveAdmin]
+
+    def post(self, request):
+        try:
+            upload_signature = create_direct_upload_signature(resource_type="inspirational_picture")
+        except CloudinaryUploadError as exc:
+            return Response({"message": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(
+            {
+                "cloud_name": upload_signature.cloud_name,
+                "api_key": upload_signature.api_key,
+                "timestamp": upload_signature.timestamp,
+                "folder": upload_signature.folder,
+                "signature": upload_signature.signature,
+                "resource_type": "image",
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class AdminInspirationalPictureListCreateView(generics.ListCreateAPIView):

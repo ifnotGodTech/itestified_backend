@@ -6,15 +6,44 @@ from apps.content.models import (
     HomeSectionKey,
     HomeSectionOrder,
     InspirationalPicture,
+    InspirationalPictureCategory,
     InspirationalPictureStatus,
     ScriptureOfTheDay,
     ScriptureStatus,
+    normalize_inspirational_picture_category_name,
 )
 from apps.testimonies.models import Testimony, TestimonyStatus
 from apps.testimonies.services.media_uploads import build_cloudinary_video_thumbnail_url
 
 
+class InspirationalPictureCategorySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = InspirationalPictureCategory
+        fields = ("id", "name", "slug", "description", "is_active", "created_at", "updated_at")
+        read_only_fields = ("id", "slug", "created_at", "updated_at")
+
+    def validate_name(self, value: str) -> str:
+        trimmed = value.strip()
+        if not trimmed:
+            raise serializers.ValidationError("Name is required.")
+        normalized = normalize_inspirational_picture_category_name(trimmed)
+        queryset = InspirationalPictureCategory.objects.all()
+        if self.instance is not None:
+            queryset = queryset.exclude(id=self.instance.id)
+        if queryset.filter(name__iexact=normalized).exists():
+            raise serializers.ValidationError("Category name already exists.")
+        return normalized
+
+
 class InspirationalPictureSerializer(serializers.ModelSerializer):
+    category = serializers.SerializerMethodField()
+    category_id = serializers.PrimaryKeyRelatedField(
+        source="category",
+        queryset=InspirationalPictureCategory.objects.filter(is_active=True),
+        required=False,
+        allow_null=True,
+    )
+
     class Meta:
         model = InspirationalPicture
         fields = (
@@ -22,6 +51,7 @@ class InspirationalPictureSerializer(serializers.ModelSerializer):
             "title",
             "caption",
             "category",
+            "category_id",
             "source",
             "image_url",
             "status",
@@ -30,6 +60,9 @@ class InspirationalPictureSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         )
+
+    def get_category(self, obj: InspirationalPicture) -> str:
+        return obj.category.name if obj.category_id else ""
 
     def validate(self, attrs):
         status = attrs.get("status", getattr(self.instance, "status", InspirationalPictureStatus.DRAFT))

@@ -3,9 +3,13 @@ from django.urls import path
 from .views import (
     AdminFeaturedHomeTestimonyDeleteView,
     AdminHomeCurationView,
+    AdminInspirationalPictureCategoryActivationView,
+    AdminInspirationalPictureCategoryDetailView,
+    AdminInspirationalPictureCategoryListCreateView,
     AdminInspirationalPictureDetailView,
     AdminInspirationalPictureListCreateView,
     AdminInspirationalPictureUnpublishView,
+    AdminInspirationalPictureUploadSignatureView,
     AdminScriptureDetailView,
     AdminScriptureListCreateView,
     mobile_home_feed_view,
@@ -18,6 +22,26 @@ urlpatterns = [
         "admin/inspirational-pictures/",
         AdminInspirationalPictureListCreateView.as_view(),
         name="admin-inspirational-picture-list-create",
+    ),
+    path(
+        "admin/inspirational-pictures/upload-signature/",
+        AdminInspirationalPictureUploadSignatureView.as_view(),
+        name="admin-inspirational-picture-upload-signature",
+    ),
+    path(
+        "admin/inspirational-pictures/categories/",
+        AdminInspirationalPictureCategoryListCreateView.as_view(),
+        name="admin-inspirational-picture-category-list-create",
+    ),
+    path(
+        "admin/inspirational-pictures/categories/<int:pk>/",
+        AdminInspirationalPictureCategoryDetailView.as_view(),
+        name="admin-inspirational-picture-category-detail",
+    ),
+    path(
+        "admin/inspirational-pictures/categories/<int:category_id>/activation/",
+        AdminInspirationalPictureCategoryActivationView.as_view(),
+        name="admin-inspirational-picture-category-activation",
     ),
     path(
         "admin/inspirational-pictures/<int:pk>/",

@@ -1,13 +1,26 @@
 from django.contrib import admin
 
-from .models import FeaturedHomeTestimony, HomeSectionOrder, InspirationalPicture, ScriptureOfTheDay
+from .models import (
+    FeaturedHomeTestimony,
+    HomeSectionOrder,
+    InspirationalPicture,
+    InspirationalPictureCategory,
+    ScriptureOfTheDay,
+)
+
+
+@admin.register(InspirationalPictureCategory)
+class InspirationalPictureCategoryAdmin(admin.ModelAdmin):
+    list_display = ("id", "name", "slug", "is_active", "updated_at")
+    list_filter = ("is_active",)
+    search_fields = ("name",)
 
 
 @admin.register(InspirationalPicture)
 class InspirationalPictureAdmin(admin.ModelAdmin):
     list_display = ("id", "title", "status", "category", "publish_at", "expires_at", "created_at")
     list_filter = ("status", "category")
-    search_fields = ("title", "caption", "category")
+    search_fields = ("title", "caption", "category__name")
 
 
 @admin.register(ScriptureOfTheDay)

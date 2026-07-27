@@ -53,6 +53,17 @@ class CreateDirectUploadSignatureTests(TestCase):
             result = create_direct_upload_signature(resource_type="avatar")
         self.assertEqual(result.folder, "shared/uploads")
 
+    def test_inspirational_picture_resource_type_uses_content_folder_default(self) -> None:
+        with mock.patch.dict(os.environ, _cloudinary_env(), clear=True):
+            result = create_direct_upload_signature(resource_type="inspirational_picture")
+        self.assertEqual(result.folder, "itestified/content/inspirational-pictures")
+
+    def test_inspirational_picture_folder_env_override_wins(self) -> None:
+        env = _cloudinary_env(CLOUDINARY_INSPIRATIONAL_PICTURE_FOLDER="custom/pictures")
+        with mock.patch.dict(os.environ, env, clear=True):
+            result = create_direct_upload_signature(resource_type="inspirational_picture")
+        self.assertEqual(result.folder, "custom/pictures")
+
     def test_unsupported_resource_type_raises(self) -> None:
         with mock.patch.dict(os.environ, _cloudinary_env(), clear=True):
             with self.assertRaises(CloudinaryUploadError):

@@ -1,9 +1,36 @@
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.db.models.signals import pre_save
+from django.dispatch import receiver
 from django.utils import timezone
+from django.utils.text import slugify
 
 from apps.testimonies.models import Testimony, TestimonyStatus
+
+
+def normalize_inspirational_picture_category_name(value: str) -> str:
+    stripped = value.strip()
+    return f"{stripped[:1].upper()}{stripped[1:].lower()}"
+
+
+class InspirationalPictureCategory(models.Model):
+    name = models.CharField(max_length=120, unique=True)
+    slug = models.SlugField(max_length=140, unique=True)
+    description = models.TextField(blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self) -> str:
+        return self.name
+
+
+@receiver(pre_save, sender=InspirationalPictureCategory)
+def ensure_inspirational_picture_category_slug(sender, instance: InspirationalPictureCategory, **kwargs):
+    instance.name = normalize_inspirational_picture_category_name(instance.name)
+    if not instance.slug:
+        instance.slug = slugify(instance.name)
 
 
 class InspirationalPictureStatus(models.TextChoices):
@@ -16,7 +43,13 @@ class InspirationalPictureStatus(models.TextChoices):
 class InspirationalPicture(models.Model):
     title = models.CharField(max_length=160)
     caption = models.TextField(blank=True)
-    category = models.CharField(max_length=80, blank=True)
+    category = models.ForeignKey(
+        "content.InspirationalPictureCategory",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="pictures",
+    )
     source = models.URLField(blank=True)
     image_url = models.URLField()
     status = models.CharField(

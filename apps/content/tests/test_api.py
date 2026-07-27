@@ -1,5 +1,7 @@
+import os
 from datetime import timedelta
 from io import StringIO
+from unittest import mock
 
 from django.core.management import call_command
 from django.test import TestCase
@@ -11,6 +13,7 @@ from apps.content.models import (
     HomeSectionKey,
     HomeSectionOrder,
     InspirationalPicture,
+    InspirationalPictureCategory,
     InspirationalPictureStatus,
     ScriptureOfTheDay,
     ScriptureStatus,
@@ -27,12 +30,13 @@ class ContentAdminApiTests(TestCase):
         self.client.force_login(self.admin)
 
     def test_phase7_slice1_upload_inspirational_picture(self):
+        category = InspirationalPictureCategory.objects.create(name="Hope", slug="hope")
         response = self.client.post(
             reverse("admin-inspirational-picture-list-create"),
             {
                 "title": "Morning Mercy",
                 "caption": "God is faithful.",
-                "category": "Hope",
+                "category_id": category.id,
                 "source": "https://instagram.com/example",
                 "image_url": "https://images.example.com/pic.jpg",
                 "status": InspirationalPictureStatus.SCHEDULED,
@@ -44,12 +48,14 @@ class ContentAdminApiTests(TestCase):
         self.assertEqual(response.status_code, 201)
         self.assertEqual(InspirationalPicture.objects.count(), 1)
         self.assertEqual(InspirationalPicture.objects.first().status, InspirationalPictureStatus.SCHEDULED)
+        self.assertEqual(InspirationalPicture.objects.first().category_id, category.id)
 
     def test_phase7_slice2_edit_or_unpublish_picture(self):
+        category = InspirationalPictureCategory.objects.create(name="Faith", slug="faith")
         picture = InspirationalPicture.objects.create(
             title="Grace",
             caption="Caption A",
-            category="Faith",
+            category=category,
             image_url="https://images.example.com/a.jpg",
             status=InspirationalPictureStatus.PUBLISHED,
             created_by=self.admin,
@@ -70,6 +76,76 @@ class ContentAdminApiTests(TestCase):
         self.assertEqual(unpublish_response.status_code, 200)
         picture.refresh_from_db()
         self.assertEqual(picture.status, InspirationalPictureStatus.UNPUBLISHED)
+
+    def test_admin_manage_inspirational_picture_categories(self):
+        list_response = self.client.get(reverse("admin-inspirational-picture-category-list-create"))
+        self.assertEqual(list_response.status_code, 200)
+        self.assertEqual(list_response.json(), [])
+
+        create_response = self.client.post(
+            reverse("admin-inspirational-picture-category-list-create"),
+            {"name": "faith", "description": "Faith pictures"},
+            content_type="application/json",
+        )
+        self.assertEqual(create_response.status_code, 201)
+        self.assertEqual(create_response.json()["name"], "Faith")
+        created_id = create_response.json()["id"]
+
+        duplicate_response = self.client.post(
+            reverse("admin-inspirational-picture-category-list-create"),
+            {"name": "FAITH", "description": "Duplicate"},
+            content_type="application/json",
+        )
+        self.assertEqual(duplicate_response.status_code, 400)
+        self.assertEqual(duplicate_response.json()["name"], ["Category name already exists."])
+
+        edit_response = self.client.patch(
+            reverse("admin-inspirational-picture-category-detail", kwargs={"pk": created_id}),
+            {"description": "Updated faith pictures"},
+            content_type="application/json",
+        )
+        self.assertEqual(edit_response.status_code, 200)
+        self.assertEqual(edit_response.json()["description"], "Updated faith pictures")
+
+        deactivate_response = self.client.delete(
+            reverse("admin-inspirational-picture-category-activation", kwargs={"category_id": created_id})
+        )
+        self.assertEqual(deactivate_response.status_code, 200)
+        self.assertEqual(deactivate_response.json()["is_active"], False)
+
+        reactivate_response = self.client.post(
+            reverse("admin-inspirational-picture-category-activation", kwargs={"category_id": created_id})
+        )
+        self.assertEqual(reactivate_response.status_code, 200)
+        self.assertEqual(reactivate_response.json()["is_active"], True)
+
+    def test_inspirational_picture_upload_rejects_inactive_category(self):
+        inactive = InspirationalPictureCategory.objects.create(name="Retired", slug="retired", is_active=False)
+        response = self.client.post(
+            reverse("admin-inspirational-picture-list-create"),
+            {
+                "title": "Morning Mercy",
+                "category_id": inactive.id,
+                "image_url": "https://images.example.com/pic.jpg",
+                "status": InspirationalPictureStatus.DRAFT,
+            },
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_admin_inspirational_picture_upload_signature_returns_cloudinary_payload(self):
+        env = {
+            "CLOUDINARY_CLOUD_NAME": "demo-cloud",
+            "CLOUDINARY_API_KEY": "demo-key",
+            "CLOUDINARY_API_SECRET": "demo-secret",
+        }
+        with mock.patch.dict(os.environ, env, clear=True):
+            response = self.client.post(reverse("admin-inspirational-picture-upload-signature"))
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["cloud_name"], "demo-cloud")
+        self.assertEqual(body["folder"], "itestified/content/inspirational-pictures")
+        self.assertIn("signature", body)
 
     def test_phase7_slice3_schedule_scripture_with_unique_date(self):
         target_date = timezone.localdate() + timedelta(days=2)
@@ -169,7 +245,7 @@ class ContentAdminApiTests(TestCase):
         InspirationalPicture.objects.create(
             title="Faith",
             caption="Keep believing.",
-            category="Hope",
+            category=InspirationalPictureCategory.objects.create(name="Hope", slug="hope"),
             source="Internal",
             image_url="https://images.example.com/mobile.jpg",
             status=InspirationalPictureStatus.PUBLISHED,
