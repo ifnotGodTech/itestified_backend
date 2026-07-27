@@ -176,6 +176,19 @@ class AppVersionAdminApiTests(TestCase):
             AppVersionConfig.objects.get(platform=AppPlatform.ANDROID).latest_version, ""
         )
 
+    def test_update_rejects_latest_only_submission_for_a_never_configured_platform(self) -> None:
+        admin = self._super_admin("super-latest-only-new@example.com")
+        self.client.force_login(admin)
+
+        response = self.client.put(
+            reverse("admin-app-version-update", kwargs={"platform": AppPlatform.ANDROID}),
+            {"latest_version": "1.5.0"},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(AppVersionConfig.objects.filter(platform=AppPlatform.ANDROID).exists())
+
     def test_update_denies_active_admin_who_is_not_super_admin(self) -> None:
         moderator = UserFactory(email="moderator-update@example.com")
         AdminAssignmentFactory(user=moderator, role=AdminRoleFactory(code=AdminRoleCode.MODERATOR))

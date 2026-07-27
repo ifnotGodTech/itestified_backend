@@ -42,6 +42,15 @@ class AppVersionConfigSerializer(serializers.ModelSerializer):
         latest = attrs.get(
             "latest_version", getattr(self.instance, "latest_version", "") if self.instance else ""
         )
+        # A row must never exist without a real minimum -- "no minimum
+        # required" is represented by having no row at all, not by a row
+        # with a blank minimum_version. partial=True otherwise lets this
+        # slip through on first-time creation when only latest_version is
+        # submitted.
+        if self.instance is None and not minimum:
+            raise serializers.ValidationError(
+                {"minimum_version": "Minimum version is required when configuring a platform for the first time."}
+            )
         if minimum and latest and _version_tuple(latest) < _version_tuple(minimum):
             raise serializers.ValidationError(
                 "Latest version cannot be lower than the minimum version."
