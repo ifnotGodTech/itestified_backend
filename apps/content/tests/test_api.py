@@ -50,6 +50,23 @@ class ContentAdminApiTests(TestCase):
         self.assertEqual(InspirationalPicture.objects.first().status, InspirationalPictureStatus.SCHEDULED)
         self.assertEqual(InspirationalPicture.objects.first().category_id, category.id)
 
+    def test_upload_accepts_a_plain_attribution_label_as_source(self):
+        # source is a short label ("Instagram", "Southern Living"), not a
+        # clickable link -- regression test for a real 400 an admin hit when
+        # this field used to be a strict URLField.
+        response = self.client.post(
+            reverse("admin-inspirational-picture-list-create"),
+            {
+                "title": "Morning Mercy",
+                "source": "Instagram",
+                "image_url": "https://images.example.com/pic.jpg",
+                "status": InspirationalPictureStatus.DRAFT,
+            },
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(InspirationalPicture.objects.first().source, "Instagram")
+
     def test_phase7_slice2_edit_or_unpublish_picture(self):
         category = InspirationalPictureCategory.objects.create(name="Faith", slug="faith")
         picture = InspirationalPicture.objects.create(

@@ -50,7 +50,11 @@ class InspirationalPicture(models.Model):
         blank=True,
         related_name="pictures",
     )
-    source = models.URLField(blank=True)
+    # A short attribution label (e.g. "Instagram", "Southern Living"), not a
+    # clickable link -- matches how testimonies' "source" is a platform name,
+    # not a URL. Was a URLField until an admin's first real upload hit "Enter
+    # a valid URL" typing exactly this kind of label.
+    source = models.CharField(max_length=255, blank=True)
     image_url = models.URLField()
     status = models.CharField(
         max_length=20,
