@@ -920,6 +920,8 @@ Test:
 
 Status: Completed. All 4 slices implemented 2026-07-27 — see each slice's notes above.
 
+Post-completion review (2026-07-27): audited the admin write path across backend/dashboard and found two related correctness gaps, both fixed. (1) Submitting only `latest_version` for a never-configured platform was silently accepted and persisted a row with a blank `minimum_version`, contradicting the model's own invariant that "no minimum required" means no row at all — `partial=True` skipped the required-field check and the cross-field validator short-circuited with nothing to fall back on. Fixed by rejecting creation when `minimum_version` is missing and there's no existing instance; regression test added. (2) The dashboard route omitted `minimum_version` from the PUT body whenever the input was blank, so clearing that field on an already-configured platform and saving silently left the old value untouched while still reporting "updated successfully" — fixed by always sending the field as submitted, letting the backend's own validation reject it. Also fixed non-format failures (e.g. an expired admin session) being bucketed into the same "enter valid versions" message as a real validation error, and a bug where the redirect-carried error state was silently dropped once the follow-up page-load GET succeeded.
+
 ## Risks To Watch Early
 
 - building schema directly from UI mocks instead of real domain needs
