@@ -98,9 +98,78 @@ class ProfileContentBlockAdminApiTests(TestCase):
 
         self.assertEqual(response.status_code, 403)
 
+    def test_update_accepts_a_well_formed_support_email(self) -> None:
+        admin = self._admin("content-email-valid@example.com")
+        self.client.force_login(admin)
+
+        response = self.client.put(
+            reverse("admin-profile-content-block-update", kwargs={"key": ProfileContentKey.SUPPORT_EMAIL}),
+            {"body": "help@itestified.app"},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            ProfileContentBlock.objects.get(key=ProfileContentKey.SUPPORT_EMAIL).body, "help@itestified.app"
+        )
+
+    def test_update_rejects_a_malformed_support_email(self) -> None:
+        admin = self._admin("content-email-invalid@example.com")
+        self.client.force_login(admin)
+        ProfileContentBlock.objects.filter(key=ProfileContentKey.SUPPORT_EMAIL).update(body="original@example.com")
+
+        response = self.client.put(
+            reverse("admin-profile-content-block-update", kwargs={"key": ProfileContentKey.SUPPORT_EMAIL}),
+            {"body": "not-an-email"},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            ProfileContentBlock.objects.get(key=ProfileContentKey.SUPPORT_EMAIL).body, "original@example.com"
+        )
+
+    def test_update_accepts_a_well_formed_support_phone(self) -> None:
+        admin = self._admin("content-phone-valid@example.com")
+        self.client.force_login(admin)
+
+        response = self.client.put(
+            reverse("admin-profile-content-block-update", kwargs={"key": ProfileContentKey.SUPPORT_PHONE}),
+            {"body": "+234 806 146 4092"},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_update_rejects_a_malformed_support_phone(self) -> None:
+        admin = self._admin("content-phone-invalid@example.com")
+        self.client.force_login(admin)
+
+        response = self.client.put(
+            reverse("admin-profile-content-block-update", kwargs={"key": ProfileContentKey.SUPPORT_PHONE}),
+            {"body": "call us maybe"},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_update_does_not_apply_email_validation_to_other_keys(self) -> None:
+        # Regression guard: the key-specific validation in validate_body must
+        # only fire for its own key, not leak onto About Us/Terms/Privacy.
+        admin = self._admin("content-no-leak@example.com")
+        self.client.force_login(admin)
+
+        response = self.client.put(
+            reverse("admin-profile-content-block-update", kwargs={"key": ProfileContentKey.ABOUT_US}),
+            {"body": "not an email and not a phone number, just About Us text."},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+
 
 class MobileProfileContentBlocksApiTests(TestCase):
-    def test_returns_all_three_keys_without_authentication(self) -> None:
+    def test_returns_every_key_without_authentication(self) -> None:
         ProfileContentBlock.objects.filter(key=ProfileContentKey.ABOUT_US).update(body="About text.")
         ProfileContentBlock.objects.filter(
             key__in=[ProfileContentKey.TERMS_OF_USE, ProfileContentKey.PRIVACY_POLICY]
@@ -115,3 +184,7 @@ class MobileProfileContentBlocksApiTests(TestCase):
         # a value for every key it expects.
         self.assertEqual(result["terms_of_use"], "")
         self.assertEqual(result["privacy_policy"], "")
+        # Seeded by the Slice 5 data migration -- confirms support contact
+        # info is served through this same endpoint.
+        self.assertEqual(result["support_email"], "ifnotgodtech@gmail.com")
+        self.assertEqual(result["support_phone"], "+2348061464092")

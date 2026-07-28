@@ -40,7 +40,7 @@ class AdminProfileContentBlockUpdateView(APIView):
         if key not in ProfileContentKey.values:
             return Response({"message": "Unknown content key."}, status=status.HTTP_400_BAD_REQUEST)
         instance = ProfileContentBlock.objects.filter(key=key).first()
-        serializer = ProfileContentBlockSerializer(instance, data=request.data, partial=True)
+        serializer = ProfileContentBlockSerializer(instance, data=request.data, partial=True, context={"key": key})
         serializer.is_valid(raise_exception=True)
         serializer.save(key=key, updated_by=request.user)
         return Response(serializer.data, status=status.HTTP_200_OK)
@@ -51,9 +51,9 @@ class AdminProfileContentBlockUpdateView(APIView):
 @permission_classes([])
 def mobile_profile_content_blocks_view(request):
     """Public, unauthenticated -- powers the About Us / Terms of Use /
-    Privacy Policy screens. Always returns all three keys (blank if an
-    admin has somehow cleared one) so mobile never has to guess which keys
-    exist."""
+    Privacy Policy screens plus the Help screen's support email/phone.
+    Always returns every known key (blank if an admin has somehow cleared
+    one) so mobile never has to guess which keys exist."""
     existing = {item.key: item.body for item in ProfileContentBlock.objects.all()}
     result = {key: existing.get(key, "") for key, _label in ProfileContentKey.choices}
     return Response({"result": result}, status=status.HTTP_200_OK)
