@@ -2,7 +2,7 @@ from django.test import TestCase
 from django.urls import reverse
 
 from apps.profile_content.choices import ProfileContentKey
-from apps.profile_content.models import ProfileContentBlock
+from apps.profile_content.models import HelpFaqEntry, ProfileContentBlock
 from apps.users.choices import AdminRoleCode
 from apps.users.tests.factories import AdminAssignmentFactory, AdminRoleFactory, UserFactory
 
@@ -188,3 +188,152 @@ class MobileProfileContentBlocksApiTests(TestCase):
         # info is served through this same endpoint.
         self.assertEqual(result["support_email"], "ifnotgodtech@gmail.com")
         self.assertEqual(result["support_phone"], "+2348061464092")
+
+
+class HelpFaqAdminApiTests(TestCase):
+    def _admin(self, email: str):
+        admin = UserFactory(email=email)
+        AdminAssignmentFactory(user=admin, role=AdminRoleFactory(code=AdminRoleCode.CONTENT_ADMIN))
+        return admin
+
+    def test_list_requires_authentication(self) -> None:
+        response = self.client.get(reverse("admin-help-faq-list-create"))
+        self.assertEqual(response.status_code, 403)
+
+    def test_list_denies_non_admin_user(self) -> None:
+        user = UserFactory(email="regular-faq@example.com")
+        self.client.force_login(user)
+
+        response = self.client.get(reverse("admin-help-faq-list-create"))
+        self.assertEqual(response.status_code, 403)
+
+    def test_list_returns_the_seeded_entries_in_order(self) -> None:
+        admin = self._admin("faq-list@example.com")
+        self.client.force_login(admin)
+
+        response = self.client.get(reverse("admin-help-faq-list-create"))
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(len(payload), 4)
+        self.assertEqual(payload[0]["question"], "How do i post my testimonies?")
+
+    def test_create_appends_a_new_entry_at_the_end_and_records_who_set_it(self) -> None:
+        admin = self._admin("faq-create@example.com")
+        self.client.force_login(admin)
+
+        response = self.client.post(
+            reverse("admin-help-faq-list-create"),
+            {"question": "How do I contact support?", "answer": "Use the Help screen's contact section."},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        entry = HelpFaqEntry.objects.get(question="How do I contact support?")
+        self.assertEqual(entry.display_order, 4)
+        self.assertEqual(entry.updated_by, admin)
+        self.assertTrue(entry.is_active)
+
+    def test_create_rejects_a_blank_question_or_answer(self) -> None:
+        admin = self._admin("faq-create-blank@example.com")
+        self.client.force_login(admin)
+
+        response = self.client.post(
+            reverse("admin-help-faq-list-create"),
+            {"question": "   ", "answer": "Some answer."},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_update_edits_question_and_answer(self) -> None:
+        admin = self._admin("faq-update@example.com")
+        self.client.force_login(admin)
+        entry = HelpFaqEntry.objects.first()
+
+        response = self.client.patch(
+            reverse("admin-help-faq-detail", kwargs={"pk": entry.id}),
+            {"answer": "Updated answer text."},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        entry.refresh_from_db()
+        self.assertEqual(entry.answer, "Updated answer text.")
+        self.assertEqual(entry.updated_by, admin)
+
+    def test_update_can_deactivate_without_deleting(self) -> None:
+        admin = self._admin("faq-deactivate@example.com")
+        self.client.force_login(admin)
+        entry = HelpFaqEntry.objects.first()
+
+        response = self.client.patch(
+            reverse("admin-help-faq-detail", kwargs={"pk": entry.id}),
+            {"is_active": False},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        entry.refresh_from_db()
+        self.assertFalse(entry.is_active)
+        self.assertTrue(HelpFaqEntry.objects.filter(id=entry.id).exists())
+
+    def test_delete_removes_the_entry(self) -> None:
+        admin = self._admin("faq-delete@example.com")
+        self.client.force_login(admin)
+        entry = HelpFaqEntry.objects.first()
+
+        response = self.client.delete(reverse("admin-help-faq-detail", kwargs={"pk": entry.id}))
+
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(HelpFaqEntry.objects.filter(id=entry.id).exists())
+
+    def test_reorder_reassigns_display_order_to_match_the_submitted_sequence(self) -> None:
+        admin = self._admin("faq-reorder@example.com")
+        self.client.force_login(admin)
+        ids = list(HelpFaqEntry.objects.order_by("display_order").values_list("id", flat=True))
+        reversed_ids = list(reversed(ids))
+
+        response = self.client.put(
+            reverse("admin-help-faq-reorder"),
+            {"ordered_ids": reversed_ids},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        new_order = list(HelpFaqEntry.objects.order_by("display_order").values_list("id", flat=True))
+        self.assertEqual(new_order, reversed_ids)
+
+    def test_reorder_rejects_a_list_that_omits_an_existing_entry(self) -> None:
+        admin = self._admin("faq-reorder-incomplete@example.com")
+        self.client.force_login(admin)
+        ids = list(HelpFaqEntry.objects.values_list("id", flat=True))
+
+        response = self.client.put(
+            reverse("admin-help-faq-reorder"),
+            {"ordered_ids": ids[:-1]},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+
+class MobileHelpFaqsApiTests(TestCase):
+    def test_returns_only_active_entries_in_order_without_authentication(self) -> None:
+        HelpFaqEntry.objects.filter(question="How can I donate to iTestified?").update(is_active=False)
+
+        response = self.client.get(reverse("mobile-help-faqs"))
+
+        self.assertEqual(response.status_code, 200)
+        result = response.json()["result"]
+        self.assertEqual(len(result), 3)
+        self.assertNotIn("How can I donate to iTestified?", [row["question"] for row in result])
+        self.assertEqual(result[0]["question"], "How do i post my testimonies?")
+
+    def test_returns_an_empty_list_when_nothing_is_configured(self) -> None:
+        HelpFaqEntry.objects.all().delete()
+
+        response = self.client.get(reverse("mobile-help-faqs"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["result"], [])

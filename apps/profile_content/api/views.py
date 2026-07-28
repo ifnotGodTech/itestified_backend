@@ -1,4 +1,4 @@
-from rest_framework import status
+from rest_framework import generics, status
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.decorators import api_view, authentication_classes, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -7,9 +7,9 @@ from rest_framework.views import APIView
 
 from apps.authn.api.permissions import IsActiveAdmin
 from apps.profile_content.choices import ProfileContentKey
-from apps.profile_content.models import ProfileContentBlock
+from apps.profile_content.models import HelpFaqEntry, ProfileContentBlock
 
-from .serializers import ProfileContentBlockSerializer
+from .serializers import HelpFaqEntrySerializer, HelpFaqReorderSerializer, ProfileContentBlockSerializer
 
 
 class AdminProfileContentBlockListView(APIView):
@@ -44,6 +44,57 @@ class AdminProfileContentBlockUpdateView(APIView):
         serializer.is_valid(raise_exception=True)
         serializer.save(key=key, updated_by=request.user)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class AdminHelpFaqListCreateView(generics.ListCreateAPIView):
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsAuthenticated, IsActiveAdmin]
+    serializer_class = HelpFaqEntrySerializer
+    pagination_class = None
+    queryset = HelpFaqEntry.objects.all()
+
+    def perform_create(self, serializer):
+        # New entries land at the end of the list rather than requiring the
+        # admin to also submit a position -- reordering afterward is a
+        # separate, explicit action (AdminHelpFaqReorderView).
+        next_position = HelpFaqEntry.objects.count()
+        serializer.save(display_order=next_position, updated_by=self.request.user)
+
+
+class AdminHelpFaqDetailView(generics.RetrieveUpdateDestroyAPIView):
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsAuthenticated, IsActiveAdmin]
+    serializer_class = HelpFaqEntrySerializer
+    queryset = HelpFaqEntry.objects.all()
+
+    def perform_update(self, serializer):
+        serializer.save(updated_by=self.request.user)
+
+
+class AdminHelpFaqReorderView(APIView):
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsAuthenticated, IsActiveAdmin]
+
+    def put(self, request):
+        serializer = HelpFaqReorderSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        for index, entry_id in enumerate(serializer.validated_data["ordered_ids"]):
+            HelpFaqEntry.objects.filter(id=entry_id).update(display_order=index)
+        entries = HelpFaqEntry.objects.all()
+        return Response(HelpFaqEntrySerializer(entries, many=True).data, status=status.HTTP_200_OK)
+
+
+@api_view(["GET"])
+@authentication_classes([])
+@permission_classes([])
+def mobile_help_faqs_view(request):
+    """Public, unauthenticated -- powers the Help screen's FAQ list. Only
+    active entries, in admin-defined order."""
+    entries = HelpFaqEntry.objects.filter(is_active=True)
+    return Response(
+        {"result": [{"question": e.question, "answer": e.answer} for e in entries]},
+        status=status.HTTP_200_OK,
+    )
 
 
 @api_view(["GET"])
