@@ -190,3 +190,44 @@ class FeaturedHomeTestimony(models.Model):
 
     def __str__(self) -> str:
         return f"FeaturedHomeTestimony<{self.testimony_id}:{self.position}>"
+
+
+class FeaturedHomePicture(models.Model):
+    picture = models.ForeignKey(
+        InspirationalPicture,
+        on_delete=models.CASCADE,
+        related_name="home_featured_entries",
+    )
+    position = models.PositiveIntegerField(default=0)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="home_featured_pictures_created",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="home_featured_pictures_updated",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["position", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["picture"],
+                name="uniq_home_featured_picture",
+            ),
+        ]
+
+    def clean(self):
+        if self.picture.status != InspirationalPictureStatus.PUBLISHED:
+            raise ValidationError("Only published pictures can be featured on home feed.")
+
+    def __str__(self) -> str:
+        return f"FeaturedHomePicture<{self.picture_id}:{self.position}>"

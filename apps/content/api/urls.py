@@ -1,6 +1,7 @@
 from django.urls import path
 
 from .views import (
+    AdminFeaturedHomePictureDeleteView,
     AdminFeaturedHomeTestimonyDeleteView,
     AdminHomeCurationView,
     AdminInspirationalPictureCategoryActivationView,
@@ -72,6 +73,11 @@ urlpatterns = [
         "admin/home-curation/featured-testimonies/<int:testimony_id>/remove/",
         AdminFeaturedHomeTestimonyDeleteView.as_view(),
         name="admin-home-curation-featured-remove",
+    ),
+    path(
+        "admin/home-curation/featured-pictures/<int:picture_id>/remove/",
+        AdminFeaturedHomePictureDeleteView.as_view(),
+        name="admin-home-curation-featured-picture-remove",
     ),
     path("home-feed/", mobile_home_feed_view, name="mobile-home-feed"),
     path("inspirational-pictures/", mobile_inspirational_pictures_list_view, name="mobile-inspirational-pictures"),

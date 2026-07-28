@@ -9,6 +9,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from apps.content.models import (
+    FeaturedHomePicture,
     FeaturedHomeTestimony,
     HomeSectionKey,
     HomeSectionOrder,
@@ -242,6 +243,100 @@ class ContentAdminApiTests(TestCase):
         self.assertEqual(HomeSectionOrder.objects.count(), 3)
         self.assertEqual(HomeSectionOrder.objects.order_by("position").first().section, HomeSectionKey.SCRIPTURE)
 
+    def test_phase7_slice5_home_feed_picture_curation_add_reorder_remove(self):
+        category = InspirationalPictureCategory.objects.create(name="Hope", slug="hope")
+        first = InspirationalPicture.objects.create(
+            title="Morning Mercy",
+            category=category,
+            source="Instagram",
+            image_url="https://images.example.com/1.jpg",
+            status=InspirationalPictureStatus.PUBLISHED,
+        )
+        second = InspirationalPicture.objects.create(
+            title="Grace Note",
+            category=category,
+            source="Instagram",
+            image_url="https://images.example.com/2.jpg",
+            status=InspirationalPictureStatus.PUBLISHED,
+        )
+        unpublished = InspirationalPicture.objects.create(
+            title="Draft Picture",
+            category=category,
+            source="Instagram",
+            image_url="https://images.example.com/3.jpg",
+            status=InspirationalPictureStatus.DRAFT,
+        )
+
+        # Adding an unpublished picture is rejected.
+        rejected = self.client.put(
+            reverse("admin-home-curation"),
+            {
+                "section_order": [
+                    HomeSectionKey.SCRIPTURE,
+                    HomeSectionKey.FEATURED_TESTIMONIES,
+                    HomeSectionKey.INSPIRATIONAL_PICTURE,
+                ],
+                "featured_testimony_ids": [],
+                "featured_picture_ids": [unpublished.id],
+            },
+            content_type="application/json",
+        )
+        self.assertEqual(rejected.status_code, 400)
+        self.assertEqual(FeaturedHomePicture.objects.count(), 0)
+
+        # Add both published pictures, first then second.
+        added = self.client.put(
+            reverse("admin-home-curation"),
+            {
+                "section_order": [
+                    HomeSectionKey.SCRIPTURE,
+                    HomeSectionKey.FEATURED_TESTIMONIES,
+                    HomeSectionKey.INSPIRATIONAL_PICTURE,
+                ],
+                "featured_testimony_ids": [],
+                "featured_picture_ids": [first.id, second.id],
+            },
+            content_type="application/json",
+        )
+        self.assertEqual(added.status_code, 200)
+        self.assertEqual(FeaturedHomePicture.objects.count(), 2)
+        self.assertEqual(
+            list(FeaturedHomePicture.objects.order_by("position").values_list("picture_id", flat=True)),
+            [first.id, second.id],
+        )
+        payload = added.json()
+        self.assertEqual(len(payload["featured_pictures"]), 2)
+        self.assertEqual(len(payload["available_pictures"]), 0)
+
+        # Reorder: second first, first second.
+        reordered = self.client.put(
+            reverse("admin-home-curation"),
+            {
+                "section_order": [
+                    HomeSectionKey.SCRIPTURE,
+                    HomeSectionKey.FEATURED_TESTIMONIES,
+                    HomeSectionKey.INSPIRATIONAL_PICTURE,
+                ],
+                "featured_testimony_ids": [],
+                "featured_picture_ids": [second.id, first.id],
+            },
+            content_type="application/json",
+        )
+        self.assertEqual(reordered.status_code, 200)
+        self.assertEqual(
+            list(FeaturedHomePicture.objects.order_by("position").values_list("picture_id", flat=True)),
+            [second.id, first.id],
+        )
+
+        # Remove one via the dedicated remove endpoint.
+        removed = self.client.post(
+            reverse("admin-home-curation-featured-picture-remove", args=[second.id]),
+            content_type="application/json",
+        )
+        self.assertEqual(removed.status_code, 200)
+        self.assertEqual(FeaturedHomePicture.objects.count(), 1)
+        self.assertEqual(FeaturedHomePicture.objects.first().picture_id, first.id)
+
     def test_phase7_slice6_to_8_mobile_read_endpoints(self):
         category = TestimonyCategory.objects.create(name="Faith", slug="faith")
         author = UserFactory()
@@ -259,7 +354,7 @@ class ContentAdminApiTests(TestCase):
         HomeSectionOrder.objects.create(section=HomeSectionKey.FEATURED_TESTIMONIES, position=0)
         HomeSectionOrder.objects.create(section=HomeSectionKey.INSPIRATIONAL_PICTURE, position=1)
         HomeSectionOrder.objects.create(section=HomeSectionKey.SCRIPTURE, position=2)
-        InspirationalPicture.objects.create(
+        picture = InspirationalPicture.objects.create(
             title="Faith",
             caption="Keep believing.",
             category=InspirationalPictureCategory.objects.create(name="Hope", slug="hope"),
@@ -269,6 +364,7 @@ class ContentAdminApiTests(TestCase):
             created_by=self.admin,
             updated_by=self.admin,
         )
+        FeaturedHomePicture.objects.create(picture=picture, position=0, created_by=self.admin, updated_by=self.admin)
         ScriptureOfTheDay.objects.create(
             date=timezone.localdate(),
             bible_text="Psalm 23:1",
@@ -288,6 +384,8 @@ class ContentAdminApiTests(TestCase):
             home_feed.json()["featured_testimonies"][0]["thumbnail_url"],
             "https://res.cloudinary.com/itestified/video/upload/so_2,w_1280,h_720,c_fill,g_auto/v1784672029/exmoriihzrotlki5en5k.jpg",
         )
+        self.assertEqual(len(home_feed.json()["inspirational_pictures"]), 1)
+        self.assertEqual(home_feed.json()["inspirational_pictures"][0]["image_url"], "https://images.example.com/mobile.jpg")
 
         pictures = self.client.get(reverse("mobile-inspirational-pictures"))
         self.assertEqual(pictures.status_code, 200)

@@ -11,6 +11,7 @@ from rest_framework.views import APIView
 from apps.authn.api.permissions import IsActiveAdmin
 from apps.common.services.media_uploads import CloudinaryUploadError, create_direct_upload_signature
 from apps.content.models import (
+    FeaturedHomePicture,
     FeaturedHomeTestimony,
     HomeSectionKey,
     HomeSectionOrder,
@@ -23,6 +24,7 @@ from apps.testimonies.models import Testimony, TestimonyStatus
 from apps.testimonies.services.media_uploads import build_cloudinary_video_thumbnail_url
 
 from .serializers import (
+    FeaturedHomePictureSerializer,
     FeaturedHomeTestimonySerializer,
     HomeCurationUpdateSerializer,
     HomeSectionOrderSerializer,
@@ -219,11 +221,34 @@ class AdminHomeCurationView(APIView):
             }
             for row in available_rows
         ]
+
+        featured_picture_rows = FeaturedHomePicture.objects.select_related("picture", "picture__category")
+        available_picture_rows = (
+            InspirationalPicture.objects.filter(status=InspirationalPictureStatus.PUBLISHED)
+            .exclude(home_featured_entries__isnull=False)
+            .select_related("category")
+            .order_by("-created_at")
+        )
+        available_picture_payload = [
+            {
+                "id": row.id,
+                "title": row.title,
+                "caption": row.caption,
+                "category": row.category.name if row.category_id else "",
+                "source": row.source,
+                "image_url": row.image_url,
+                "created_at": row.created_at,
+            }
+            for row in available_picture_rows
+        ]
+
         return Response(
             {
                 "section_order": HomeSectionOrderSerializer(section_rows, many=True).data,
                 "featured_testimonies": FeaturedHomeTestimonySerializer(featured_rows, many=True).data,
                 "available_testimonies": available_payload,
+                "featured_pictures": FeaturedHomePictureSerializer(featured_picture_rows, many=True).data,
+                "available_pictures": available_picture_payload,
             }
         )
 
@@ -232,6 +257,7 @@ class AdminHomeCurationView(APIView):
         serializer.is_valid(raise_exception=True)
         section_order = serializer.validated_data["section_order"]
         featured_ids = serializer.validated_data["featured_testimony_ids"]
+        featured_picture_ids = serializer.validated_data["featured_picture_ids"]
 
         for index, section in enumerate(section_order):
             HomeSectionOrder.objects.update_or_create(section=section, defaults={"position": index})
@@ -240,6 +266,17 @@ class AdminHomeCurationView(APIView):
         for index, testimony_id in enumerate(featured_ids):
             FeaturedHomeTestimony.objects.update_or_create(
                 testimony_id=testimony_id,
+                defaults={
+                    "position": index,
+                    "updated_by": request.user,
+                    "created_by": request.user,
+                },
+            )
+
+        FeaturedHomePicture.objects.exclude(picture_id__in=featured_picture_ids).delete()
+        for index, picture_id in enumerate(featured_picture_ids):
+            FeaturedHomePicture.objects.update_or_create(
+                picture_id=picture_id,
                 defaults={
                     "position": index,
                     "updated_by": request.user,
@@ -256,6 +293,15 @@ class AdminFeaturedHomeTestimonyDeleteView(APIView):
     def post(self, request, testimony_id: int):
         FeaturedHomeTestimony.objects.filter(testimony_id=testimony_id).delete()
         return Response({"removed": testimony_id}, status=status.HTTP_200_OK)
+
+
+class AdminFeaturedHomePictureDeleteView(APIView):
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsAuthenticated, IsActiveAdmin]
+
+    def post(self, request, picture_id: int):
+        FeaturedHomePicture.objects.filter(picture_id=picture_id).delete()
+        return Response({"removed": picture_id}, status=status.HTTP_200_OK)
 
 
 @api_view(["GET"])
@@ -290,14 +336,13 @@ def mobile_home_feed_view(request):
         if row.testimony.status == TestimonyStatus.APPROVED
     ]
 
-    now = timezone.now()
-    current_picture = (
-        InspirationalPicture.objects.filter(status=InspirationalPictureStatus.PUBLISHED)
-        .filter(models.Q(publish_at__isnull=True) | models.Q(publish_at__lte=now))
-        .filter(models.Q(expires_at__isnull=True) | models.Q(expires_at__gt=now))
-        .order_by("-updated_at")
-        .first()
+    featured_pictures = (
+        FeaturedHomePicture.objects.filter(picture__status=InspirationalPictureStatus.PUBLISHED)
+        .select_related("picture", "picture__category")
+        .order_by("position", "id")
     )
+    featured_pictures_payload = FeaturedHomePictureSerializer(featured_pictures, many=True).data
+
     today = timezone.localdate()
     scripture = (
         ScriptureOfTheDay.objects.filter(status="published", date=today)
@@ -311,7 +356,7 @@ def mobile_home_feed_view(request):
         {
             "section_order": section_order,
             "featured_testimonies": featured_payload,
-            "inspirational_picture": InspirationalPictureSerializer(current_picture).data if current_picture else None,
+            "inspirational_pictures": featured_pictures_payload,
             "scripture": ScriptureSerializer(scripture).data if scripture else None,
         }
     )

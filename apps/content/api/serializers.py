@@ -2,6 +2,7 @@ from django.utils import timezone
 from rest_framework import serializers
 
 from apps.content.models import (
+    FeaturedHomePicture,
     FeaturedHomeTestimony,
     HomeSectionKey,
     HomeSectionOrder,
@@ -144,6 +145,33 @@ class FeaturedHomeTestimonySerializer(serializers.ModelSerializer):
         return build_cloudinary_video_thumbnail_url(obj.testimony.video_url)
 
 
+class FeaturedHomePictureSerializer(serializers.ModelSerializer):
+    picture_id = serializers.IntegerField(source="picture.id", read_only=True)
+    title = serializers.CharField(source="picture.title", read_only=True)
+    caption = serializers.CharField(source="picture.caption", read_only=True)
+    category = serializers.SerializerMethodField()
+    source = serializers.CharField(source="picture.source", read_only=True)
+    image_url = serializers.CharField(source="picture.image_url", read_only=True)
+    created_at = serializers.DateTimeField(source="picture.created_at", read_only=True)
+
+    class Meta:
+        model = FeaturedHomePicture
+        fields = (
+            "id",
+            "picture_id",
+            "position",
+            "title",
+            "caption",
+            "category",
+            "source",
+            "image_url",
+            "created_at",
+        )
+
+    def get_category(self, obj: FeaturedHomePicture) -> str:
+        return obj.picture.category.name if obj.picture.category_id else ""
+
+
 class HomeCurationUpdateSerializer(serializers.Serializer):
     section_order = serializers.ListField(
         child=serializers.ChoiceField(choices=HomeSectionKey.values),
@@ -152,6 +180,12 @@ class HomeCurationUpdateSerializer(serializers.Serializer):
     featured_testimony_ids = serializers.ListField(
         child=serializers.IntegerField(min_value=1),
         allow_empty=True,
+    )
+    featured_picture_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+        allow_empty=True,
+        required=False,
+        default=list,
     )
 
     def validate_section_order(self, value):
@@ -171,4 +205,14 @@ class HomeCurationUpdateSerializer(serializers.Serializer):
         missing = [item_id for item_id in value if item_id not in found_ids]
         if missing:
             raise serializers.ValidationError("All featured testimonies must exist and be approved.")
+        return value
+
+    def validate_featured_picture_ids(self, value):
+        if not value:
+            return value
+        pictures = InspirationalPicture.objects.filter(id__in=value, status=InspirationalPictureStatus.PUBLISHED)
+        found_ids = {item.id for item in pictures}
+        missing = [item_id for item_id in value if item_id not in found_ids]
+        if missing:
+            raise serializers.ValidationError("All featured pictures must exist and be published.")
         return value
