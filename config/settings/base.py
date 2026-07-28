@@ -30,6 +30,7 @@ INSTALLED_APPS = [
     "apps.notifications",
     "apps.content",
     "apps.app_versions",
+    "apps.social_links",
 ]
 
 MIDDLEWARE = [
