@@ -215,6 +215,50 @@ class ContentAdminApiTests(TestCase):
         entry.refresh_from_db()
         self.assertEqual(entry.bible_text, "Psalm 91:2")
 
+    def test_scripture_created_for_today_publishes_immediately(self):
+        # Regression: refresh_status_for_today() sets published_at as part of
+        # flipping the status, so a caller checking "published_at is None"
+        # afterward always sees it already set -- the flip never got saved.
+        # Reported live: creating a scripture dated today stayed "scheduled"
+        # forever, indistinguishable from one scheduled for next month.
+        response = self.client.post(
+            reverse("admin-scripture-list-create"),
+            {
+                "date": str(timezone.localdate()),
+                "bible_text": "Psalm 91:1",
+                "scripture": "He who dwells in the shelter of the Most High.",
+                "prayer": "Protect us.",
+                "bible_version": "KJV",
+                "status": ScriptureStatus.SCHEDULED,
+            },
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 201)
+        entry = ScriptureOfTheDay.objects.get(id=response.json()["id"])
+        self.assertEqual(entry.status, ScriptureStatus.PUBLISHED)
+        self.assertIsNotNone(entry.published_at)
+
+    def test_editing_a_scheduled_scripture_to_todays_date_publishes_immediately(self):
+        entry = ScriptureOfTheDay.objects.create(
+            date=timezone.localdate() + timedelta(days=5),
+            bible_text="Psalm 23:1",
+            scripture="The Lord is my shepherd.",
+            prayer="Guide us.",
+            bible_version="KJV",
+            status=ScriptureStatus.SCHEDULED,
+            created_by=self.admin,
+            updated_by=self.admin,
+        )
+        response = self.client.patch(
+            reverse("admin-scripture-detail", kwargs={"pk": entry.id}),
+            {"date": str(timezone.localdate())},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+        entry.refresh_from_db()
+        self.assertEqual(entry.status, ScriptureStatus.PUBLISHED)
+        self.assertIsNotNone(entry.published_at)
+
     def test_phase7_slice5_home_feed_curation(self):
         category = TestimonyCategory.objects.create(name="Healing", slug="healing")
         author = UserFactory()

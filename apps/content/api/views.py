@@ -168,9 +168,13 @@ class AdminScriptureListCreateView(generics.ListCreateAPIView):
 
     def perform_create(self, serializer):
         entry = serializer.save(created_by=self.request.user, updated_by=self.request.user)
+        # refresh_status_for_today() already sets published_at as part of
+        # flipping the status, so checking "published_at is None" afterward
+        # is always false -- the flip was never actually persisted. Compare
+        # against the status before the call instead.
+        previous_status = entry.status
         entry.refresh_status_for_today()
-        if entry.status == "published" and entry.published_at is None:
-            entry.published_at = timezone.now()
+        if entry.status != previous_status:
             entry.save(update_fields=["status", "published_at", "updated_at"])
 
 
@@ -181,7 +185,14 @@ class AdminScriptureDetailView(generics.RetrieveUpdateAPIView):
     queryset = ScriptureOfTheDay.objects.all()
 
     def perform_update(self, serializer):
-        serializer.save(updated_by=self.request.user)
+        entry = serializer.save(updated_by=self.request.user)
+        # Same immediate-publish behavior as create: if an edit moves the
+        # date to today (or earlier), it should go live now rather than
+        # waiting for the next publish_due_scriptures run.
+        previous_status = entry.status
+        entry.refresh_status_for_today()
+        if entry.status != previous_status:
+            entry.save(update_fields=["status", "published_at", "updated_at"])
 
 
 class AdminHomeCurationView(APIView):
