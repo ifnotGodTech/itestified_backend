@@ -252,6 +252,42 @@ def notify_all_users_of_app_update(*, actor, platform: str) -> int:
     return len(rows)
 
 
+def notify_all_users_of_scripture_published(*, scripture, actor=None) -> int:
+    """Broadcasts an in-app + push notification to every active, non-admin
+    user when a Scripture of the Day goes live -- whether that happens
+    immediately (an admin creates or edits an entry dated today) or later,
+    when the daily publish_due_scriptures cron catches a scheduled entry up.
+    `actor` is None for the cron path (nobody to exclude); admins are always
+    excluded since they already see the change in the dashboard."""
+    recipient_qs = User.objects.filter(account_status=UserAccountStatus.ACTIVE)
+    active_admin_user_ids = AdminAssignment.objects.filter(
+        status=AdminAssignmentStatus.ACTIVE
+    ).values_list("user_id", flat=True)
+    recipient_qs = recipient_qs.exclude(id__in=active_admin_user_ids)
+    if actor is not None:
+        recipient_qs = recipient_qs.exclude(id=actor.id)
+
+    recipient_ids = list(recipient_qs.values_list("id", flat=True))
+    if not recipient_ids:
+        return 0
+
+    title = "Today's scripture is here"
+    message = f"A new Scripture of the Day is ready: {scripture.bible_text}."
+    rows = [
+        UserNotification(
+            recipient_id=user_id,
+            actor=actor,
+            notification_type=NotificationType.SCRIPTURE_PUBLISHED,
+            title=title,
+            message=message,
+        )
+        for user_id in recipient_ids
+    ]
+    UserNotification.objects.bulk_create(rows)
+    send_push_to_users(user_ids=recipient_ids, title=title, body=message)
+    return len(rows)
+
+
 def notify_testimony_comment(*, recipient, actor, testimony_title: str) -> UserNotification:
     actor_name = getattr(actor, "full_name", "") or actor.email
     title = "New comment on your testimony"

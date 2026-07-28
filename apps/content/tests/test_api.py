@@ -19,6 +19,8 @@ from apps.content.models import (
     ScriptureOfTheDay,
     ScriptureStatus,
 )
+from apps.content.services.commands import publish_due_scheduled_scriptures
+from apps.notifications.models import NotificationType, UserNotification
 from apps.testimonies.models import Testimony, TestimonyCategory, TestimonyStatus, TestimonyType
 from apps.users.choices import AdminRoleCode
 from apps.users.tests.factories import AdminAssignmentFactory, AdminRoleFactory, UserFactory
@@ -221,6 +223,7 @@ class ContentAdminApiTests(TestCase):
         # afterward always sees it already set -- the flip never got saved.
         # Reported live: creating a scripture dated today stayed "scheduled"
         # forever, indistinguishable from one scheduled for next month.
+        member = UserFactory(email="scripture-member-create@example.com")
         response = self.client.post(
             reverse("admin-scripture-list-create"),
             {
@@ -237,8 +240,14 @@ class ContentAdminApiTests(TestCase):
         entry = ScriptureOfTheDay.objects.get(id=response.json()["id"])
         self.assertEqual(entry.status, ScriptureStatus.PUBLISHED)
         self.assertIsNotNone(entry.published_at)
+        notification = UserNotification.objects.get(recipient=member)
+        self.assertEqual(notification.notification_type, NotificationType.SCRIPTURE_PUBLISHED)
+        self.assertIn("Psalm 91:1", notification.message)
+        # The creating admin should not notify themselves.
+        self.assertFalse(UserNotification.objects.filter(recipient=self.admin).exists())
 
     def test_editing_a_scheduled_scripture_to_todays_date_publishes_immediately(self):
+        member = UserFactory(email="scripture-member-edit@example.com")
         entry = ScriptureOfTheDay.objects.create(
             date=timezone.localdate() + timedelta(days=5),
             bible_text="Psalm 23:1",
@@ -258,6 +267,58 @@ class ContentAdminApiTests(TestCase):
         entry.refresh_from_db()
         self.assertEqual(entry.status, ScriptureStatus.PUBLISHED)
         self.assertIsNotNone(entry.published_at)
+        self.assertTrue(
+            UserNotification.objects.filter(
+                recipient=member, notification_type=NotificationType.SCRIPTURE_PUBLISHED
+            ).exists()
+        )
+
+    def test_editing_a_scripture_without_changing_its_publish_status_does_not_renotify(self):
+        member = UserFactory(email="scripture-member-noop@example.com")
+        entry = ScriptureOfTheDay.objects.create(
+            date=timezone.localdate() + timedelta(days=5),
+            bible_text="Psalm 23:1",
+            scripture="The Lord is my shepherd.",
+            prayer="Guide us.",
+            bible_version="KJV",
+            status=ScriptureStatus.SCHEDULED,
+            created_by=self.admin,
+            updated_by=self.admin,
+        )
+        response = self.client.patch(
+            reverse("admin-scripture-detail", kwargs={"pk": entry.id}),
+            {"prayer": "Guide us always."},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+        entry.refresh_from_db()
+        self.assertEqual(entry.status, ScriptureStatus.SCHEDULED)
+        self.assertFalse(UserNotification.objects.filter(recipient=member).exists())
+
+    def test_publish_due_scheduled_scriptures_command_notifies_users(self):
+        # The cron-driven path (apps.content.management.commands.publish_due_scriptures)
+        # has no admin actor -- unlike the immediate create/edit paths above,
+        # every active non-admin user should be notified, including whoever
+        # happens to be an admin (they're still excluded).
+        member = UserFactory(email="scripture-member-cron@example.com")
+        ScriptureOfTheDay.objects.create(
+            date=timezone.localdate() - timedelta(days=1),
+            bible_text="Isaiah 40:31",
+            scripture="They that wait upon the Lord shall renew their strength.",
+            prayer="Strengthen us.",
+            bible_version="KJV",
+            status=ScriptureStatus.SCHEDULED,
+            created_by=self.admin,
+            updated_by=self.admin,
+        )
+
+        published_count = publish_due_scheduled_scriptures()
+
+        self.assertEqual(published_count, 1)
+        notification = UserNotification.objects.get(recipient=member)
+        self.assertEqual(notification.notification_type, NotificationType.SCRIPTURE_PUBLISHED)
+        self.assertIn("Isaiah 40:31", notification.message)
+        self.assertFalse(UserNotification.objects.filter(recipient=self.admin).exists())
 
     def test_phase7_slice5_home_feed_curation(self):
         category = TestimonyCategory.objects.create(name="Healing", slug="healing")

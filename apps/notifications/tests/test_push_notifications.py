@@ -6,6 +6,7 @@ from apps.notifications.models import DeviceToken, NotificationType, UserNotific
 from apps.notifications.services import (
     notify_admins_of_new_donation,
     notify_all_users_of_app_update,
+    notify_all_users_of_scripture_published,
     notify_new_video_testimony_published,
     notify_testimony_approved,
     notify_testimony_comment,
@@ -20,6 +21,11 @@ from apps.users.tests.factories import UserFactory
 class _FakeTestimony:
     def __init__(self, title: str):
         self.title = title
+
+
+class _FakeScripture:
+    def __init__(self, bible_text: str):
+        self.bible_text = bible_text
 
 
 class SendPushToUsersTests(TestCase):
@@ -161,6 +167,15 @@ class NotifyFunctionsPushWiringTests(TestCase):
 
         send_mock.assert_called_once()
 
+    def test_scripture_published_pushes(self):
+        recipient = self._with_device("scripture-recipient@example.com")
+
+        with patch("apps.notifications.services.send_push_to_tokens", return_value=[]) as send_mock:
+            with self.captureOnCommitCallbacks(execute=True):
+                notify_all_users_of_scripture_published(scripture=_FakeScripture("John 3:16"))
+
+        send_mock.assert_called_once()
+
     def test_testimony_rejected_does_not_push(self):
         recipient = self._with_device("rejected-recipient@example.com")
         actor = UserFactory(email="rejector@example.com")
@@ -250,6 +265,63 @@ class NotifyAllUsersOfAppUpdateTests(TestCase):
         with patch("apps.notifications.services.send_push_to_tokens") as send_mock:
             with self.captureOnCommitCallbacks(execute=True):
                 notified_count = notify_all_users_of_app_update(actor=actor, platform="android")
+
+        self.assertEqual(notified_count, 0)
+        send_mock.assert_not_called()
+
+
+class NotifyAllUsersOfScripturePublishedTests(TestCase):
+    def test_notifies_active_non_admin_users_and_excludes_the_acting_admin(self):
+        from apps.users.choices import AdminRoleCode
+        from apps.users.tests.factories import AdminAssignmentFactory, AdminRoleFactory
+
+        actor = UserFactory(email="scripture-admin@example.com")
+        AdminAssignmentFactory(user=actor, role=AdminRoleFactory(code=AdminRoleCode.CONTENT_ADMIN))
+        member = UserFactory(email="scripture-member@example.com")
+        DeviceToken.objects.create(user=member, token="tok-scripture-member", platform="android")
+
+        with patch("apps.notifications.services.send_push_to_tokens", return_value=[]) as send_mock:
+            with self.captureOnCommitCallbacks(execute=True):
+                notified_count = notify_all_users_of_scripture_published(
+                    scripture=_FakeScripture("Jeremiah 29:11"), actor=actor
+                )
+
+        self.assertEqual(notified_count, 1)
+        send_mock.assert_called_once()
+        notification = UserNotification.objects.get(recipient=member)
+        self.assertEqual(notification.notification_type, NotificationType.SCRIPTURE_PUBLISHED)
+        self.assertIn("Jeremiah 29:11", notification.message)
+        self.assertFalse(UserNotification.objects.filter(recipient=actor).exists())
+
+    def test_excludes_all_active_admins_even_without_an_actor(self):
+        from apps.users.choices import AdminRoleCode
+        from apps.users.tests.factories import AdminAssignmentFactory, AdminRoleFactory
+
+        admin = UserFactory(email="scripture-cron-admin@example.com")
+        AdminAssignmentFactory(user=admin, role=AdminRoleFactory(code=AdminRoleCode.CONTENT_ADMIN))
+        member = UserFactory(email="scripture-cron-member@example.com")
+
+        with patch("apps.notifications.services.send_push_to_tokens") as send_mock:
+            with self.captureOnCommitCallbacks(execute=True):
+                notified_count = notify_all_users_of_scripture_published(
+                    scripture=_FakeScripture("Psalm 23:1"), actor=None
+                )
+
+        self.assertEqual(notified_count, 1)
+        self.assertTrue(UserNotification.objects.filter(recipient=member).exists())
+        self.assertFalse(UserNotification.objects.filter(recipient=admin).exists())
+        send_mock.assert_not_called()
+
+    def test_excludes_inactive_users(self):
+        UserFactory(
+            email="scripture-deactivated@example.com", account_status=UserAccountStatus.DEACTIVATED
+        )
+
+        with patch("apps.notifications.services.send_push_to_tokens") as send_mock:
+            with self.captureOnCommitCallbacks(execute=True):
+                notified_count = notify_all_users_of_scripture_published(
+                    scripture=_FakeScripture("Romans 8:28"), actor=None
+                )
 
         self.assertEqual(notified_count, 0)
         send_mock.assert_not_called()

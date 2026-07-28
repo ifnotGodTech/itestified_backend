@@ -19,7 +19,9 @@ from apps.content.models import (
     InspirationalPictureCategory,
     InspirationalPictureStatus,
     ScriptureOfTheDay,
+    ScriptureStatus,
 )
+from apps.notifications.services import notify_all_users_of_scripture_published
 from apps.testimonies.models import Testimony, TestimonyStatus
 from apps.testimonies.services.media_uploads import build_cloudinary_video_thumbnail_url
 
@@ -176,6 +178,8 @@ class AdminScriptureListCreateView(generics.ListCreateAPIView):
         entry.refresh_status_for_today()
         if entry.status != previous_status:
             entry.save(update_fields=["status", "published_at", "updated_at"])
+            if entry.status == ScriptureStatus.PUBLISHED:
+                notify_all_users_of_scripture_published(scripture=entry, actor=self.request.user)
 
 
 class AdminScriptureDetailView(generics.RetrieveUpdateAPIView):
@@ -193,6 +197,8 @@ class AdminScriptureDetailView(generics.RetrieveUpdateAPIView):
         entry.refresh_status_for_today()
         if entry.status != previous_status:
             entry.save(update_fields=["status", "published_at", "updated_at"])
+            if entry.status == ScriptureStatus.PUBLISHED:
+                notify_all_users_of_scripture_published(scripture=entry, actor=self.request.user)
 
 
 class AdminHomeCurationView(APIView):

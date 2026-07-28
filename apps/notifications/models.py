@@ -10,6 +10,7 @@ class NotificationType(models.TextChoices):
     NEW_VIDEO_TESTIMONY = "new_video_testimony", "New Video Testimony"
     DONATION_RECEIVED = "donation_received", "Donation Received"
     APP_UPDATE_AVAILABLE = "app_update_available", "App Update Available"
+    SCRIPTURE_PUBLISHED = "scripture_published", "Scripture Published"
 
 
 class UserNotification(models.Model):

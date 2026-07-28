@@ -988,6 +988,30 @@ Test:
 
 Status: not started — planning complete, sequencing agreed (Android now, iOS deferred to the Apple Developer account resolution), domain confirmed available (`itestified.app`, admin controls DNS).
 
+### Phase 12: Scripture Of The Day Notifications
+
+Build:
+- notify every active, non-admin user (in-app + push, respecting each user's own `allow_push_notifications` preference) the moment a Scripture of the Day actually goes live
+- cover both ways a scripture can go live: an admin creates or edits an entry dated today (immediate publish, Phase 7's `perform_create`/`perform_update`), and the daily `publish_due_scriptures` cron catching a scheduled entry up
+- reuse the existing Phase 6 push pipeline (`send_push_to_users`) rather than building a second one
+
+Sub-slices:
+
+- **Slice 1 — Notify on immediate publish** — an admin creates a scripture dated today, or edits an existing entry's date to today (or earlier); every active, non-admin user gets a notification the moment the save request completes
+  - Implemented 2026-07-28. New `NotificationType.SCRIPTURE_PUBLISHED` choice (migration `0010_alter_usernotification_notification_type`) and `apps.notifications.services.notify_all_users_of_scripture_published(*, scripture, actor=None)`, mirroring `notify_new_video_testimony_published`'s recipient scoping: `User.objects.filter(account_status=ACTIVE)`, excluding active admins and (when given) the acting admin themselves, since they already see the change in the dashboard. Wired into `AdminScriptureListCreateView.perform_create` and `AdminScriptureDetailView.perform_update` (`apps/content/api/views.py`) right after the existing `refresh_status_for_today()` status-flip save — only fires when that flip actually lands on `PUBLISHED`, so an edit that doesn't touch publish status (e.g. changing the prayer text on a still-scheduled entry) never re-notifies anyone.
+- **Slice 2 — Notify on scheduled (cron) publish** — a scripture scheduled for a past date that was never manually touched gets published by the daily `publish_due_scriptures` management command; every active, non-admin user gets notified at that point, exactly as if an admin had just published it
+  - Implemented 2026-07-28. `apps.content.services.commands.publish_due_scheduled_scriptures()` now captures the IDs of rows about to flip *before* the bulk `.update()` (bulk updates don't give per-row hooks), then calls `notify_all_users_of_scripture_published(scripture=entry)` once per newly-published entry afterward (`actor=None` — nothing to exclude on the cron path, but active admins are still excluded). Normally this is exactly one entry (today's), but a missed cron run catching up several days at once now correctly sends one distinct notification per entry rather than one generic message.
+- **Slice 3 — Recognizable in the notification centre** — a scripture-published notification renders with its own icon in the mobile notification list rather than the generic fallback
+  - Implemented 2026-07-28. Added `NotificationType.scripture` to the mobile enum and `'scripture_published' → NotificationType.scripture` in `NotificationItem.typeFromApi`, plus a dedicated purple/book icon case in `_NotificationAvatar` (`notifications_sections.dart`), matching the treatment already given to `app_update_available`. Unmapped/future types still fall back to the existing generic icon, so this was additive only.
+
+Test:
+- backend: `NotifyAllUsersOfScripturePublishedTests` (excludes admins including the acting admin, excludes inactive users, notifies eligible members, pushes) plus a push-wiring assertion alongside the other `notify_*` functions in `apps/notifications/tests/test_push_notifications.py`
+- backend: extended the existing Phase 7 immediate-publish regression tests (`apps/content/tests/test_api.py`) to assert the notification is actually created, added a same-status-edit no-op test and a dedicated `publish_due_scheduled_scriptures` command test
+- mobile: `typeFromApi` mapping test for `scripture_published` and the unrecognized-type fallback
+- full backend suite re-run clean: 254 tests, same pre-existing 21 `apps.authn` failures/errors (live Brevo calls, unrelated), zero new regressions; `manage.py check` and `makemigrations --check` clean
+
+Status: Completed. All 3 slices implemented 2026-07-28 — see each slice's notes above. Not yet covered: a notification when a scripture is scheduled (not published) or when a picture/testimony curation change goes live — out of scope for this phase, which was scoped specifically to the "no notification on scripture upload" gap reported live.
+
 ## Risks To Watch Early
 
 - building schema directly from UI mocks instead of real domain needs
