@@ -11,7 +11,14 @@ It should be used together with:
 
 ## Status
 
-Current state: backend scaffold and Phase 1-2 foundations are implemented, with Phase 4-7 actively in delivery.
+Current state, updated 2026-07-29:
+
+- **Completed**: Phase 0 (Domain Discovery And Contract Lock), Phase 1 (Project Bootstrap And Infrastructure), Phase 2 (Identity, Auth, And Admin Access), Phase 3 (Testimonies Core Domain), Phase 4 (Moderation And Review Workflows), Phase 5 (Donations And Giving), Phase 6 (Notifications And User Activity), Phase 7 (Content Management Domains), Phase 10 (App Release & Version Management), Phase 12 (Scripture Of The Day Notifications), Phase 13 (Profile Support & Community Content) — see each phase's own dated `Status:` line and any post-completion review/fix/refinement entries below it for exact scope, what was live-tested, and what (if anything) remains an open follow-up.
+- **Not started**: Phase 8 (Reviews, Analytics, And Operational Admin Features), Phase 9 (Integration Hardening And Client Wiring Support), Phase 11 (Testimony Sharing — planning and sequencing already agreed: Android first, iOS deferred to the Apple Developer account question).
+
+Known open items, tracked but not blocking any phase's completion (see the referenced phase for detail):
+- iOS push notifications need the Apple Developer account / APNs key resolved (Phase 6); Android push is confirmed working end-to-end on a real device.
+- Dead SMTP/Resend email-provider settings should be cleaned up now that Brevo is confirmed as the sole live provider, and `config/settings/test.py` should force a safe `EMAIL_PROVIDER` so `apps.authn`'s tests stop live-calling Brevo (Phase 6).
 
 Current milestone goal:
 - define the backend in a way that cleanly supports both the mobile app and the dashboard without inheriting either UI's temporary mock structures directly
