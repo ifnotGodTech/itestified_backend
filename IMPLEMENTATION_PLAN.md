@@ -14,7 +14,8 @@ It should be used together with:
 Current state, updated 2026-07-29:
 
 - **Completed**: Phase 0 (Domain Discovery And Contract Lock), Phase 1 (Project Bootstrap And Infrastructure), Phase 2 (Identity, Auth, And Admin Access), Phase 3 (Testimonies Core Domain), Phase 4 (Moderation And Review Workflows), Phase 5 (Donations And Giving), Phase 6 (Notifications And User Activity), Phase 7 (Content Management Domains), Phase 10 (App Release & Version Management), Phase 12 (Scripture Of The Day Notifications), Phase 13 (Profile Support & Community Content), Phase 14 (Self-Service Account Security — Change Password & Delete Account) — see each phase's own dated `Status:` line and any post-completion review/fix/refinement entries below it for exact scope, what was live-tested, and what (if anything) remains an open follow-up.
-- **Not started**: Phase 8 (Reviews, Analytics, And Operational Admin Features), Phase 9 (Integration Hardening And Client Wiring Support), Phase 11 (Testimony Sharing — planning and sequencing already agreed: Android first, iOS deferred to the Apple Developer account question), Phase 15 (Testimony Reactions — scoped and agreed with the admin, build not started; personalized feed and Scripture streak concepts reviewed alongside it but deliberately deferred to their own future phases).
+- **In progress**: Phase 15 (Testimony Reactions — Slice 1 backend completed 2026-07-29, mobile Slices 2-3 not started).
+- **Not started**: Phase 8 (Reviews, Analytics, And Operational Admin Features), Phase 9 (Integration Hardening And Client Wiring Support), Phase 11 (Testimony Sharing — planning and sequencing already agreed: Android first, iOS deferred to the Apple Developer account question), Phase 16 (Personalized "For You" Feed — full slice breakdown drafted, not yet reviewed with the admin the way Phase 15 was), Phase 17 (Scripture Streak — full slice breakdown drafted, same caveat; has one open gap around per-user timezone for the reminder push).
 
 Known open items, tracked but not blocking any phase's completion (see the referenced phase for detail):
 - iOS push notifications need the Apple Developer account / APNs key resolved (Phase 6); Android push is confirmed working end-to-end on a real device.
@@ -1129,6 +1130,74 @@ Test:
 - mobile: pills render real counts and the current user's active reaction; tapping switches/removes correctly; guest tap shows a sign-in prompt instead of a silent no-op; Favorite/bookmark still works exactly as before, just with its new icon
 
 Status: Slice 1 (backend) completed 2026-07-29 — see its note above. Slices 2-3 (mobile) not started.
+
+### Phase 16: Personalized "For You" Feed
+
+Background: second of the three engagement concepts from the 2026-07-29 review (see Phase 15's background). Today's Home feed is one admin-curated payload, identical for every user. This phase makes it start reflecting what someone actually cares about, without losing the admin's editorial Trending section underneath it.
+
+Proposed decisions (full slice breakdown requested before discussion on every open question — flagging what's a real call versus an assumption to react to):
+- **Signal source: both explicit and implicit, blended.** Explicit: a "Follow" action on a category, same shape as the existing Favorite feature. Implicit: categories a user has already favorited or reacted to are auto-included even without an explicit follow, so there's no cold-start problem for existing users on day one. This mirrors YouTube's own model (explicit subscriptions blended with watch-history weighting), the same pattern cited in the original concept review.
+- **Follow is its own model**, not reusing Favorite: `UserFollowedCategory` (user, category, created_at, unique together) — same shape as `TestimonyFavorite`, kept as a separate table since "I favorited one testimony in this category" and "I want to follow this category going forward" are different signals with different lifetimes.
+- **Empty state**: a user with zero followed categories and zero favorites/reactions sees no "For You" section at all — Home falls back to exactly what it shows today (Trending only). No fabricated personalization for a signal-less account.
+- **"Follow more" suggestions**: v1 just lists all active categories the user doesn't already follow, alphabetically. No ranking/popularity logic yet — simplest thing that works, revisit if it's not good enough once real usage data exists.
+- **Guests**: no personalization is possible without an account, so guests never see a "For You" section, same as today.
+
+Build:
+- backend: `UserFollowedCategory` model + follow/unfollow endpoint (mirrors `FavoriteToggleView`'s POST/DELETE shape exactly); a `for-you` feed endpoint unioning testimonies from followed categories and categories the user has favorited/reacted to, most recent first, same pagination as the existing testimony list
+- backend: category list response includes each category's `is_followed` for the requesting user (same `context["request"]` pattern already used for `TestimonyDetailSerializer.my_reaction`)
+- mobile: Home gains a "For You" rail (hidden when the user has no signal at all) with follow chips for their current topics plus a "+ Follow more" entry point; Category screen / testimony detail gain a way to follow a category directly
+
+Sub-slices:
+
+- **Slice 1 — User follows or unfollows a testimony category (backend)** — an authenticated user can follow any active category and unfollow it later; the public category list reflects the requesting user's follow state
+  - Not started.
+- **Slice 2 — User's feed reflects what they follow and already engage with (backend)** — a new `for-you` endpoint returns approved testimonies from the user's followed categories, blended with categories they've favorited/reacted to, most recent first; returns an explicit empty result (not an error) for a user with no signal yet, so the mobile client knows to hide the section rather than show nothing
+  - Not started.
+- **Slice 3 — User follows a category and sees Home change accordingly (mobile)** — "For You" rail wired to Slice 2, "Follow"/"+ Follow more" chips wired to Slice 1, section hidden entirely for a signal-less account; existing admin-curated Trending sections stay exactly as they are today, underneath
+  - Not started.
+- **Slice 4 — Admin sees which categories are most followed (admin)** — the existing admin category list gains a follower count per category, so content strategy decisions (what to commission more of) aren't guesswork
+  - Not started.
+
+Test:
+- backend: follow/unfollow is idempotent; a user's `for-you` feed includes testimonies from followed categories and from categories they've favorited/reacted to, and excludes everything else; a signal-less user gets an explicit empty result; a guest cannot follow (401)
+- mobile: "For You" rail is absent for a signal-less account and appears once a follow/favorite/reaction exists; follow chip state matches the backend; existing Trending sections are unaffected
+
+Status: Not started — full breakdown drafted 2026-07-29 for review; nothing above is locked in the way Phase 15's decisions were (those came out of an actual back-and-forth). Flag anything you'd call differently.
+
+### Phase 17: Scripture Streak (Habit Loop)
+
+Background: third of the three engagement concepts from the 2026-07-29 review. Today's Scripture of the Day card is purely decorative from a retention standpoint — it displays the verse and does nothing else. Already decided earlier in this review: **default-on for every user**, not opt-in.
+
+Infrastructure note: this phase does **not** need new scheduling infrastructure. `render.yaml` already runs a daily cron (`publish_scheduled_testimonies && publish_due_scriptures && publish_due_inspirational_pictures`, built in Phase 12); the reminder job below is one more management command appended to that same line. This makes the "biggest lift of the three" framing in Phase 15's background a bit less true than it first looked — the lift is a new model and command, not new infrastructure.
+
+Proposed decisions (same caveat as Phase 16 — these are calls made to give you something concrete to react to, not agreed-upon like Phase 15's were):
+- **What counts as "reading" today's scripture**: an explicit `POST` fired when the user actually opens the scripture detail (mirrors the existing `PublicTestimonyViewIncrementView` pattern — an explicit action, not inferred from a `GET` that could fire just from Home rendering the card). Uses the **user's local calendar date**, sent by the mobile client, not server UTC — the classic streak-app bug is a user reading right after local midnight getting robbed of credit because the server's day rolled over first.
+- **Streak model**: denormalized fields on `Profile` (`scripture_streak_count`, `scripture_last_read_date`, plus two fields tracking freeze usage — see below), same "cheap to read on every Home load, kept in sync by the command that changes it" pattern as the reaction counters in Phase 15. A separate `ScriptureReadReceipt` (user, read_date, unique together) log backs it, mainly so a streak can be reconstructed/audited later if the denormalized fields ever drift.
+- **Streak freeze**: 2 per calendar month, consumed automatically (no user action) the first time a single day is missed — covers exactly one missed day, doesn't stack to cover a longer gap. A gap of 2+ consecutive missed days, or a missed day with no freezes left that month, resets the streak to 1 on the next read rather than to 0 (today's read still counts). Matches Duolingo's Streak Freeze framing from the original review's research (their own published data: −21% churn from this exact mechanic).
+- **Reminder push**: once daily, only to users who haven't read today's scripture yet, sent at a single fixed time rather than per-user local evening — there's no per-user timezone field on `Profile` today, so true "7pm your time" isn't achievable without adding one first. Flagging this as a real gap: if per-user local-time reminders matter, that's a small prerequisite slice (add a timezone field, capture it from the device) before this one, not part of this phase as scoped.
+- **No in-app notification row for the daily reminder** — deliberately push-only, skipping the `UserNotification` row every existing `notify_*` helper creates. A once-a-day nudge for every user would flood the notifications table and the user's own notification list; this is the one place in the notification system that intentionally doesn't follow that pattern.
+
+Build:
+- backend: `ScriptureReadReceipt` model, `Profile` streak fields, `mark_scripture_read` service command computing streak continuation/freeze-consumption/reset, `POST /content/scripture/today/read/`
+- backend: new management command (e.g. `send_scripture_streak_reminders`) appended to the existing daily cron line in `render.yaml`, querying users with `scripture_last_read_date != today` and push-opted-in, calling `send_push_to_users` directly (no new `NotificationType`, no `UserNotification` rows, per the decision above)
+- mobile: Home's Scripture of the Day card becomes the streak card from the concept mockup (streak count, day-dot row, freeze status), calling the new mark-as-read endpoint when the user actually opens it
+
+Sub-slices:
+
+- **Slice 1 — User's streak updates when they read today's scripture (backend)** — opening today's scripture for the first time that calendar day extends the streak (or starts a new one, or consumes a freeze and continues, per the rules above); opening it again the same day is a no-op
+  - Not started.
+- **Slice 2 — User sees their live streak on Home (mobile)** — the streak card replaces the static Scripture of the Day card, shows the real current streak and remaining freezes, and calls Slice 1's endpoint when opened
+  - Not started.
+- **Slice 3 — User who hasn't read today gets one reminder before the day ends (backend)** — the daily cron addition pushes once to eligible users only, respects existing push opt-out, never fires twice in the same day for the same user
+  - Not started.
+- **Slice 4 — Admin sees aggregate streak engagement (admin)** — a small addition (e.g. to an existing admin dashboard/stats view) showing how many users have an active streak and the distribution of streak lengths, so there's a way to tell whether the feature is actually working
+  - Not started.
+
+Test:
+- backend: consecutive-day reads extend the streak; a single missed day with a freeze available continues it instead of resetting; a missed day with no freezes left (or a 2+ day gap) resets to 1 on the next read; reading twice in one calendar day doesn't double-count; the reminder only reaches users who haven't read today and respects push opt-out; a guest cannot mark a read (401)
+- mobile: streak card reflects real state after opening the scripture; freeze-remaining count is accurate; card correctly shows a fresh streak after a reset rather than a stale number
+
+Status: Not started — full breakdown drafted 2026-07-29 for review; nothing above is locked in the way Phase 15's decisions were. The timezone gap for the reminder push is the one item most likely to need a decision before this can actually be scheduled into build order.
 
 ## Risks To Watch Early
 
