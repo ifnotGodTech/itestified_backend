@@ -1094,6 +1094,10 @@ Test:
 
 Status: Phase 14 complete 2026-07-29 — all 5 slices implemented, see each slice's notes above.
 
+Post-completion fixes (2026-07-29, both found live-testing on device):
+- **Delete Account never returned to the guest home after a successful deletion.** `DeleteAccountScreen` is reached via a pushed route (Profile -> `profileOptionDetail` -> here), but `AppFlowController.signOut()` only flips Riverpod state — it has no idea a route is pushed on top, so the rebuilt guest-mode root stayed hidden underneath the still-visible Delete Account screen. Regular logout never hit this because it's called directly from the Profile tab, which isn't pushed on top of anything. Fixed by popping back to the root route (`Navigator.of(context).popUntil((route) => route.isFirst)`) right after `signOut()`. New widget test pushes the screen onto a real navigation stack (the existing tests used it as `home:`, which couldn't have caught this) and asserts the root becomes visible again post-deletion.
+- **Change Password now pops back to the previous screen on success**, instead of leaving the user sitting on the form. Discussed whether success should instead force a full re-login: decided against it — the endpoint already re-verifies the current password before accepting the change, and the old token is already invalidated by the rotation, so forcing a fresh login afterward would add friction without proving anything the flow doesn't already guarantee. Uses `Navigator.of(context).maybePop()` (safe no-op if the screen is ever shown with nothing to pop to, unlike `pop()`).
+
 ## Risks To Watch Early
 
 - building schema directly from UI mocks instead of real domain needs
