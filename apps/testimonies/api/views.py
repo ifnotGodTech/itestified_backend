@@ -21,6 +21,7 @@ from apps.testimonies.models import (
     TestimonyComment,
     TestimonyFavorite,
     TestimonyModerationHistory,
+    TestimonyReaction,
     TestimonyStatus,
     TestimonyType,
 )
@@ -29,7 +30,9 @@ from apps.testimonies.services.commands import (
     approve_testimony,
     archive_testimony,
     reject_testimony,
+    remove_testimony_reaction,
     schedule_testimony,
+    set_testimony_reaction,
     upload_now_video_testimony,
 )
 from apps.notifications.services import (
@@ -50,6 +53,7 @@ from .serializers import (
     TestimonyCreateSerializer,
     TestimonyDetailSerializer,
     TestimonyListSerializer,
+    TestimonyReactionInputSerializer,
     TestimonyModerationHistorySerializer,
     RejectedTestimonyResubmitSerializer,
     AdminVideoTestimonyUploadSerializer,
@@ -240,6 +244,55 @@ class FavoriteToggleView(APIView):
     def delete(self, request, testimony_id: int):
         TestimonyFavorite.objects.filter(user=request.user, testimony_id=testimony_id).delete()
         return Response({"message": "Removed from favorites."}, status=status.HTTP_200_OK)
+
+
+def _reaction_state(testimony: Testimony, user) -> dict:
+    my_reaction = (
+        TestimonyReaction.objects.filter(user=user, testimony=testimony)
+        .values_list("reaction_type", flat=True)
+        .first()
+    )
+    return {
+        "reaction_counts": {
+            "praying_for_you": testimony.praying_for_you_count,
+            "amen": testimony.amen_count,
+            "gives_me_hope": testimony.gives_me_hope_count,
+        },
+        "my_reaction": my_reaction,
+    }
+
+
+class TestimonyReactionView(APIView):
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, testimony_id: int):
+        serializer = TestimonyReactionInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        testimony = Testimony.objects.filter(
+            id=testimony_id,
+            status=TestimonyStatus.APPROVED,
+            category__is_active=True,
+        ).first()
+        if testimony is None:
+            return Response({"message": "Testimony not found."}, status=status.HTTP_404_NOT_FOUND)
+        testimony = set_testimony_reaction(
+            testimony=testimony,
+            user=request.user,
+            reaction_type=serializer.validated_data["reaction_type"],
+        )
+        return Response(_reaction_state(testimony, request.user), status=status.HTTP_200_OK)
+
+    def delete(self, request, testimony_id: int):
+        testimony = Testimony.objects.filter(
+            id=testimony_id,
+            status=TestimonyStatus.APPROVED,
+            category__is_active=True,
+        ).first()
+        if testimony is None:
+            return Response({"message": "Testimony not found."}, status=status.HTTP_404_NOT_FOUND)
+        testimony = remove_testimony_reaction(testimony=testimony, user=request.user)
+        return Response(_reaction_state(testimony, request.user), status=status.HTTP_200_OK)
 
 
 class TestimonyCommentListCreateView(generics.ListCreateAPIView):

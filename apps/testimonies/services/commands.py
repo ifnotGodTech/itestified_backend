@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from django.db import transaction
+from django.db.models import F
 from django.utils import timezone
 
 from apps.testimonies.exceptions import TestimonyTransitionNotAllowedError
@@ -10,6 +11,8 @@ from apps.testimonies.models import (
     ModerationAction,
     Testimony,
     TestimonyModerationHistory,
+    TestimonyReaction,
+    TestimonyReactionType,
     TestimonyStatus,
     TestimonyType,
 )
@@ -179,3 +182,56 @@ def auto_publish_due_scheduled_testimonies() -> int:
         if testimony.testimony_type == TestimonyType.VIDEO:
             notify_new_video_testimony_published(testimony=testimony, actor=None)
     return len(testimonies)
+
+
+_REACTION_COUNT_FIELDS = {
+    TestimonyReactionType.PRAYING_FOR_YOU: "praying_for_you_count",
+    TestimonyReactionType.AMEN: "amen_count",
+    TestimonyReactionType.GIVES_ME_HOPE: "gives_me_hope_count",
+}
+
+
+def _adjust_reaction_count(*, testimony_id: int, reaction_type: str, delta: int) -> None:
+    field = _REACTION_COUNT_FIELDS[reaction_type]
+    Testimony.objects.filter(id=testimony_id).update(**{field: F(field) + delta})
+
+
+@transaction.atomic
+def set_testimony_reaction(*, testimony: Testimony, user, reaction_type: str) -> Testimony:
+    """Sets the user's reaction on a testimony, switching it if they already
+    reacted differently. One reaction per user per testimony (unique
+    constraint on TestimonyReaction) -- tapping the same reaction again is a
+    no-op, tapping a different one moves the count from the old type to the
+    new one, tapping for the first time just increments the new type."""
+    existing = (
+        TestimonyReaction.objects.select_for_update()
+        .filter(user=user, testimony=testimony)
+        .first()
+    )
+    if existing is not None:
+        if existing.reaction_type == reaction_type:
+            return testimony
+        _adjust_reaction_count(testimony_id=testimony.id, reaction_type=existing.reaction_type, delta=-1)
+        existing.reaction_type = reaction_type
+        existing.save(update_fields=["reaction_type"])
+    else:
+        TestimonyReaction.objects.get_or_create(
+            user=user, testimony=testimony, defaults={"reaction_type": reaction_type}
+        )
+    _adjust_reaction_count(testimony_id=testimony.id, reaction_type=reaction_type, delta=1)
+    testimony.refresh_from_db(fields=["praying_for_you_count", "amen_count", "gives_me_hope_count"])
+    return testimony
+
+
+@transaction.atomic
+def remove_testimony_reaction(*, testimony: Testimony, user) -> Testimony:
+    existing = (
+        TestimonyReaction.objects.select_for_update()
+        .filter(user=user, testimony=testimony)
+        .first()
+    )
+    if existing is not None:
+        _adjust_reaction_count(testimony_id=testimony.id, reaction_type=existing.reaction_type, delta=-1)
+        existing.delete()
+    testimony.refresh_from_db(fields=["praying_for_you_count", "amen_count", "gives_me_hope_count"])
+    return testimony

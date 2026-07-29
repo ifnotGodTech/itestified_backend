@@ -73,6 +73,13 @@ class Testimony(models.Model):
     archived_at = models.DateTimeField(null=True, blank=True)
     view_count = models.PositiveIntegerField(default=0)
     comment_count = models.PositiveIntegerField(default=0)
+    # Denormalized per-reaction-type counters, kept in sync by
+    # services/commands.py's set_testimony_reaction/remove_testimony_reaction
+    # (F() updates) -- same pattern as comment_count, so list/detail
+    # responses never need a live aggregate query per testimony.
+    praying_for_you_count = models.PositiveIntegerField(default=0)
+    amen_count = models.PositiveIntegerField(default=0)
+    gives_me_hope_count = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -111,6 +118,46 @@ class TestimonyFavorite(models.Model):
 
     def __str__(self) -> str:
         return f"Favorite<{self.user_id}:{self.testimony_id}>"
+
+
+class TestimonyReactionType(models.TextChoices):
+    # Deliberately no negative/critical option -- a testimony is a personal
+    # hardship-to-breakthrough story, not generic social content. See the
+    # Phase 15 engagement review for the reasoning (LinkedIn cut "Curious"
+    # for being ambiguous; a testimony has even less room for one).
+    PRAYING_FOR_YOU = "praying_for_you", "Praying for you"
+    AMEN = "amen", "Amen"
+    GIVES_ME_HOPE = "gives_me_hope", "Gives me hope"
+
+
+class TestimonyReaction(models.Model):
+    # One reaction per user per testimony -- setting a different type
+    # switches it rather than adding a second row (same single-reaction-slot
+    # model as Facebook's original 2016 reactions), enforced here and in
+    # services/commands.py's set_testimony_reaction.
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="testimony_reactions",
+    )
+    testimony = models.ForeignKey(
+        "testimonies.Testimony",
+        on_delete=models.CASCADE,
+        related_name="reactions",
+    )
+    reaction_type = models.CharField(max_length=20, choices=TestimonyReactionType.choices)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "testimony"],
+                name="uniq_testimony_reaction_user_testimony",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"Reaction<{self.user_id}:{self.testimony_id}:{self.reaction_type}>"
 
 
 class TestimonyComment(models.Model):

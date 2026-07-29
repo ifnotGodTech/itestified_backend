@@ -10,6 +10,8 @@ from apps.testimonies.models import (
     TestimonyComment,
     TestimonyFavorite,
     TestimonyModerationHistory,
+    TestimonyReaction,
+    TestimonyReactionType,
     TestimonyStatus,
     TestimonyType,
     normalize_testimony_category_name,
@@ -97,6 +99,7 @@ class TestimonyListSerializer(serializers.ModelSerializer):
     category = serializers.CharField(source="category.name", read_only=True)
     category_slug = serializers.CharField(source="category.slug", read_only=True)
     thumbnail_url = serializers.SerializerMethodField()
+    reaction_counts = serializers.SerializerMethodField()
 
     class Meta:
         model = Testimony
@@ -113,6 +116,7 @@ class TestimonyListSerializer(serializers.ModelSerializer):
             "thumbnail_url",
             "view_count",
             "comment_count",
+            "reaction_counts",
             "publish_at",
             "created_at",
         )
@@ -132,8 +136,19 @@ class TestimonyListSerializer(serializers.ModelSerializer):
             return obj.thumbnail_url
         return build_cloudinary_video_thumbnail_url(obj.video_url)
 
+    def get_reaction_counts(self, obj: Testimony) -> dict:
+        # Reads the three denormalized counters directly -- no per-row
+        # query, so this is free on list views with many testimonies.
+        return {
+            "praying_for_you": obj.praying_for_you_count,
+            "amen": obj.amen_count,
+            "gives_me_hope": obj.gives_me_hope_count,
+        }
+
 
 class TestimonyDetailSerializer(TestimonyListSerializer):
+    my_reaction = serializers.SerializerMethodField()
+
     class Meta(TestimonyListSerializer.Meta):
         fields = TestimonyListSerializer.Meta.fields + (
             "body",
@@ -141,6 +156,20 @@ class TestimonyDetailSerializer(TestimonyListSerializer):
             "thumbnail_url",
             "status",
             "rejection_reason",
+            "my_reaction",
+        )
+
+    def get_my_reaction(self, obj: Testimony):
+        # Unlike reaction_counts, this needs a query -- scoped to the
+        # single-object detail serializer only, kept off the list
+        # serializer deliberately to avoid an N+1 across a testimony list.
+        request = self.context.get("request")
+        if request is None or not request.user.is_authenticated:
+            return None
+        return (
+            TestimonyReaction.objects.filter(user=request.user, testimony=obj)
+            .values_list("reaction_type", flat=True)
+            .first()
         )
 
 
@@ -595,6 +624,10 @@ class FavoriteSerializer(serializers.ModelSerializer):
     class Meta:
         model = TestimonyFavorite
         fields = ("testimony_id", "created_at")
+
+
+class TestimonyReactionInputSerializer(serializers.Serializer):
+    reaction_type = serializers.ChoiceField(choices=TestimonyReactionType.choices)
 
 
 class FavoriteTestimonySerializer(TestimonyListSerializer):

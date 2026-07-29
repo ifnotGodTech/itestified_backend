@@ -12,6 +12,7 @@ from apps.testimonies.models import (
     Testimony,
     TestimonyCategory,
     TestimonyFavorite,
+    TestimonyReaction,
     TestimonyStatus,
     TestimonyType,
 )
@@ -486,6 +487,166 @@ class TestimonyApiTests(TestCase):
         self.assertFalse(
             TestimonyFavorite.objects.filter(user=user, testimony=testimony).exists()
         )
+
+    def test_react_sets_reaction_and_increments_the_matching_counter(self) -> None:
+        user = UserFactory(email="reactor@example.com")
+        ProfileFactory(user=user, full_name="Reactor")
+        token = Token.objects.create(user=user)
+        testimony = Testimony.objects.get(title="God healed me")
+
+        response = self.client.post(
+            reverse("testimony-react", kwargs={"testimony_id": testimony.id}),
+            {"reaction_type": "praying_for_you"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["my_reaction"], "praying_for_you")
+        self.assertEqual(body["reaction_counts"]["praying_for_you"], 1)
+        self.assertEqual(body["reaction_counts"]["amen"], 0)
+        testimony.refresh_from_db()
+        self.assertEqual(testimony.praying_for_you_count, 1)
+        self.assertTrue(
+            TestimonyReaction.objects.filter(
+                user=user, testimony=testimony, reaction_type="praying_for_you"
+            ).exists()
+        )
+
+    def test_react_switching_reaction_type_moves_the_count_not_adds_to_it(self) -> None:
+        user = UserFactory(email="switcher@example.com")
+        ProfileFactory(user=user, full_name="Switcher")
+        token = Token.objects.create(user=user)
+        testimony = Testimony.objects.get(title="God healed me")
+        self.client.post(
+            reverse("testimony-react", kwargs={"testimony_id": testimony.id}),
+            {"reaction_type": "praying_for_you"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+
+        response = self.client.post(
+            reverse("testimony-react", kwargs={"testimony_id": testimony.id}),
+            {"reaction_type": "amen"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["my_reaction"], "amen")
+        self.assertEqual(body["reaction_counts"]["praying_for_you"], 0)
+        self.assertEqual(body["reaction_counts"]["amen"], 1)
+        # Still exactly one reaction row for this user on this testimony.
+        self.assertEqual(
+            TestimonyReaction.objects.filter(user=user, testimony=testimony).count(), 1
+        )
+
+    def test_react_with_the_same_type_again_does_not_double_count(self) -> None:
+        user = UserFactory(email="repeat-reactor@example.com")
+        ProfileFactory(user=user, full_name="Repeat Reactor")
+        token = Token.objects.create(user=user)
+        testimony = Testimony.objects.get(title="God healed me")
+        self.client.post(
+            reverse("testimony-react", kwargs={"testimony_id": testimony.id}),
+            {"reaction_type": "amen"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+
+        response = self.client.post(
+            reverse("testimony-react", kwargs={"testimony_id": testimony.id}),
+            {"reaction_type": "amen"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["reaction_counts"]["amen"], 1)
+
+    def test_react_rejects_an_invalid_reaction_type(self) -> None:
+        user = UserFactory(email="bad-reaction@example.com")
+        ProfileFactory(user=user, full_name="Bad Reaction")
+        token = Token.objects.create(user=user)
+        testimony = Testimony.objects.get(title="God healed me")
+
+        response = self.client.post(
+            reverse("testimony-react", kwargs={"testimony_id": testimony.id}),
+            {"reaction_type": "angry"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(TestimonyReaction.objects.filter(user=user, testimony=testimony).exists())
+
+    def test_react_requires_authentication(self) -> None:
+        testimony = Testimony.objects.get(title="God healed me")
+
+        response = self.client.post(
+            reverse("testimony-react", kwargs={"testimony_id": testimony.id}),
+            {"reaction_type": "amen"},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_remove_reaction_decrements_the_counter_and_clears_my_reaction(self) -> None:
+        user = UserFactory(email="unreact@example.com")
+        ProfileFactory(user=user, full_name="Unreactor")
+        token = Token.objects.create(user=user)
+        testimony = Testimony.objects.get(title="God healed me")
+        self.client.post(
+            reverse("testimony-react", kwargs={"testimony_id": testimony.id}),
+            {"reaction_type": "gives_me_hope"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+
+        response = self.client.delete(
+            reverse("testimony-react", kwargs={"testimony_id": testimony.id}),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertIsNone(body["my_reaction"])
+        self.assertEqual(body["reaction_counts"]["gives_me_hope"], 0)
+        self.assertFalse(TestimonyReaction.objects.filter(user=user, testimony=testimony).exists())
+
+    def test_testimony_detail_exposes_reaction_counts_and_my_reaction(self) -> None:
+        user = UserFactory(email="detail-reactor@example.com")
+        ProfileFactory(user=user, full_name="Detail Reactor")
+        token = Token.objects.create(user=user)
+        testimony = Testimony.objects.get(title="God healed me")
+        TestimonyReaction.objects.create(user=user, testimony=testimony, reaction_type="amen")
+        Testimony.objects.filter(id=testimony.id).update(amen_count=1)
+
+        response = self.client.get(
+            reverse("testimony-detail", kwargs={"pk": testimony.id}),
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["reaction_counts"]["amen"], 1)
+        self.assertEqual(body["my_reaction"], "amen")
+
+        guest_response = self.client.get(reverse("testimony-detail", kwargs={"pk": testimony.id}))
+        self.assertIsNone(guest_response.json()["my_reaction"])
+
+    def test_testimony_list_exposes_reaction_counts_without_my_reaction(self) -> None:
+        testimony = Testimony.objects.get(title="God healed me")
+        Testimony.objects.filter(id=testimony.id).update(praying_for_you_count=3)
+
+        response = self.client.get(reverse("testimony-list"))
+
+        self.assertEqual(response.status_code, 200)
+        item = next(row for row in response.json()["results"] if row["id"] == testimony.id)
+        self.assertEqual(item["reaction_counts"]["praying_for_you"], 3)
+        self.assertNotIn("my_reaction", item)
 
     def test_slice8_view_favorites_feed_returns_paginated_testimonies(self) -> None:
         user = UserFactory(email="favorite-feed@example.com")
