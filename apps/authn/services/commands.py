@@ -590,6 +590,22 @@ def change_temporary_admin_password(*, user: User, current_password: str, new_pa
     return user
 
 
+def change_mobile_user_password(*, user: User, current_password: str, new_password: str) -> Token:
+    if not check_password(current_password, user.password):
+        raise AuthnError("Current password is incorrect.")
+
+    validate_user_password(new_password, user=user)
+    user.set_password(new_password)
+    user.save(update_fields=["password"])
+    # Rotate the token rather than keep the old one valid: same security
+    # intent as complete_password_reset's Token deletion (a leaked/stolen
+    # token from before the change must stop working), but this path is
+    # already authenticated, so a fresh token is issued in the same
+    # response instead of forcing the user to log in again from scratch.
+    Token.objects.filter(user=user).delete()
+    return Token.objects.create(user=user)
+
+
 def login_admin_user(*, email: str, password: str) -> tuple[User, AdminAssignment]:
     user = authenticate(email=email, password=password)
     if user is None:

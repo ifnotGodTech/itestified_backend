@@ -14,6 +14,7 @@ from apps.authn.models import UserSession
 
 from ..exceptions import AuthnError, ChallengeVerificationError, EmailDeliveryError
 from ..services.commands import (
+    change_mobile_user_password,
     change_temporary_admin_password,
     complete_password_reset,
     complete_admin_invite,
@@ -33,6 +34,7 @@ from .serializers import (
     AdminInviteSerializer,
     AdminInviteCompleteSerializer,
     AdminInviteVerifySerializer,
+    ChangePasswordSerializer,
     ChangeTemporaryPasswordSerializer,
     CompletePasswordResetSerializer,
     CompleteRegistrationSerializer,
@@ -243,6 +245,37 @@ class MobileGoogleSignInView(APIView):
                 },
             }
         )
+
+
+class MobileChangePasswordView(APIView):
+    """Authenticated "I know my current password, let me set a new one"
+    flow -- distinct from PasswordResetRequestView/Verify/Complete, which
+    are for a logged-out user who forgot their password entirely."""
+
+    def post(self, request):
+        serializer = ChangePasswordSerializer(data=request.data)
+        if not serializer.is_valid():
+            return _error_response(
+                message="Invalid input.",
+                code="validation_error",
+                http_status=status.HTTP_400_BAD_REQUEST,
+                errors=serializer.errors,
+            )
+
+        try:
+            token = change_mobile_user_password(
+                user=request.user,
+                current_password=serializer.validated_data["current_password"],
+                new_password=serializer.validated_data["new_password"],
+            )
+        except AuthnError as exc:
+            return _error_response(
+                message=str(exc),
+                code="authn_error",
+                http_status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response({"message": "Password changed successfully.", "token": token.key})
 
 
 class PasswordResetRequestView(APIView):

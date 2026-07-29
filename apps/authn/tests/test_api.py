@@ -3,6 +3,7 @@ from unittest.mock import patch
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.test.client import Client
+from rest_framework.authtoken.models import Token
 
 from apps.users.choices import AdminRoleCode
 from apps.users.models import AdminRole, Profile
@@ -213,6 +214,116 @@ class AuthnApiTests(TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertFalse(response.json()["must_change_password"])
+
+    def test_change_password_requires_authentication(self) -> None:
+        response = self.client.post(
+            reverse("auth-mobile-change-password"),
+            {
+                "current_password": "StrongPass!1",
+                "new_password": "NewStrongPass!2",
+                "confirm_new_password": "NewStrongPass!2",
+            },
+            content_type="application/json",
+        )
+        # SessionAuthentication is listed before TokenAuthentication in
+        # DEFAULT_AUTHENTICATION_CLASSES, and DRF only consults the first
+        # authenticator's authenticate_header() (which SessionAuthentication
+        # doesn't provide) when deciding between 401 and 403 -- so a denied
+        # request comes back 403 here, not 401, matching this project's
+        # existing behavior on every other IsAuthenticated-only endpoint.
+        self.assertEqual(response.status_code, 403)
+
+    def test_change_password_succeeds_and_rotates_the_token(self) -> None:
+        user = UserFactory(email="change-password@example.com")
+        old_token = Token.objects.create(user=user)
+
+        response = self.client.post(
+            reverse("auth-mobile-change-password"),
+            {
+                "current_password": "StrongPass!1",
+                "new_password": "NewStrongPass!2",
+                "confirm_new_password": "NewStrongPass!2",
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {old_token.key}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        new_token_key = response.json()["token"]
+        self.assertNotEqual(new_token_key, old_token.key)
+
+        user.refresh_from_db()
+        self.assertTrue(user.check_password("NewStrongPass!2"))
+
+        # The old token must no longer authenticate anything (403 here for
+        # the same reason as test_change_password_requires_authentication).
+        stale_response = self.client.get(
+            reverse("profile-me"),
+            HTTP_AUTHORIZATION=f"Token {old_token.key}",
+        )
+        self.assertEqual(stale_response.status_code, 403)
+
+        # The new token, returned in the response, must work.
+        fresh_response = self.client.get(
+            reverse("profile-me"),
+            HTTP_AUTHORIZATION=f"Token {new_token_key}",
+        )
+        self.assertEqual(fresh_response.status_code, 200)
+
+    def test_change_password_rejects_an_incorrect_current_password(self) -> None:
+        user = UserFactory(email="change-password-wrong@example.com")
+        token = Token.objects.create(user=user)
+
+        response = self.client.post(
+            reverse("auth-mobile-change-password"),
+            {
+                "current_password": "NotTheRealPassword",
+                "new_password": "NewStrongPass!2",
+                "confirm_new_password": "NewStrongPass!2",
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        user.refresh_from_db()
+        self.assertTrue(user.check_password("StrongPass!1"))
+
+    def test_change_password_rejects_a_mismatched_confirmation(self) -> None:
+        user = UserFactory(email="change-password-mismatch@example.com")
+        token = Token.objects.create(user=user)
+
+        response = self.client.post(
+            reverse("auth-mobile-change-password"),
+            {
+                "current_password": "StrongPass!1",
+                "new_password": "NewStrongPass!2",
+                "confirm_new_password": "SomethingElse!3",
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_change_password_rejects_a_password_that_fails_validators(self) -> None:
+        user = UserFactory(email="change-password-weak@example.com")
+        token = Token.objects.create(user=user)
+
+        response = self.client.post(
+            reverse("auth-mobile-change-password"),
+            {
+                "current_password": "StrongPass!1",
+                "new_password": "short",
+                "confirm_new_password": "short",
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        user.refresh_from_db()
+        self.assertTrue(user.check_password("StrongPass!1"))
 
     @override_settings(OTP_HINT_IN_RESPONSE=True)
     def test_super_admin_can_invite_admin_role(self) -> None:

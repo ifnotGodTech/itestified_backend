@@ -73,3 +73,14 @@ class ChangeTemporaryPasswordSerializer(serializers.Serializer):
         if attrs["new_password"] != attrs["confirm_new_password"]:
             raise serializers.ValidationError({"confirm_new_password": "Passwords do not match."})
         return attrs
+
+
+class ChangePasswordSerializer(serializers.Serializer):
+    current_password = serializers.CharField()
+    new_password = serializers.CharField()
+    confirm_new_password = serializers.CharField()
+
+    def validate(self, attrs):
+        if attrs["new_password"] != attrs["confirm_new_password"]:
+            raise serializers.ValidationError({"confirm_new_password": "Passwords do not match."})
+        return attrs
