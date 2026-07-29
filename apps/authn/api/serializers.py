@@ -1,5 +1,7 @@
 from rest_framework import serializers
 
+from apps.authn.choices import AccountDeletionReason
+
 
 class StartRegistrationSerializer(serializers.Serializer):
     full_name = serializers.CharField(max_length=255)
@@ -84,3 +86,13 @@ class ChangePasswordSerializer(serializers.Serializer):
         if attrs["new_password"] != attrs["confirm_new_password"]:
             raise serializers.ValidationError({"confirm_new_password": "Passwords do not match."})
         return attrs
+
+
+class DeleteAccountSerializer(serializers.Serializer):
+    current_password = serializers.CharField()
+    reason = serializers.ChoiceField(choices=AccountDeletionReason.choices)
+    # "Other" requiring non-blank details is a business rule (checked in
+    # delete_own_account, alongside the current-password check), not a
+    # shape-of-input rule -- kept out of this serializer's validate() for
+    # the same reason check_password lives in the service layer, not here.
+    details = serializers.CharField(required=False, allow_blank=True, default="")

@@ -19,6 +19,7 @@ from ..services.commands import (
     complete_password_reset,
     complete_admin_invite,
     complete_registration,
+    delete_own_account,
     invite_admin_user,
     login_admin_user,
     login_mobile_user_with_google,
@@ -38,6 +39,7 @@ from .serializers import (
     ChangeTemporaryPasswordSerializer,
     CompletePasswordResetSerializer,
     CompleteRegistrationSerializer,
+    DeleteAccountSerializer,
     LoginSerializer,
     MobileGoogleSignInSerializer,
     PasswordResetRequestSerializer,
@@ -276,6 +278,37 @@ class MobileChangePasswordView(APIView):
             )
 
         return Response({"message": "Password changed successfully.", "token": token.key})
+
+
+class MobileDeleteAccountView(APIView):
+    """Self-service account deletion -- soft-delete/anonymize, not a hard
+    row delete. See delete_own_account for why."""
+
+    def post(self, request):
+        serializer = DeleteAccountSerializer(data=request.data)
+        if not serializer.is_valid():
+            return _error_response(
+                message="Invalid input.",
+                code="validation_error",
+                http_status=status.HTTP_400_BAD_REQUEST,
+                errors=serializer.errors,
+            )
+
+        try:
+            delete_own_account(
+                user=request.user,
+                current_password=serializer.validated_data["current_password"],
+                reason=serializer.validated_data["reason"],
+                details=serializer.validated_data["details"],
+            )
+        except AuthnError as exc:
+            return _error_response(
+                message=str(exc),
+                code="authn_error",
+                http_status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response({"message": "Account deleted successfully."})
 
 
 class PasswordResetRequestView(APIView):

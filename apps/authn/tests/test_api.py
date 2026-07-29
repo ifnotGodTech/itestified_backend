@@ -5,12 +5,14 @@ from django.urls import reverse
 from django.test.client import Client
 from rest_framework.authtoken.models import Token
 
-from apps.users.choices import AdminRoleCode
+from apps.users.choices import AdminRoleCode, UserAccountStatus
 from apps.users.models import AdminRole, Profile
+from apps.authn.choices import AccountDeletionReason
 from apps.authn.exceptions import AuthnError
-from apps.authn.models import UserSession
-from apps.users.tests.factories import UserFactory
+from apps.authn.models import AccountDeletionFeedback, UserSession
+from apps.users.tests.factories import ProfileFactory, UserFactory
 from apps.authn.services.commands import bootstrap_super_admin
+from apps.testimonies.models import Testimony, TestimonyCategory, TestimonyStatus, TestimonyType
 
 
 class AuthnApiTests(TestCase):
@@ -324,6 +326,122 @@ class AuthnApiTests(TestCase):
         self.assertEqual(response.status_code, 400)
         user.refresh_from_db()
         self.assertTrue(user.check_password("StrongPass!1"))
+
+    def test_delete_account_requires_authentication(self) -> None:
+        response = self.client.post(
+            reverse("auth-mobile-delete-account"),
+            {"current_password": "StrongPass!1", "reason": "not_using"},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_delete_account_rejects_an_incorrect_current_password(self) -> None:
+        user = UserFactory(email="delete-account-wrong@example.com")
+        token = Token.objects.create(user=user)
+
+        response = self.client.post(
+            reverse("auth-mobile-delete-account"),
+            {"current_password": "NotTheRealPassword", "reason": "not_using"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        user.refresh_from_db()
+        self.assertEqual(user.account_status, UserAccountStatus.ACTIVE)
+
+    def test_delete_account_rejects_an_invalid_reason(self) -> None:
+        user = UserFactory(email="delete-account-badreason@example.com")
+        token = Token.objects.create(user=user)
+
+        response = self.client.post(
+            reverse("auth-mobile-delete-account"),
+            {"current_password": "StrongPass!1", "reason": "not_a_real_reason"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_delete_account_requires_details_when_reason_is_other(self) -> None:
+        user = UserFactory(email="delete-account-other-blank@example.com")
+        token = Token.objects.create(user=user)
+
+        response = self.client.post(
+            reverse("auth-mobile-delete-account"),
+            {"current_password": "StrongPass!1", "reason": "other", "details": "   "},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        user.refresh_from_db()
+        self.assertEqual(user.account_status, UserAccountStatus.ACTIVE)
+
+    def test_delete_account_succeeds_anonymizes_and_blocks_future_login(self) -> None:
+        user = UserFactory(email="delete-account-success@example.com")
+        ProfileFactory(user=user, full_name="Real Name")
+        token = Token.objects.create(user=user)
+
+        response = self.client.post(
+            reverse("auth-mobile-delete-account"),
+            {
+                "current_password": "StrongPass!1",
+                "reason": "other",
+                "details": "Switching to a different account.",
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        user.refresh_from_db()
+        self.assertEqual(user.account_status, UserAccountStatus.DELETED)
+        self.assertEqual(user.email, f"deleted-user-{user.id}@deleted.itestified.local")
+        self.assertFalse(user.has_usable_password())
+        self.assertEqual(user.profile.full_name, "Deleted User")
+        self.assertEqual(user.profile.phone_number, "")
+
+        feedback = AccountDeletionFeedback.objects.get(user=user)
+        self.assertEqual(feedback.reason, AccountDeletionReason.OTHER)
+        self.assertEqual(feedback.details, "Switching to a different account.")
+
+        # The token used to make this very request must no longer work.
+        self.assertFalse(Token.objects.filter(key=token.key).exists())
+        stale_response = self.client.get(
+            reverse("profile-me"),
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+        self.assertEqual(stale_response.status_code, 403)
+
+    def test_delete_account_keeps_the_users_testimonies_visible_with_an_anonymized_author(
+        self,
+    ) -> None:
+        user = UserFactory(email="delete-account-testimony-author@example.com")
+        ProfileFactory(user=user, full_name="Real Name")
+        token = Token.objects.create(user=user)
+        category = TestimonyCategory.objects.create(name="Healing", slug="healing")
+        testimony = Testimony.objects.create(
+            author=user,
+            category=category,
+            title="God did it",
+            body="A real testimony.",
+            testimony_type=TestimonyType.WRITTEN,
+            status=TestimonyStatus.APPROVED,
+        )
+
+        response = self.client.post(
+            reverse("auth-mobile-delete-account"),
+            {"current_password": "StrongPass!1", "reason": "not_using"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+        self.assertEqual(response.status_code, 200)
+
+        detail_response = self.client.get(reverse("testimony-detail", kwargs={"pk": testimony.id}))
+        self.assertEqual(detail_response.status_code, 200)
+        self.assertEqual(detail_response.json()["author_name"], "Deleted User")
 
     @override_settings(OTP_HINT_IN_RESPONSE=True)
     def test_super_admin_can_invite_admin_role(self) -> None:

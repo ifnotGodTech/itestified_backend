@@ -18,14 +18,14 @@ from rest_framework.authtoken.models import Token
 
 from apps.common.exceptions import EmailProviderNotConfiguredError
 from apps.common.services.email import send_email as _shared_send_email
-from apps.users.choices import AdminAssignmentStatus, AdminRoleCode
+from apps.users.choices import AdminAssignmentStatus, AdminRoleCode, UserAccountStatus
 from apps.users.models import AdminAssignment, AdminRole, Profile, User
 from apps.users.selectors import get_active_admin_assignment
 from apps.users.validators import normalize_full_name
 
-from ..choices import ChallengePurpose
+from ..choices import AccountDeletionReason, ChallengePurpose
 from ..exceptions import AuthnError, ChallengeVerificationError, EmailDeliveryError
-from ..models import EmailChallenge, UserSession
+from ..models import AccountDeletionFeedback, EmailChallenge, UserSession
 from ..validators import ensure_active_admin_assignment, ensure_active_user, validate_user_password
 
 BRAND_PURPLE_70 = "#6E46FF"  # mobile AppColors.purple70 / brandMainColor1
@@ -604,6 +604,46 @@ def change_mobile_user_password(*, user: User, current_password: str, new_passwo
     # response instead of forcing the user to log in again from scratch.
     Token.objects.filter(user=user).delete()
     return Token.objects.create(user=user)
+
+
+def delete_own_account(*, user: User, current_password: str, reason: str, details: str = "") -> None:
+    """Soft-deletes the account: anonymizes identifying fields and blocks
+    login permanently, but does not remove the row or cascade-delete the
+    user's testimonies/comments/donations -- those are shared content other
+    users and the business depend on (donation records in particular often
+    can't be hard-deleted for financial/audit reasons regardless of what the
+    user wants). Every existing view that renders an author's name reads it
+    from Profile.full_name, so scrubbing that one field is what makes a
+    deleted user's past contributions show as "Deleted User" everywhere,
+    with no other code changes required."""
+    if not check_password(current_password, user.password):
+        raise AuthnError("Current password is incorrect.")
+
+    reason = reason.strip()
+    if reason not in AccountDeletionReason.values:
+        raise AuthnError("Select a valid reason for leaving.")
+    if reason == AccountDeletionReason.OTHER and not details.strip():
+        raise AuthnError("Tell us a bit more about why you're leaving.")
+
+    with transaction.atomic():
+        AccountDeletionFeedback.objects.create(user=user, reason=reason, details=details.strip())
+
+        profile = getattr(user, "profile", None)
+        if profile is not None:
+            profile.full_name = "Deleted User"
+            profile.phone_number = ""
+            profile.avatar = ""
+            profile.save(update_fields=["full_name", "phone_number", "avatar"])
+
+        scrubbed_email = f"deleted-user-{user.id}@deleted.itestified.local"
+        user.email = scrubbed_email
+        user.username = scrubbed_email
+        user.account_status = UserAccountStatus.DELETED
+        user.set_unusable_password()
+        user.save(update_fields=["email", "username", "account_status", "password"])
+
+        Token.objects.filter(user=user).delete()
+        _invalidate_user_sessions(user)
 
 
 def login_admin_user(*, email: str, password: str) -> tuple[User, AdminAssignment]:
