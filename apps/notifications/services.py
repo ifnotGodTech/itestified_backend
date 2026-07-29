@@ -71,6 +71,20 @@ def send_push_to_users(
     )
 
 
+def deregister_all_devices_for_user(*, user) -> int:
+    """Removes every device token registered to `user`. Called on account
+    deletion so a deleted (soft-deleted/anonymized, not row-deleted) user's
+    device can never receive a push -- send_push_to_users has no
+    account_status filter of its own, so a stale token left behind would
+    otherwise still be included in future sends. The mobile client also
+    tries to deregister its own device on logout/deletion, but that call
+    needs a still-valid auth token; by the time account deletion has run,
+    the token is already gone, so that best-effort client call always fails
+    for this specific flow -- this is the guaranteed cleanup path."""
+    deleted_count, _ = DeviceToken.objects.filter(user=user).delete()
+    return deleted_count
+
+
 def _dispatch_push(
     *, tokens: list[str], title: str, body: str, data: Optional[dict[str, str]]
 ) -> None:

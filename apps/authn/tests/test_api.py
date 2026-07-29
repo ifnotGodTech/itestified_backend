@@ -10,6 +10,7 @@ from apps.users.models import AdminRole, Profile
 from apps.authn.choices import AccountDeletionReason
 from apps.authn.exceptions import AuthnError
 from apps.authn.models import AccountDeletionFeedback, UserSession
+from apps.notifications.models import DeviceToken
 from apps.users.tests.factories import ProfileFactory, UserFactory
 from apps.authn.services.commands import bootstrap_super_admin
 from apps.testimonies.models import Testimony, TestimonyCategory, TestimonyStatus, TestimonyType
@@ -382,6 +383,7 @@ class AuthnApiTests(TestCase):
         user = UserFactory(email="delete-account-success@example.com")
         ProfileFactory(user=user, full_name="Real Name")
         token = Token.objects.create(user=user)
+        DeviceToken.objects.create(user=user, token="fcm-token-abc", platform="android")
 
         response = self.client.post(
             reverse("auth-mobile-delete-account"),
@@ -409,6 +411,12 @@ class AuthnApiTests(TestCase):
 
         # The token used to make this very request must no longer work.
         self.assertFalse(Token.objects.filter(key=token.key).exists())
+
+        # A deleted account must never be able to receive another push --
+        # reported live: the mobile client's own best-effort deregister call
+        # always fails here since the auth token is already dead by the
+        # time it fires, so the backend must clean this up unconditionally.
+        self.assertFalse(DeviceToken.objects.filter(user=user).exists())
         stale_response = self.client.get(
             reverse("profile-me"),
             HTTP_AUTHORIZATION=f"Token {token.key}",

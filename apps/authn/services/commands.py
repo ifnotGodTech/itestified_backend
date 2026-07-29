@@ -18,6 +18,7 @@ from rest_framework.authtoken.models import Token
 
 from apps.common.exceptions import EmailProviderNotConfiguredError
 from apps.common.services.email import send_email as _shared_send_email
+from apps.notifications.services import deregister_all_devices_for_user
 from apps.users.choices import AdminAssignmentStatus, AdminRoleCode, UserAccountStatus
 from apps.users.models import AdminAssignment, AdminRole, Profile, User
 from apps.users.selectors import get_active_admin_assignment
@@ -615,7 +616,9 @@ def delete_own_account(*, user: User, current_password: str, reason: str, detail
     user wants). Every existing view that renders an author's name reads it
     from Profile.full_name, so scrubbing that one field is what makes a
     deleted user's past contributions show as "Deleted User" everywhere,
-    with no other code changes required."""
+    with no other code changes required. Device tokens ARE removed (unlike
+    testimonies/donations) -- there's no legitimate reason to keep pushing
+    notifications to a deleted account's device."""
     if not check_password(current_password, user.password):
         raise AuthnError("Current password is incorrect.")
 
@@ -644,6 +647,7 @@ def delete_own_account(*, user: User, current_password: str, reason: str, detail
 
         Token.objects.filter(user=user).delete()
         _invalidate_user_sessions(user)
+        deregister_all_devices_for_user(user=user)
 
 
 def login_admin_user(*, email: str, password: str) -> tuple[User, AdminAssignment]:
