@@ -1213,23 +1213,26 @@ Other decisions (proposed, following the artifact's own stated design — flag a
 - **Most-visited theme**: computed live at request time from category counts across favorites + reactions + watches (the same three signals Phase 16's For You feed already blends, just aggregated by category-count here instead of unioned into a feed) — no new aggregation table, this is a single authenticated user's own request, not a list of many users, so a live group-by is cheap.
 - **Recap ("Your 2026 recap")**: teaser-only for this phase, per the artifact's own framing and its open "RECAP SCOPE" question — the card shows the CTA line, tapping it is a non-functional placeholder (or a "Coming soon" message, matching the pattern already used elsewhere this session for real-but-not-yet-wired affordances). Building an actual recap screen is separate future work once there's a full year of real activity data to make one worth building.
 - **Privacy**: exposed only on the authenticated user's own profile request, never on the public author byline or any other user-facing serializer, never compared against other users.
+- **Header redesign confirmed** (2026-07-30): the current `ProfileAvatarHeader` (`lib/features/profile/presentation/widgets/profile_avatar_header.dart`) is a big centered avatar (84px) with name/email stacked below it and a full-width "Edit Profile" pill underneath -- a vertical, centered layout. The artifact's header is a compact horizontal row instead: a smaller avatar on the left, name+email stacked next to it, a small "Edit" pill on the right. Admin's call: redesign to match the artifact. This touches the shared `ProfileAvatarHeader` widget, which is also used by the guest state (`'Guest Mode'` / `'Create Account'`) -- the horizontal layout needs to read correctly for both states, not just the registered one shown in the mockup.
 
 Build:
 - backend: `TestimonyWatch` model; `PublicTestimonyViewIncrementView` additionally records a watch for authenticated requests (existing endpoint, additive change, no new route); new `GET /api/v1/profile/me/journey/` returning `{"watched_count", "favorited_count", "most_visited_theme"}` (no `shared_count` from the backend at all yet -- mobile hardcodes that stat locally until Phase 11 exists to make it real, so there's nothing to later delete from the API)
-- mobile: Profile screen gains a "Your Journey" card between the header and the existing menu list, matching the mockup -- stat tiles, most-visited-theme bar chart, "Only you" private label, recap teaser
+- mobile: `ProfileAvatarHeader` redesigned to the compact horizontal layout (small avatar left, name/email + Edit pill on the right), covering both guest and registered states; Profile screen gains a "Your Journey" card directly below that redesigned header, above the existing menu list -- stat tiles, most-visited-theme bar chart, "Only you" private label, recap teaser
 
 Sub-slices:
 
 - **Slice 1 — User's watched testimonies are tracked (backend)** — opening a testimony's detail screen and starting playback (video) or viewing it (written) records that this user has watched this specific testimony, once per testimony no matter how many times they revisit it
   - Not started.
-- **Slice 2 — User sees their journey on Profile (backend + mobile)** — the new journey endpoint returns real watched/favorited counts and a computed most-visited theme; Profile renders the "Your Journey" card with those real numbers, a mocked "Shared" tile, and a non-functional recap teaser
+- **Slice 2 — Profile header matches the artifact's compact layout (mobile)** — `ProfileAvatarHeader` becomes a horizontal row (avatar left, name/email + Edit pill right) for both guest and registered states, with no functional change to what any of those elements do
+  - Not started.
+- **Slice 3 — User sees their journey on Profile (backend + mobile)** — the new journey endpoint returns real watched/favorited counts and a computed most-visited theme; Profile renders the "Your Journey" card with those real numbers, a mocked "Shared" tile, and a non-functional recap teaser, directly below the redesigned header
   - Not started.
 
 Test:
 - backend: watching the same testimony twice only counts once; watched/favorited counts match the underlying tables exactly; most-visited theme picks the actual top category and returns nothing (not an error) for a user with zero signal across all three sources; the journey endpoint requires authentication (401 for guests)
-- mobile: stat tiles show real numbers for Watched/Favorited and a static placeholder for Shared; the bar chart reflects the real top category; nothing on this card is ever shown to another user or ranked against anyone
+- mobile: the redesigned header renders correctly for both guest and registered states with all existing taps (avatar, Edit/Create Account) still working; stat tiles show real numbers for Watched/Favorited and a static placeholder for Shared; the bar chart reflects the real top category; nothing on this card is ever shown to another user or ranked against anyone
 
-Status: Not started — full breakdown drafted 2026-07-30. The Shared-stays-mock decision is locked in (discussed live); the rest follows the artifact's stated design but hasn't been explicitly confirmed point-by-point the way Phase 15's decisions were.
+Status: Not started — full breakdown drafted 2026-07-30. Two decisions locked in from live discussion: Shared stays mock data until Phase 11, and the header gets redesigned to the artifact's compact layout. The rest (watch-tracking shape, theme computation, teaser-only recap) follows the artifact's stated design but hasn't been explicitly confirmed point-by-point the way Phase 15's decisions were.
 
 ## Risks To Watch Early
 
