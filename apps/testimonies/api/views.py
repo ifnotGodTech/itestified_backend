@@ -24,6 +24,7 @@ from apps.testimonies.models import (
     TestimonyReaction,
     TestimonyStatus,
     TestimonyType,
+    UserFollowedCategory,
 )
 from apps.authn.api.permissions import IsActiveAdmin
 from apps.testimonies.services.commands import (
@@ -86,6 +87,32 @@ class PublicCategoryListView(generics.ListAPIView):
     permission_classes = [AllowAny]
     serializer_class = TestimonyCategorySerializer
     queryset = TestimonyCategory.objects.filter(is_active=True).order_by("name")
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        user = self.request.user
+        context["followed_category_ids"] = (
+            set(user.followed_categories.values_list("category_id", flat=True))
+            if user.is_authenticated
+            else set()
+        )
+        return context
+
+
+class CategoryFollowToggleView(APIView):
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, category_id: int):
+        category = TestimonyCategory.objects.filter(id=category_id, is_active=True).first()
+        if category is None:
+            return Response({"message": "Category not found."}, status=status.HTTP_404_NOT_FOUND)
+        UserFollowedCategory.objects.get_or_create(user=request.user, category=category)
+        return Response({"message": "Following category."}, status=status.HTTP_201_CREATED)
+
+    def delete(self, request, category_id: int):
+        UserFollowedCategory.objects.filter(user=request.user, category_id=category_id).delete()
+        return Response({"message": "Unfollowed category."}, status=status.HTTP_200_OK)
 
 
 class PublicTestimonyListView(generics.ListAPIView):

@@ -66,9 +66,23 @@ def normalize_video_source_lines(body: str) -> str:
 
 
 class TestimonyCategorySerializer(serializers.ModelSerializer):
+    is_followed = serializers.SerializerMethodField()
+
     class Meta:
         model = TestimonyCategory
-        fields = ("id", "name", "slug", "description")
+        fields = ("id", "name", "slug", "description", "is_followed")
+
+    def get_is_followed(self, obj: TestimonyCategory) -> bool:
+        # Prefetched once per request by PublicCategoryListView (a single
+        # query for the whole list) rather than one .exists() query per
+        # category row here -- see get_serializer_context there.
+        followed_ids = self.context.get("followed_category_ids")
+        if followed_ids is not None:
+            return obj.id in followed_ids
+        request = self.context.get("request")
+        if request is None or not request.user.is_authenticated:
+            return False
+        return request.user.followed_categories.filter(category=obj).exists()
 
 
 class AdminTestimonyCategorySerializer(serializers.ModelSerializer):

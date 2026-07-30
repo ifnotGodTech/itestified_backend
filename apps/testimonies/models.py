@@ -29,6 +29,35 @@ def ensure_testimony_category_slug(sender, instance: TestimonyCategory, **kwargs
         instance.slug = slugify(instance.name)
 
 
+class UserFollowedCategory(models.Model):
+    # Explicit "I want to see more of this" signal (Phase 16), distinct from
+    # TestimonyFavorite/TestimonyReaction which are about a single testimony,
+    # not a topic going forward. Kept as its own table for the same reason
+    # Favorite is its own table rather than a boolean column.
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="followed_categories",
+    )
+    category = models.ForeignKey(
+        "testimonies.TestimonyCategory",
+        on_delete=models.CASCADE,
+        related_name="followed_by",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "category"],
+                name="uniq_user_followed_category",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"FollowedCategory<{self.user_id}:{self.category_id}>"
+
+
 class TestimonyStatus(models.TextChoices):
     DRAFT = "draft", "Draft"
     PENDING_REVIEW = "pending_review", "Pending Review"

@@ -15,6 +15,7 @@ from apps.testimonies.models import (
     TestimonyReaction,
     TestimonyStatus,
     TestimonyType,
+    UserFollowedCategory,
 )
 from apps.users.tests.factories import ProfileFactory, UserFactory
 from apps.users.tests.factories import AdminAssignmentFactory, AdminRoleFactory
@@ -647,6 +648,85 @@ class TestimonyApiTests(TestCase):
         item = next(row for row in response.json()["results"] if row["id"] == testimony.id)
         self.assertEqual(item["reaction_counts"]["praying_for_you"], 3)
         self.assertNotIn("my_reaction", item)
+
+    def test_public_category_list_shows_is_followed_false_for_a_guest(self) -> None:
+        response = self.client.get(reverse("testimony-category-list"))
+
+        self.assertEqual(response.status_code, 200)
+        for row in response.json():
+            self.assertFalse(row["is_followed"])
+
+    def test_follow_and_unfollow_a_category_reflects_in_the_public_list(self) -> None:
+        user = UserFactory(email="follower@example.com")
+        ProfileFactory(user=user, full_name="Follower")
+        token = Token.objects.create(user=user)
+
+        follow_response = self.client.post(
+            reverse("testimony-category-follow-toggle", kwargs={"category_id": self.category_faith.id}),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+        self.assertEqual(follow_response.status_code, 201)
+        self.assertTrue(
+            UserFollowedCategory.objects.filter(user=user, category=self.category_faith).exists()
+        )
+
+        list_response = self.client.get(
+            reverse("testimony-category-list"),
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+        self.assertEqual(list_response.status_code, 200)
+        rows = {row["slug"]: row["is_followed"] for row in list_response.json()}
+        self.assertTrue(rows["faith"])
+        self.assertFalse(rows["healing"])
+
+        unfollow_response = self.client.delete(
+            reverse("testimony-category-follow-toggle", kwargs={"category_id": self.category_faith.id}),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+        self.assertEqual(unfollow_response.status_code, 200)
+        self.assertFalse(
+            UserFollowedCategory.objects.filter(user=user, category=self.category_faith).exists()
+        )
+
+    def test_following_the_same_category_twice_does_not_error_or_duplicate(self) -> None:
+        user = UserFactory(email="repeat-follower@example.com")
+        ProfileFactory(user=user, full_name="Repeat Follower")
+        token = Token.objects.create(user=user)
+
+        for _ in range(2):
+            response = self.client.post(
+                reverse("testimony-category-follow-toggle", kwargs={"category_id": self.category_faith.id}),
+                content_type="application/json",
+                HTTP_AUTHORIZATION=f"Token {token.key}",
+            )
+            self.assertEqual(response.status_code, 201)
+
+        self.assertEqual(
+            UserFollowedCategory.objects.filter(user=user, category=self.category_faith).count(), 1
+        )
+
+    def test_follow_category_requires_authentication(self) -> None:
+        response = self.client.post(
+            reverse("testimony-category-follow-toggle", kwargs={"category_id": self.category_faith.id}),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_follow_an_inactive_category_returns_not_found(self) -> None:
+        user = UserFactory(email="follow-inactive@example.com")
+        ProfileFactory(user=user, full_name="Follow Inactive")
+        token = Token.objects.create(user=user)
+
+        response = self.client.post(
+            reverse("testimony-category-follow-toggle", kwargs={"category_id": self.category_inactive.id}),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+
+        self.assertEqual(response.status_code, 404)
 
     def test_slice8_view_favorites_feed_returns_paginated_testimonies(self) -> None:
         user = UserFactory(email="favorite-feed@example.com")

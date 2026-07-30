@@ -4,6 +4,7 @@ from .views import (
     AdminCategoryActivationView,
     AdminCategoryDetailView,
     AdminCategoryListCreateView,
+    CategoryFollowToggleView,
     AdminApproveTestimonyView,
     AdminPendingModerationQueueView,
     AdminRejectTestimonyView,
@@ -36,6 +37,7 @@ from .views import (
 
 urlpatterns = [
     path("categories/", PublicCategoryListView.as_view(), name="testimony-category-list"),
+    path("categories/<int:category_id>/follow/", CategoryFollowToggleView.as_view(), name="testimony-category-follow-toggle"),
     path("", PublicTestimonyListView.as_view(), name="testimony-list"),
     path("<int:pk>/", PublicTestimonyDetailView.as_view(), name="testimony-detail"),
     path("<int:testimony_id>/view/", PublicTestimonyViewIncrementView.as_view(), name="testimony-view-increment"),
