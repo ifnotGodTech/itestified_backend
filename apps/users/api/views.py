@@ -8,6 +8,7 @@ from django.db.models import Q
 
 from apps.authn.api.permissions import IsActiveAdmin
 from apps.common.services.media_uploads import CloudinaryUploadError, create_direct_upload_signature
+from apps.testimonies.services.queries import user_engagement_journey
 from apps.users.choices import UserAccountStatus
 from apps.users.models import Profile
 from apps.users.models import User
@@ -35,6 +36,17 @@ class CurrentProfileView(APIView):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class ProfileJourneyView(APIView):
+    """Phase 18 Slice 3: the private "Your Journey" card's real numbers --
+    never exposed on any public/author-facing serializer, never compared
+    against other users."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        return Response(user_engagement_journey(request.user))
 
 
 class ProfileAvatarUploadSignatureView(APIView):
