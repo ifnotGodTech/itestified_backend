@@ -149,6 +149,37 @@ class TestimonyFavorite(models.Model):
         return f"Favorite<{self.user_id}:{self.testimony_id}>"
 
 
+class TestimonyWatch(models.Model):
+    # Recorded once per distinct testimony an authenticated user opens (Phase
+    # 18 Slice 1) -- backs the "Watched" count on Profile's Your Journey
+    # card, so "48 Watched" reads as 48 different testimonies, not 48
+    # playback events. Written by PublicTestimonyViewIncrementView, which
+    # already increments the global view_count on every open regardless of
+    # auth; this is the per-user complement to that, authenticated-only.
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="testimony_watches",
+    )
+    testimony = models.ForeignKey(
+        "testimonies.Testimony",
+        on_delete=models.CASCADE,
+        related_name="watched_by",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "testimony"],
+                name="uniq_testimony_watch_user_testimony",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"Watch<{self.user_id}:{self.testimony_id}>"
+
+
 class TestimonyReactionType(models.TextChoices):
     # Deliberately no negative/critical option -- a testimony is a personal
     # hardship-to-breakthrough story, not generic social content. See the

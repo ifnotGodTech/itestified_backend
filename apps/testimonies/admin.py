@@ -6,6 +6,7 @@ from .models import (
     TestimonyComment,
     TestimonyFavorite,
     TestimonyReaction,
+    TestimonyWatch,
     UserFollowedCategory,
 )
 
@@ -40,6 +41,12 @@ class TestimonyCommentAdmin(admin.ModelAdmin):
 class TestimonyReactionAdmin(admin.ModelAdmin):
     list_display = ("user", "testimony", "reaction_type", "created_at")
     list_filter = ("reaction_type",)
+    search_fields = ("user__email", "testimony__title")
+
+
+@admin.register(TestimonyWatch)
+class TestimonyWatchAdmin(admin.ModelAdmin):
+    list_display = ("user", "testimony", "created_at")
     search_fields = ("user__email", "testimony__title")
 
 

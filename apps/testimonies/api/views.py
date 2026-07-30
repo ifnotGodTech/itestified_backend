@@ -24,6 +24,7 @@ from apps.testimonies.models import (
     TestimonyReaction,
     TestimonyStatus,
     TestimonyType,
+    TestimonyWatch,
     UserFollowedCategory,
 )
 from apps.authn.api.permissions import IsActiveAdmin
@@ -197,6 +198,11 @@ class PublicTestimonyViewIncrementView(APIView):
         ).update(view_count=F("view_count") + 1)
         if updated == 0:
             return Response({"message": "Testimony not found."}, status=status.HTTP_404_NOT_FOUND)
+        if request.user.is_authenticated:
+            # get_or_create, not create -- once per distinct testimony no
+            # matter how many times this user replays/reopens it (Phase 18
+            # Slice 1's own definition of "Watched").
+            TestimonyWatch.objects.get_or_create(user=request.user, testimony_id=testimony_id)
         row = Testimony.objects.filter(id=testimony_id).values("id", "view_count").first()
         return Response(row, status=status.HTTP_200_OK)
 

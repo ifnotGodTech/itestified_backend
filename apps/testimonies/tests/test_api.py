@@ -15,6 +15,7 @@ from apps.testimonies.models import (
     TestimonyReaction,
     TestimonyStatus,
     TestimonyType,
+    TestimonyWatch,
     UserFollowedCategory,
 )
 from apps.users.tests.factories import ProfileFactory, UserFactory
@@ -181,6 +182,48 @@ class TestimonyApiTests(TestCase):
             content_type="application/json",
         )
         self.assertEqual(response.status_code, 404)
+
+    def test_view_increment_records_a_watch_for_an_authenticated_user(self) -> None:
+        testimony = Testimony.objects.get(title="God healed me")
+        watcher = UserFactory(email="watcher@example.com")
+        token = Token.objects.create(user=watcher)
+
+        response = self.client.post(
+            reverse("testimony-view-increment", kwargs={"testimony_id": testimony.id}),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(
+            TestimonyWatch.objects.filter(user=watcher, testimony=testimony).exists()
+        )
+
+    def test_view_increment_does_not_double_count_a_watch_on_replay(self) -> None:
+        testimony = Testimony.objects.get(title="God healed me")
+        watcher = UserFactory(email="replay-watcher@example.com")
+        token = Token.objects.create(user=watcher)
+
+        for _ in range(3):
+            self.client.post(
+                reverse("testimony-view-increment", kwargs={"testimony_id": testimony.id}),
+                content_type="application/json",
+                HTTP_AUTHORIZATION=f"Token {token.key}",
+            )
+
+        self.assertEqual(
+            TestimonyWatch.objects.filter(user=watcher, testimony=testimony).count(), 1
+        )
+
+    def test_view_increment_does_not_record_a_watch_for_a_guest(self) -> None:
+        testimony = Testimony.objects.get(title="God healed me")
+
+        self.client.post(
+            reverse("testimony-view-increment", kwargs={"testimony_id": testimony.id}),
+            content_type="application/json",
+        )
+
+        self.assertEqual(TestimonyWatch.objects.count(), 0)
 
     def test_slice3_submit_written_testimony_requires_auth_and_sets_pending(self) -> None:
         unauth_response = self.client.post(
