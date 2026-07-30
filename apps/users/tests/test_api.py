@@ -272,7 +272,12 @@ class ProfileJourneyApiTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
             response.json(),
-            {"watched_count": 0, "favorited_count": 0, "most_visited_theme": None},
+            {
+                "watched_count": 0,
+                "favorited_count": 0,
+                "most_visited_theme": None,
+                "theme_distribution": [],
+            },
         )
 
     def test_watched_count_matches_distinct_testimonies_watched(self) -> None:
@@ -317,3 +322,51 @@ class ProfileJourneyApiTests(TestCase):
         )
 
         self.assertEqual(response.json()["most_visited_theme"], "Healing")
+
+    def test_theme_distribution_ranks_categories_by_combined_signal_count(
+        self,
+    ) -> None:
+        TestimonyWatch.objects.create(user=self.user, testimony=self.healing_a)
+        TestimonyWatch.objects.create(user=self.user, testimony=self.healing_b)
+        TestimonyFavorite.objects.create(user=self.user, testimony=self.healing_a)
+        TestimonyReaction.objects.create(
+            user=self.user,
+            testimony=self.faith_a,
+            reaction_type=TestimonyReactionType.AMEN,
+        )
+
+        response = self.client.get(
+            reverse("profile-journey"),
+            HTTP_AUTHORIZATION=f"Token {self.token.key}",
+        )
+
+        self.assertEqual(
+            response.json()["theme_distribution"],
+            [{"theme": "Healing", "count": 3}, {"theme": "Faith", "count": 1}],
+        )
+
+    def test_theme_distribution_caps_at_the_top_four_categories(self) -> None:
+        extra_categories = [
+            TestimonyCategory.objects.create(name=name, slug=name.lower(), is_active=True)
+            for name in ("Deliverance", "Salvation", "Provision")
+        ]
+        author = Testimony.objects.filter(pk=self.healing_a.pk).get().author
+        for category in extra_categories:
+            testimony = Testimony.objects.create(
+                author=author,
+                category=category,
+                title=f"{category.name} testimony",
+                body="Body text.",
+                testimony_type=TestimonyType.WRITTEN,
+                status=TestimonyStatus.APPROVED,
+            )
+            TestimonyWatch.objects.create(user=self.user, testimony=testimony)
+        TestimonyWatch.objects.create(user=self.user, testimony=self.healing_a)
+        TestimonyWatch.objects.create(user=self.user, testimony=self.faith_a)
+
+        response = self.client.get(
+            reverse("profile-journey"),
+            HTTP_AUTHORIZATION=f"Token {self.token.key}",
+        )
+
+        self.assertEqual(len(response.json()["theme_distribution"]), 4)
