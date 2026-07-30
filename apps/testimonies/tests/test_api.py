@@ -1091,6 +1091,38 @@ class AdminTestimonyApiTests(TestCase):
         self.assertEqual(reactivate_response.status_code, 200)
         self.assertEqual(reactivate_response.json()["is_active"], True)
 
+    def test_admin_category_list_and_detail_include_follower_count(self) -> None:
+        follower_one = UserFactory(email="cat-follower-1@example.com")
+        ProfileFactory(user=follower_one, full_name="Follower One")
+        follower_two = UserFactory(email="cat-follower-2@example.com")
+        ProfileFactory(user=follower_two, full_name="Follower Two")
+        UserFollowedCategory.objects.create(user=follower_one, category=self.category)
+        UserFollowedCategory.objects.create(user=follower_two, category=self.category)
+
+        list_response = self.client.get(reverse("admin-testimony-category-list-create"))
+        self.assertEqual(list_response.status_code, 200)
+        row = next(item for item in list_response.json() if item["id"] == self.category.id)
+        self.assertEqual(row["follower_count"], 2)
+
+        detail_response = self.client.get(
+            reverse("admin-testimony-category-detail", kwargs={"pk": self.category.id})
+        )
+        self.assertEqual(detail_response.status_code, 200)
+        self.assertEqual(detail_response.json()["follower_count"], 2)
+
+        # A category nobody follows reports zero, not an error or omission.
+        unfollowed = TestimonyCategory.objects.create(
+            name="Salvation", slug="salvation", is_active=True
+        )
+        unfollowed_row = next(
+            item
+            for item in self.client.get(
+                reverse("admin-testimony-category-list-create")
+            ).json()
+            if item["id"] == unfollowed.id
+        )
+        self.assertEqual(unfollowed_row["follower_count"], 0)
+
     def test_slice12_admin_view_all_testimonies_with_filters_and_detail(self) -> None:
         list_response = self.client.get(reverse("admin-testimony-list"))
         self.assertEqual(list_response.status_code, 200)

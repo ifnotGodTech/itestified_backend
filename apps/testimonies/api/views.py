@@ -457,7 +457,12 @@ class AdminCategoryListCreateView(generics.ListCreateAPIView):
     authentication_classes = [SessionAuthentication]
     permission_classes = [IsActiveAdmin]
     serializer_class = AdminTestimonyCategorySerializer
-    queryset = TestimonyCategory.objects.all().order_by("name")
+    # One annotated query for the whole list rather than one .count() per
+    # category row (see AdminTestimonyCategorySerializer.get_follower_count).
+    queryset = (
+        TestimonyCategory.objects.annotate(follower_count=Count("followed_by", distinct=True))
+        .order_by("name")
+    )
     pagination_class = None
 
 
@@ -465,7 +470,9 @@ class AdminCategoryDetailView(generics.RetrieveUpdateAPIView):
     authentication_classes = [SessionAuthentication]
     permission_classes = [IsActiveAdmin]
     serializer_class = AdminTestimonyCategorySerializer
-    queryset = TestimonyCategory.objects.all()
+    queryset = TestimonyCategory.objects.annotate(
+        follower_count=Count("followed_by", distinct=True)
+    )
 
 
 class AdminCategoryActivationView(APIView):

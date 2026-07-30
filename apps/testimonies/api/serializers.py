@@ -86,10 +86,31 @@ class TestimonyCategorySerializer(serializers.ModelSerializer):
 
 
 class AdminTestimonyCategorySerializer(serializers.ModelSerializer):
+    follower_count = serializers.SerializerMethodField()
+
     class Meta:
         model = TestimonyCategory
-        fields = ("id", "name", "slug", "description", "is_active", "created_at", "updated_at")
+        fields = (
+            "id",
+            "name",
+            "slug",
+            "description",
+            "is_active",
+            "follower_count",
+            "created_at",
+            "updated_at",
+        )
         read_only_fields = ("id", "slug", "created_at", "updated_at")
+
+    def get_follower_count(self, obj: TestimonyCategory) -> int:
+        # AdminCategoryListCreateView/AdminCategoryDetailView annotate this
+        # (one query for the whole list, not one .count() per row); fall
+        # back to a live count for any call site that doesn't bother
+        # annotating (e.g. AdminCategoryActivationView, a single row).
+        annotated = getattr(obj, "follower_count", None)
+        if annotated is not None:
+            return annotated
+        return obj.followed_by.count()
 
     def validate_name(self, value: str) -> str:
         trimmed = value.strip()
