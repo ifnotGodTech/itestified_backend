@@ -11,7 +11,8 @@ from apps.content.models import (
     ScriptureReadReceipt,
     ScriptureStatus,
 )
-from apps.notifications.services import notify_all_users_of_scripture_published
+from apps.notifications.services import notify_all_users_of_scripture_published, send_push_to_users
+from apps.users.choices import UserAccountStatus
 from apps.users.models import Profile
 
 # Automatic, non-punitive: covers exactly one missed day per calendar month,
@@ -138,3 +139,35 @@ def scripture_streak_freezes_remaining(profile: Profile) -> int:
         else 0
     )
     return max(0, MAX_MONTHLY_SCRIPTURE_STREAK_FREEZES - used)
+
+
+def send_scripture_streak_reminders() -> int:
+    """Pushes a once-daily nudge to every active user who hasn't read
+    today's scripture yet (Phase 17 Slice 3). Deliberately push-only -- no
+    UserNotification row, unlike every other notify_* helper -- since a
+    once-a-day broadcast to every unread user would flood the in-app
+    notification list; this is the one place in the system that
+    intentionally skips it.
+
+    Must run from its own once-daily cron entry, never from the existing
+    */5 * * * * publish_due_scriptures job -- appending it there (as an
+    earlier draft of this phase's background suggested) would fire this up
+    to 288 times a day instead of once. All opt-out and device-token
+    filtering is delegated to send_push_to_users; this function only
+    decides *who* is still owed today's reminder.
+    """
+    today = timezone.localdate()
+    target_user_ids = list(
+        Profile.objects.filter(user__account_status=UserAccountStatus.ACTIVE)
+        .exclude(scripture_last_read_date=today)
+        .values_list("user_id", flat=True)
+    )
+    if not target_user_ids:
+        return 0
+
+    send_push_to_users(
+        user_ids=target_user_ids,
+        title="Keep your streak going",
+        body="You haven't read today's Scripture yet -- read it now to keep your streak alive.",
+    )
+    return len(target_user_ids)

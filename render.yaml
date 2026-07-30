@@ -173,6 +173,64 @@ services:
       - key: GOOGLE_OAUTH_CLIENT_IDS
         sync: false
 
+  # Deliberately its own job, not appended to itestified-scheduled-publisher
+  # above -- that one runs every 5 minutes, so appending this reminder there
+  # would push it up to 288 times a day instead of once. No per-user
+  # timezone field exists yet (Phase 17's flagged open gap), so this fires
+  # at a single fixed UTC time for every user rather than each user's own
+  # evening.
+  - type: cron
+    name: itestified-scripture-streak-reminder
+    runtime: python
+    rootDir: backend
+    plan: starter
+    schedule: "0 19 * * *"
+    buildCommand: pip install -r requirements/production.txt
+    startCommand: python manage.py send_scripture_streak_reminders
+    envVars:
+      - key: DJANGO_SETTINGS_MODULE
+        value: config.settings.production
+      - key: DJANGO_SECRET_KEY
+        sync: false
+      - key: DJANGO_ALLOWED_HOSTS
+        value: itestified-backend.onrender.com
+      - key: DJANGO_CSRF_TRUSTED_ORIGINS
+        value: https://itestified-backend.onrender.com
+      - key: DJANGO_SECURE_SSL_REDIRECT
+        value: true
+      - key: DJANGO_USE_X_FORWARDED_HOST
+        value: true
+      - key: OTP_HINT_IN_RESPONSE
+        value: false
+      - key: PYTHON_VERSION
+        value: 3.12.4
+      - key: DATABASE_URL
+        fromDatabase:
+          name: itestified-db
+          property: connectionString
+      - key: POSTGRES_DB
+        fromDatabase:
+          name: itestified-db
+          property: database
+      - key: POSTGRES_USER
+        fromDatabase:
+          name: itestified-db
+          property: user
+      - key: POSTGRES_PASSWORD
+        fromDatabase:
+          name: itestified-db
+          property: password
+      - key: POSTGRES_HOST
+        fromDatabase:
+          name: itestified-db
+          property: host
+      - key: POSTGRES_PORT
+        fromDatabase:
+          name: itestified-db
+          property: port
+      - key: FIREBASE_CREDENTIALS_JSON
+        sync: false
+
 databases:
   - name: itestified-db
     databaseName: itestified
