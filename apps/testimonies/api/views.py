@@ -115,6 +115,47 @@ class CategoryFollowToggleView(APIView):
         return Response({"message": "Unfollowed category."}, status=status.HTTP_200_OK)
 
 
+class ForYouTestimonyListView(generics.ListAPIView):
+    """Personalized feed: approved testimonies from categories the user
+    follows, blended with categories they've favorited or reacted to (no
+    cold-start problem for existing users -- see Phase 16 background). A
+    user with no signal at all gets an ordinary empty paginated result, not
+    an error, so the mobile client knows to hide the "For You" section
+    rather than treat it as a failure."""
+
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+    serializer_class = TestimonyListSerializer
+    pagination_class = TestimonyPagination
+
+    def get_queryset(self):
+        user = self.request.user
+        category_ids = (
+            set(user.followed_categories.values_list("category_id", flat=True))
+            | set(
+                TestimonyFavorite.objects.filter(user=user).values_list(
+                    "testimony__category_id", flat=True
+                )
+            )
+            | set(
+                TestimonyReaction.objects.filter(user=user).values_list(
+                    "testimony__category_id", flat=True
+                )
+            )
+        )
+        if not category_ids:
+            return Testimony.objects.none()
+        return (
+            Testimony.objects.select_related("author", "author__profile", "category")
+            .filter(
+                status=TestimonyStatus.APPROVED,
+                category__is_active=True,
+                category_id__in=category_ids,
+            )
+            .order_by("-created_at", "-id")
+        )
+
+
 class PublicTestimonyListView(generics.ListAPIView):
     permission_classes = [AllowAny]
     serializer_class = TestimonyListSerializer

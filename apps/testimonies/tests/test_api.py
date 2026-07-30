@@ -728,6 +728,75 @@ class TestimonyApiTests(TestCase):
 
         self.assertEqual(response.status_code, 404)
 
+    def test_for_you_feed_requires_authentication(self) -> None:
+        response = self.client.get(reverse("testimony-for-you-feed"))
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_for_you_feed_is_explicitly_empty_for_a_user_with_no_signal(self) -> None:
+        user = UserFactory(email="no-signal@example.com")
+        ProfileFactory(user=user, full_name="No Signal")
+        token = Token.objects.create(user=user)
+
+        response = self.client.get(
+            reverse("testimony-for-you-feed"),
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["results"], [])
+
+    def test_for_you_feed_includes_testimonies_from_a_followed_category_only(self) -> None:
+        user = UserFactory(email="for-you-follow@example.com")
+        ProfileFactory(user=user, full_name="For You Follow")
+        token = Token.objects.create(user=user)
+        self.client.post(
+            reverse("testimony-category-follow-toggle", kwargs={"category_id": self.category_faith.id}),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+
+        response = self.client.get(
+            reverse("testimony-for-you-feed"),
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        titles = {row["title"] for row in response.json()["results"]}
+        self.assertEqual(titles, {"God healed me"})
+
+    def test_for_you_feed_includes_favorited_categories_without_an_explicit_follow(self) -> None:
+        user = UserFactory(email="for-you-favorite@example.com")
+        ProfileFactory(user=user, full_name="For You Favorite")
+        token = Token.objects.create(user=user)
+        healing_testimony = Testimony.objects.get(title="Breakthrough after fasting")
+        TestimonyFavorite.objects.create(user=user, testimony=healing_testimony)
+
+        response = self.client.get(
+            reverse("testimony-for-you-feed"),
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        titles = {row["title"] for row in response.json()["results"]}
+        self.assertEqual(titles, {"Breakthrough after fasting"})
+
+    def test_for_you_feed_includes_reacted_categories_without_an_explicit_follow(self) -> None:
+        user = UserFactory(email="for-you-reaction@example.com")
+        ProfileFactory(user=user, full_name="For You Reaction")
+        token = Token.objects.create(user=user)
+        faith_testimony = Testimony.objects.get(title="God healed me")
+        TestimonyReaction.objects.create(user=user, testimony=faith_testimony, reaction_type="amen")
+
+        response = self.client.get(
+            reverse("testimony-for-you-feed"),
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        titles = {row["title"] for row in response.json()["results"]}
+        self.assertEqual(titles, {"God healed me"})
+
     def test_slice8_view_favorites_feed_returns_paginated_testimonies(self) -> None:
         user = UserFactory(email="favorite-feed@example.com")
         ProfileFactory(user=user, full_name="Favorite Feed User")
