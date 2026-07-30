@@ -628,3 +628,29 @@ class ScriptureReadApiTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 400)
+
+    def test_home_feed_scripture_streak_is_null_for_a_guest(self) -> None:
+        response = self.client.get(reverse("mobile-home-feed"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.json()["scripture_streak"])
+
+    def test_home_feed_scripture_streak_reflects_the_users_real_state(self) -> None:
+        self.client.post(
+            reverse("mobile-scripture-today-read"),
+            {"read_date": self.today.isoformat()},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {self.token.key}",
+        )
+
+        response = self.client.get(
+            reverse("mobile-home-feed"),
+            HTTP_AUTHORIZATION=f"Token {self.token.key}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        streak = response.json()["scripture_streak"]
+        self.assertEqual(streak["streak_count"], 1)
+        self.assertTrue(streak["read_today"])
+        self.assertEqual(streak["freezes_remaining"], 2)
+        self.assertIn(self.today.isoformat(), streak["recent_read_dates"])

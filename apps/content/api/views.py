@@ -1,3 +1,6 @@
+from datetime import timedelta
+from typing import Optional
+
 from django.utils import timezone
 from django.db import models
 from rest_framework import generics, status
@@ -20,12 +23,14 @@ from apps.content.models import (
     InspirationalPictureCategory,
     InspirationalPictureStatus,
     ScriptureOfTheDay,
+    ScriptureReadReceipt,
     ScriptureStatus,
 )
 from apps.content.services.commands import mark_scripture_read, scripture_streak_freezes_remaining
 from apps.notifications.services import notify_all_users_of_scripture_published
 from apps.testimonies.models import Testimony, TestimonyStatus
 from apps.testimonies.services.media_uploads import build_cloudinary_video_thumbnail_url
+from apps.users.models import Profile
 
 from .serializers import (
     FeaturedHomePictureSerializer,
@@ -324,8 +329,35 @@ class AdminFeaturedHomePictureDeleteView(APIView):
         return Response({"removed": picture_id}, status=status.HTTP_200_OK)
 
 
+def _scripture_streak_payload(request) -> Optional[dict]:
+    # Per-user, so only meaningful when the request actually carries a
+    # recognized user -- deliberately not @authentication_classes([]) like
+    # the rest of this view, since that would make the request's token
+    # invisible even if one was sent (see permission_classes([]) below,
+    # which still lets guests through with no streak data).
+    if not request.user.is_authenticated:
+        return None
+    profile = Profile.objects.filter(user=request.user).first()
+    if profile is None:
+        return None
+    today = timezone.localdate()
+    recent_read_dates = list(
+        ScriptureReadReceipt.objects.filter(
+            user=request.user,
+            read_date__gte=today - timedelta(days=6),
+            read_date__lte=today,
+        ).values_list("read_date", flat=True)
+    )
+    return {
+        "streak_count": profile.scripture_streak_count,
+        "last_read_date": profile.scripture_last_read_date,
+        "freezes_remaining": scripture_streak_freezes_remaining(profile),
+        "read_today": profile.scripture_last_read_date == today,
+        "recent_read_dates": recent_read_dates,
+    }
+
+
 @api_view(["GET"])
-@authentication_classes([])
 @permission_classes([])
 def mobile_home_feed_view(request):
     section_rows = list(HomeSectionOrder.objects.all().order_by("position", "id"))
@@ -378,6 +410,7 @@ def mobile_home_feed_view(request):
             "featured_testimonies": featured_payload,
             "inspirational_pictures": featured_pictures_payload,
             "scripture": ScriptureSerializer(scripture).data if scripture else None,
+            "scripture_streak": _scripture_streak_payload(request),
         }
     )
 
