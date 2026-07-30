@@ -27,6 +27,7 @@ from apps.content.models import (
     ScriptureStatus,
 )
 from apps.content.services.commands import mark_scripture_read, scripture_streak_freezes_remaining
+from apps.content.services.queries import scripture_streak_engagement_stats
 from apps.notifications.services import notify_all_users_of_scripture_published
 from apps.testimonies.models import Testimony, TestimonyStatus
 from apps.testimonies.services.media_uploads import build_cloudinary_video_thumbnail_url
@@ -207,6 +208,17 @@ class AdminScriptureDetailView(generics.RetrieveUpdateAPIView):
             entry.save(update_fields=["status", "published_at", "updated_at"])
             if entry.status == ScriptureStatus.PUBLISHED:
                 notify_all_users_of_scripture_published(scripture=entry, actor=self.request.user)
+
+
+class AdminScriptureStreakStatsView(APIView):
+    """Phase 17 Slice 4: lets an admin see whether the streak feature is
+    actually being used -- not exposed to mobile."""
+
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsAuthenticated, IsActiveAdmin]
+
+    def get(self, request):
+        return Response(scripture_streak_engagement_stats())
 
 
 class AdminHomeCurationView(APIView):

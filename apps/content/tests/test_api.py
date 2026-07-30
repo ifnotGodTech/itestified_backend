@@ -519,6 +519,60 @@ class ContentAdminApiTests(TestCase):
         self.assertEqual(entry.status, ScriptureStatus.SCHEDULED)
         self.assertIsNone(entry.published_at)
 
+    def test_scripture_streak_stats_bucket_active_users_by_streak_length(self):
+        today = timezone.localdate()
+        ProfileFactory(
+            user=UserFactory(email="s1@example.com"),
+            scripture_streak_count=2,
+            scripture_last_read_date=today,
+        )
+        ProfileFactory(
+            user=UserFactory(email="s2@example.com"),
+            scripture_streak_count=5,
+            scripture_last_read_date=today - timedelta(days=1),
+        )
+        ProfileFactory(
+            user=UserFactory(email="s3@example.com"),
+            scripture_streak_count=15,
+            scripture_last_read_date=today,
+        )
+        ProfileFactory(
+            user=UserFactory(email="s4@example.com"),
+            scripture_streak_count=40,
+            scripture_last_read_date=today,
+        )
+        # Stale -- last read 3 days ago, so this shouldn't count as active
+        # even though scripture_streak_count is still nonzero (it only gets
+        # reset lazily on that user's *next* read).
+        ProfileFactory(
+            user=UserFactory(email="s5@example.com"),
+            scripture_streak_count=10,
+            scripture_last_read_date=today - timedelta(days=3),
+        )
+        # Never read at all.
+        ProfileFactory(
+            user=UserFactory(email="s6@example.com"),
+            scripture_streak_count=0,
+            scripture_last_read_date=None,
+        )
+
+        response = self.client.get(reverse("admin-scripture-streak-stats"))
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["active_streak_user_count"], 4)
+        self.assertEqual(
+            payload["streak_length_distribution"],
+            {"1_to_3_days": 1, "4_to_7_days": 1, "8_to_30_days": 1, "31_plus_days": 1},
+        )
+
+    def test_scripture_streak_stats_requires_admin(self):
+        self.client.logout()
+
+        response = self.client.get(reverse("admin-scripture-streak-stats"))
+
+        self.assertIn(response.status_code, (401, 403))
+
     def test_publish_due_scriptures_management_command_publishes_due_entries(self):
         due = ScriptureOfTheDay.objects.create(
             date=timezone.localdate() - timedelta(days=1),

@@ -13,6 +13,7 @@ from .views import (
     AdminInspirationalPictureUploadSignatureView,
     AdminScriptureDetailView,
     AdminScriptureListCreateView,
+    AdminScriptureStreakStatsView,
     ScriptureReadView,
     mobile_home_feed_view,
     mobile_inspirational_pictures_list_view,
@@ -64,6 +65,11 @@ urlpatterns = [
         "admin/scriptures/<int:pk>/",
         AdminScriptureDetailView.as_view(),
         name="admin-scripture-detail",
+    ),
+    path(
+        "admin/scriptures/streak-stats/",
+        AdminScriptureStreakStatsView.as_view(),
+        name="admin-scripture-streak-stats",
     ),
     path(
         "admin/home-curation/",
