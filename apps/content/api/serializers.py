@@ -108,6 +108,13 @@ class ScriptureSerializer(serializers.ModelSerializer):
         return attrs
 
 
+class ScriptureReadInputSerializer(serializers.Serializer):
+    # Required, not defaulted server-side -- the whole point is trusting the
+    # client's own local calendar date over the server's (see
+    # mark_scripture_read's docstring).
+    read_date = serializers.DateField()
+
+
 class HomeSectionOrderSerializer(serializers.ModelSerializer):
     class Meta:
         model = HomeSectionOrder

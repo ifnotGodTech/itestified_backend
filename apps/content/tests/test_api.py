@@ -7,6 +7,7 @@ from django.core.management import call_command
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
+from rest_framework.authtoken.models import Token
 
 from apps.content.models import (
     FeaturedHomePicture,
@@ -23,7 +24,7 @@ from apps.content.services.commands import publish_due_scheduled_scriptures
 from apps.notifications.models import NotificationType, UserNotification
 from apps.testimonies.models import Testimony, TestimonyCategory, TestimonyStatus, TestimonyType
 from apps.users.choices import AdminRoleCode
-from apps.users.tests.factories import AdminAssignmentFactory, AdminRoleFactory, UserFactory
+from apps.users.tests.factories import AdminAssignmentFactory, AdminRoleFactory, ProfileFactory, UserFactory
 
 
 class ContentAdminApiTests(TestCase):
@@ -576,3 +577,54 @@ class ContentAdminApiTests(TestCase):
         future.refresh_from_db()
         self.assertEqual(due.status, InspirationalPictureStatus.PUBLISHED)
         self.assertEqual(future.status, InspirationalPictureStatus.SCHEDULED)
+
+
+class ScriptureReadApiTests(TestCase):
+    def setUp(self) -> None:
+        self.user = UserFactory(email="scripture-read-api@example.com")
+        ProfileFactory(user=self.user, full_name="Scripture Reader")
+        self.token = Token.objects.create(user=self.user)
+        self.today = timezone.localdate()
+
+    def test_mark_read_requires_authentication(self) -> None:
+        response = self.client.post(
+            reverse("mobile-scripture-today-read"),
+            {"read_date": self.today.isoformat()},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_mark_read_returns_the_updated_streak_state(self) -> None:
+        response = self.client.post(
+            reverse("mobile-scripture-today-read"),
+            {"read_date": self.today.isoformat()},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {self.token.key}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["streak_count"], 1)
+        self.assertEqual(body["last_read_date"], self.today.isoformat())
+        self.assertEqual(body["freezes_remaining"], 2)
+
+    def test_mark_read_rejects_a_missing_read_date(self) -> None:
+        response = self.client.post(
+            reverse("mobile-scripture-today-read"),
+            {},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {self.token.key}",
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_mark_read_rejects_a_date_far_from_today(self) -> None:
+        response = self.client.post(
+            reverse("mobile-scripture-today-read"),
+            {"read_date": (self.today - timedelta(days=30)).isoformat()},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {self.token.key}",
+        )
+
+        self.assertEqual(response.status_code, 400)

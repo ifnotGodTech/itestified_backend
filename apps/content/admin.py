@@ -6,6 +6,7 @@ from .models import (
     InspirationalPicture,
     InspirationalPictureCategory,
     ScriptureOfTheDay,
+    ScriptureReadReceipt,
 )
 
 
@@ -28,6 +29,13 @@ class ScriptureOfTheDayAdmin(admin.ModelAdmin):
     list_display = ("id", "date", "bible_text", "bible_version", "status", "published_at")
     list_filter = ("status", "bible_version")
     search_fields = ("bible_text", "scripture", "prayer")
+
+
+@admin.register(ScriptureReadReceipt)
+class ScriptureReadReceiptAdmin(admin.ModelAdmin):
+    list_display = ("user", "read_date", "created_at")
+    list_filter = ("read_date",)
+    search_fields = ("user__email",)
 
 
 @admin.register(HomeSectionOrder)

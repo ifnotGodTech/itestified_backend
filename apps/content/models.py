@@ -133,6 +133,34 @@ class ScriptureOfTheDay(models.Model):
         return f"ScriptureOfTheDay<{self.date}:{self.status}>"
 
 
+class ScriptureReadReceipt(models.Model):
+    # One row per user per calendar day they marked a read -- read_date is
+    # the user's own local date (sent by the client), not necessarily the
+    # server's date, since that's precisely the ambiguity this model exists
+    # to resolve correctly (see Profile.scripture_streak_count). Not tied to
+    # a specific ScriptureOfTheDay row: the streak is about the daily
+    # practice, not which exact entry was read.
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="scripture_read_receipts",
+    )
+    read_date = models.DateField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-read_date"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "read_date"],
+                name="uniq_scripture_read_receipt_user_date",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"ScriptureReadReceipt<{self.user_id}:{self.read_date}>"
+
+
 class HomeSectionKey(models.TextChoices):
     FEATURED_TESTIMONIES = "featured_testimonies", "Featured Testimonies"
     INSPIRATIONAL_PICTURE = "inspirational_picture", "Inspirational Picture"

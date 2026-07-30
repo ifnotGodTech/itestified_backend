@@ -58,6 +58,16 @@ class Profile(models.Model):
     full_name = models.CharField(max_length=255)
     phone_number = models.CharField(max_length=32, blank=True)
     avatar = models.URLField(blank=True)
+    # Scripture-of-the-Day reading streak (Phase 17) -- denormalized so Home
+    # can read it on every load without a query against the receipt log
+    # below; kept in sync exclusively by services.commands.mark_scripture_read.
+    scripture_streak_count = models.PositiveIntegerField(default=0)
+    scripture_last_read_date = models.DateField(null=True, blank=True)
+    # Freeze allowance resets monthly -- freeze_month stores the first-of-month
+    # the freezes_used count applies to, so a new month is detected by
+    # comparing against it rather than needing a scheduled reset job.
+    scripture_streak_freezes_used = models.PositiveIntegerField(default=0)
+    scripture_streak_freeze_month = models.DateField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

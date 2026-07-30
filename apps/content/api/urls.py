@@ -13,6 +13,7 @@ from .views import (
     AdminInspirationalPictureUploadSignatureView,
     AdminScriptureDetailView,
     AdminScriptureListCreateView,
+    ScriptureReadView,
     mobile_home_feed_view,
     mobile_inspirational_pictures_list_view,
     mobile_scripture_today_view,
@@ -82,4 +83,5 @@ urlpatterns = [
     path("home-feed/", mobile_home_feed_view, name="mobile-home-feed"),
     path("inspirational-pictures/", mobile_inspirational_pictures_list_view, name="mobile-inspirational-pictures"),
     path("scripture/today/", mobile_scripture_today_view, name="mobile-scripture-today"),
+    path("scripture/today/read/", ScriptureReadView.as_view(), name="mobile-scripture-today-read"),
 ]

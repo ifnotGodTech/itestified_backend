@@ -1,7 +1,7 @@
 from django.utils import timezone
 from django.db import models
 from rest_framework import generics, status
-from rest_framework.authentication import SessionAuthentication
+from rest_framework.authentication import SessionAuthentication, TokenAuthentication
 from rest_framework.decorators import api_view, authentication_classes, permission_classes
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
@@ -10,6 +10,7 @@ from rest_framework.views import APIView
 
 from apps.authn.api.permissions import IsActiveAdmin
 from apps.common.services.media_uploads import CloudinaryUploadError, create_direct_upload_signature
+from apps.content.exceptions import ContentError
 from apps.content.models import (
     FeaturedHomePicture,
     FeaturedHomeTestimony,
@@ -21,6 +22,7 @@ from apps.content.models import (
     ScriptureOfTheDay,
     ScriptureStatus,
 )
+from apps.content.services.commands import mark_scripture_read, scripture_streak_freezes_remaining
 from apps.notifications.services import notify_all_users_of_scripture_published
 from apps.testimonies.models import Testimony, TestimonyStatus
 from apps.testimonies.services.media_uploads import build_cloudinary_video_thumbnail_url
@@ -32,6 +34,7 @@ from .serializers import (
     HomeSectionOrderSerializer,
     InspirationalPictureCategorySerializer,
     InspirationalPictureSerializer,
+    ScriptureReadInputSerializer,
     ScriptureSerializer,
 )
 
@@ -402,3 +405,29 @@ def mobile_scripture_today_view(request):
     if entry is None:
         entry = ScriptureOfTheDay.objects.filter(status="published", date__lte=today).order_by("-date").first()
     return Response({"result": ScriptureSerializer(entry).data if entry else None})
+
+
+class ScriptureReadView(APIView):
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = ScriptureReadInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            profile = mark_scripture_read(
+                user=request.user,
+                read_date=serializer.validated_data["read_date"],
+            )
+        except ContentError as exc:
+            return Response({"message": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(
+            {
+                "streak_count": profile.scripture_streak_count,
+                "last_read_date": profile.scripture_last_read_date,
+                "freezes_remaining": scripture_streak_freezes_remaining(profile),
+            },
+            status=status.HTTP_200_OK,
+        )
