@@ -14,7 +14,7 @@ It should be used together with:
 Current state, updated 2026-07-29:
 
 - **Completed**: Phase 0 (Domain Discovery And Contract Lock), Phase 1 (Project Bootstrap And Infrastructure), Phase 2 (Identity, Auth, And Admin Access), Phase 3 (Testimonies Core Domain), Phase 4 (Moderation And Review Workflows), Phase 5 (Donations And Giving), Phase 6 (Notifications And User Activity), Phase 7 (Content Management Domains), Phase 10 (App Release & Version Management), Phase 12 (Scripture Of The Day Notifications), Phase 13 (Profile Support & Community Content), Phase 14 (Self-Service Account Security — Change Password & Delete Account), Phase 15 (Testimony Reactions), Phase 16 (Personalized "For You" Feed) — see each phase's own dated `Status:` line and any post-completion review/fix/refinement entries below it for exact scope, what was live-tested, and what (if anything) remains an open follow-up.
-- **Not started**: Phase 8 (Reviews, Analytics, And Operational Admin Features), Phase 9 (Integration Hardening And Client Wiring Support), Phase 11 (Testimony Sharing — planning and sequencing already agreed: Android first, iOS deferred to the Apple Developer account question), Phase 17 (Scripture Streak — full slice breakdown drafted, not yet reviewed with the admin the way Phase 15/16 were; has one open gap around per-user timezone for the reminder push).
+- **Not started**: Phase 8 (Reviews, Analytics, And Operational Admin Features), Phase 9 (Integration Hardening And Client Wiring Support), Phase 11 (Testimony Sharing — planning and sequencing already agreed: Android first, iOS deferred to the Apple Developer account question), Phase 17 (Scripture Streak — full slice breakdown drafted, not yet reviewed with the admin the way Phase 15/16 were; has one open gap around per-user timezone for the reminder push), Phase 18 (Profile Identity & Reflection "Your Journey" — full slice breakdown drafted 2026-07-30, the fourth original engagement concept, initially missed when 15-17 were created; depends on Phase 11 for a real "Shared" stat, mocked in the meantime).
 
 Known open items, tracked but not blocking any phase's completion (see the referenced phase for detail):
 - iOS push notifications need the Apple Developer account / APNs key resolved (Phase 6); Android push is confirmed working end-to-end on a real device.
@@ -1199,6 +1199,37 @@ Test:
 - mobile: streak card reflects real state after opening the scripture; freeze-remaining count is accurate; card correctly shows a fresh streak after a reset rather than a stale number
 
 Status: Not started — full breakdown drafted 2026-07-29 for review; nothing above is locked in the way Phase 15's decisions were. The timezone gap for the reminder push is the one item most likely to need a decision before this can actually be scheduled into build order.
+
+### Phase 18: Profile Identity & Reflection ("Your Journey")
+
+Background: the last of the four original engagement concepts (Angle 03 — Identity & Reflection) from the 2026-07-29 review, and the one that didn't get turned into a phase when 15-17 were drafted (caught 2026-07-30, "We missed on the profile, check the artifact"). Today Profile is a pure settings/navigation menu — nothing on it reflects what someone has actually done in the app. A private "Your Journey" card fixes that, deliberately with no ranking or leaderboard (design decision already stated in the original mockup: "a testimony isn't a score to compete on").
+
+Real gap found while scoping this (2026-07-30): of the mockup's three stats (Watched / Favorited / Shared), only **Favorited** is free today (`TestimonyFavorite` already exists). **Watched** has a small gap — `PublicTestimonyViewIncrementView` increments a global per-testimony counter but never records *which* user watched, so there's no per-user distinct-testimonies-watched count yet. **Shared** has a much bigger gap: the existing share sheet (`showTestimonyShareMenu`) is entirely decorative — the WhatsApp/Instagram/Facebook buttons have no `onTap` at all, no share package is even a dependency, nothing is ever actually shared (same finding already documented in Phase 11's own background). Real sharing is Phase 11's job, not this phase's.
+
+Decision (2026-07-30, admin's call): **Shared stays mock data on the mobile side until Phase 11 ships.** Don't build backend tracking for a stat with nothing real behind it yet. Once Phase 11 Slice 2 (real share sheet) lands, come back and wire this stat to real data as a follow-up slice here.
+
+Other decisions (proposed, following the artifact's own stated design — flag anything you'd call differently, same caveat as Phase 16/17 initially):
+- **Watched tracking**: new `TestimonyWatch` model (user, testimony, unique together — same shape as `TestimonyFavorite`/`TestimonyReaction`), recorded once per distinct testimony the first time an authenticated user's view-increment call lands, not once per replay. "48 Watched" should read as 48 different testimonies, not 48 playback events.
+- **Most-visited theme**: computed live at request time from category counts across favorites + reactions + watches (the same three signals Phase 16's For You feed already blends, just aggregated by category-count here instead of unioned into a feed) — no new aggregation table, this is a single authenticated user's own request, not a list of many users, so a live group-by is cheap.
+- **Recap ("Your 2026 recap")**: teaser-only for this phase, per the artifact's own framing and its open "RECAP SCOPE" question — the card shows the CTA line, tapping it is a non-functional placeholder (or a "Coming soon" message, matching the pattern already used elsewhere this session for real-but-not-yet-wired affordances). Building an actual recap screen is separate future work once there's a full year of real activity data to make one worth building.
+- **Privacy**: exposed only on the authenticated user's own profile request, never on the public author byline or any other user-facing serializer, never compared against other users.
+
+Build:
+- backend: `TestimonyWatch` model; `PublicTestimonyViewIncrementView` additionally records a watch for authenticated requests (existing endpoint, additive change, no new route); new `GET /api/v1/profile/me/journey/` returning `{"watched_count", "favorited_count", "most_visited_theme"}` (no `shared_count` from the backend at all yet -- mobile hardcodes that stat locally until Phase 11 exists to make it real, so there's nothing to later delete from the API)
+- mobile: Profile screen gains a "Your Journey" card between the header and the existing menu list, matching the mockup -- stat tiles, most-visited-theme bar chart, "Only you" private label, recap teaser
+
+Sub-slices:
+
+- **Slice 1 — User's watched testimonies are tracked (backend)** — opening a testimony's detail screen and starting playback (video) or viewing it (written) records that this user has watched this specific testimony, once per testimony no matter how many times they revisit it
+  - Not started.
+- **Slice 2 — User sees their journey on Profile (backend + mobile)** — the new journey endpoint returns real watched/favorited counts and a computed most-visited theme; Profile renders the "Your Journey" card with those real numbers, a mocked "Shared" tile, and a non-functional recap teaser
+  - Not started.
+
+Test:
+- backend: watching the same testimony twice only counts once; watched/favorited counts match the underlying tables exactly; most-visited theme picks the actual top category and returns nothing (not an error) for a user with zero signal across all three sources; the journey endpoint requires authentication (401 for guests)
+- mobile: stat tiles show real numbers for Watched/Favorited and a static placeholder for Shared; the bar chart reflects the real top category; nothing on this card is ever shown to another user or ranked against anyone
+
+Status: Not started — full breakdown drafted 2026-07-30. The Shared-stays-mock decision is locked in (discussed live); the rest follows the artifact's stated design but hasn't been explicitly confirmed point-by-point the way Phase 15's decisions were.
 
 ## Risks To Watch Early
 
