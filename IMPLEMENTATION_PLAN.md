@@ -15,7 +15,7 @@ Current state, updated 2026-07-29:
 
 - **Completed**: Phase 0 (Domain Discovery And Contract Lock), Phase 1 (Project Bootstrap And Infrastructure), Phase 2 (Identity, Auth, And Admin Access), Phase 3 (Testimonies Core Domain), Phase 4 (Moderation And Review Workflows), Phase 5 (Donations And Giving), Phase 6 (Notifications And User Activity), Phase 7 (Content Management Domains), Phase 10 (App Release & Version Management), Phase 12 (Scripture Of The Day Notifications), Phase 13 (Profile Support & Community Content), Phase 14 (Self-Service Account Security — Change Password & Delete Account), Phase 15 (Testimony Reactions), Phase 16 (Personalized "For You" Feed) — see each phase's own dated `Status:` line and any post-completion review/fix/refinement entries below it for exact scope, what was live-tested, and what (if anything) remains an open follow-up.
 - **In progress**: Phase 17 (Scripture Streak — Slices 1-2 (backend + mobile) completed 2026-07-30, Slices 3-4 not started; has one open gap around per-user timezone for the Slice 3 reminder push).
-- **Not started**: Phase 8 (Reviews, Analytics, And Operational Admin Features), Phase 9 (Integration Hardening And Client Wiring Support), Phase 11 (Testimony Sharing — planning and sequencing already agreed: Android first, iOS deferred to the Apple Developer account question), Phase 18 (Profile Identity & Reflection "Your Journey" — full slice breakdown drafted 2026-07-30, the fourth original engagement concept, initially missed when 15-17 were created; depends on Phase 11 for a real "Shared" stat, mocked in the meantime).
+- **Not started**: Phase 8 (Reviews, Analytics, And Operational Admin Features), Phase 9 (Integration Hardening And Client Wiring Support), Phase 11 (Testimony Sharing — planning and sequencing already agreed: Android first, iOS deferred to the Apple Developer account question), Phase 18 (Profile Identity & Reflection "Your Journey" — full slice breakdown drafted 2026-07-30, the fourth original engagement concept, initially missed when 15-17 were created; depends on Phase 11 for a real "Shared" stat, mocked in the meantime), Phase 19 (Testimony Type & Pull-Quote Polish — full slice breakdown drafted 2026-07-30, prompted by the Phase 17 streak card redesign; moderator-curated pull-quote confirmed over automatic extraction).
 
 Known open items, tracked but not blocking any phase's completion (see the referenced phase for detail):
 - iOS push notifications need the Apple Developer account / APNs key resolved (Phase 6); Android push is confirmed working end-to-end on a real device.
@@ -1238,6 +1238,37 @@ Test:
 - mobile: the redesigned header renders correctly for both guest and registered states with all existing taps (avatar, Edit/Create Account) still working; stat tiles show real numbers for Watched/Favorited and a static placeholder for Shared; the bar chart reflects the real top category; nothing on this card is ever shown to another user or ranked against anyone
 
 Status: Not started — full breakdown drafted 2026-07-30. Two decisions locked in from live discussion: Shared stays mock data until Phase 11, and the header gets redesigned to the artifact's compact layout. The rest (watch-tracking shape, theme computation, teaser-only recap) follows the artifact's stated design but hasn't been explicitly confirmed point-by-point the way Phase 15's decisions were.
+
+### Phase 19: Testimony Type &amp; Pull-Quote Polish
+
+Background: prompted by the Phase 17 Slice 2 streak card redesign (2026-07-30) — its serif-italic verse, clear size hierarchy, and truncation gave it a warmth the rest of the app's text doesn't have yet, and text testimonies (the most text-dense screens, carrying the same kind of personal, emotional content as the verse) were flagged as the natural next target ("we may need to visit all our text later, mostly text testimonies"). Reviewed via a before/after type-audit mockup (published as an Artifact, not built) covering `TextStoryCard` (Home/feed list cards) and `WrittenTestimonyDetailContent` (the detail screen) — user approved the direction ("I like the proposed design").
+
+That review surfaced a real question: the proposed detail-screen treatment pulls one sentence out of the testimony as an italic quote, same device as the Scripture verse -- but a testimony's body has no structured way to say which sentence deserves that treatment. Discussed two options: an automatic heuristic (e.g. longest sentence, no new field or workflow) vs. a moderator-picked quote during the existing review workflow (mirrors `ScriptureOfTheDay.prayer`'s existing admin-authored-field pattern, and `Testimony.rejection_reason`'s existing moderator-authored-field-on-the-same-model pattern). Admin's call: the extra moderation step is worth it -- "a human picking the one sentence that hits hardest will consistently beat a heuristic."
+
+Proposed decisions (same caveat as Phase 16/17 initially -- these give you something concrete to react to, not agreed-upon like Phase 15's were):
+- **Pull-quote is moderator-curated only, no automatic extraction** -- confirmed above. A new `Testimony.pull_quote` field (`CharField`, blank=True, capped short -- proposing `max_length=280`, long enough for one real sentence, short enough to stay a pull-quote and not a second body), settable independently of `approve_testimony`/`reject_testimony` (not bundled into either action's signature) via a small new admin endpoint, so a moderator can add or edit it any time, not only at the moment of approval.
+- **Optional, not required to publish** -- a testimony with a blank `pull_quote` simply renders without a pulled-quote block on mobile; there's no blocking gate on the moderation queue and no backfill effort implied for testimonies already published before this phase ships.
+- **Detail-only, same scoping precedent as `my_reaction` (Phase 15)** -- `pull_quote` is added to `TestimonyDetailSerializer` only, not the list serializer; the list-card type refresh (Slice 1) is a pure typography change to the existing excerpt text, not a second surface for the curated quote.
+- **No new fonts or design tokens** -- the type scale reuses exactly the two font families the streak card already introduced (`var(--font-display)`-equivalent serif for titles/quotes, existing UI sans for body/meta), per the audit mockup's own proposed scale table.
+
+Build:
+- backend: `Testimony.pull_quote` field + migration; new admin endpoint (mirrors `AdminUpdateVideoTestimonyView`'s existing small-scoped-PATCH pattern) for a moderator to set/edit it; add `pull_quote` to `TestimonyDetailSerializer`
+- mobile: `TextStoryCard` (`lib/features/home/presentation/widgets/home_discover_cards.dart`) restyled per the audit's list-card proposal -- serif display title, refined excerpt size/line-height, caption-style meta line -- applies everywhere the card is reused (Home, For You, Trending, Category, Favorites, search), since it's one shared widget; `WrittenTestimonyDetailContent` (`lib/features/testimony_detail/presentation/widgets/testimony_detail_written_content.dart`) restyled per the audit's detail-screen proposal -- serif title, refined body line-height -- plus a new italic pull-quote block rendered only when `pull_quote` is non-empty
+
+Sub-slices:
+
+- **Slice 1 — Reader sees the refreshed type scale on testimony list cards (mobile)** -- `TextStoryCard`'s title, excerpt, and meta line adopt the audit's proposed scale; no backend dependency, ships independently of the pull-quote work
+  - Not started.
+- **Slice 2 — Moderator can set a testimony's pull-quote during review (backend + admin dashboard)** -- the new field, migration, and admin endpoint exist; a moderator can add/edit a short quote from the dashboard, separate from the approve/reject decision itself
+  - Not started.
+- **Slice 3 — Reader sees the refreshed detail screen with the moderator's pull-quote, when set (mobile)** -- `WrittenTestimonyDetailContent` adopts the audit's proposed scale and renders the italic pull-quote block whenever `pull_quote` is non-empty; testimonies without one render the same as Slice 1's list-card treatment implies, just without that block
+  - Not started.
+
+Test:
+- backend: `pull_quote` defaults to blank on existing and new testimonies (no backfill/migration data change); the admin endpoint requires moderator/admin auth and rejects an over-length quote; `TestimonyListSerializer`'s response never includes `pull_quote` (detail-only, confirmed by an explicit test per the Phase 15 `my_reaction` precedent)
+- mobile: list cards and the detail screen render correctly both with and without a `pull_quote` (no layout break either way, no orphaned empty block when absent); existing taps (favorite, open, save, comments, share, reactions) keep working unchanged after the restyle; a long single-sentence quote doesn't overflow or get clipped awkwardly on a compact-width device
+
+Status: Not started -- drafted 2026-07-30 following the type-audit mockup review and the "extra moderation step is okay" decision. Slice ordering front-loads Slice 1 (mobile-only, no backend dependency) as the fastest visible win, then the backend/admin authoring capability, then the detail screen once both are ready.
 
 ## Risks To Watch Early
 
