@@ -1162,6 +1162,8 @@ Test:
 - backend: follow/unfollow is idempotent; a user's `for-you` feed includes testimonies from followed categories and from categories they've favorited/reacted to, and excludes everything else; a signal-less user gets an explicit empty result; a guest cannot follow (401) — all implemented and passing as of Slices 1-2, see their notes above
 - mobile: "For You" rail is absent for a signal-less account and appears once a follow/favorite/reaction exists; follow chip state matches the backend; existing Trending sections are unaffected — all implemented and passing as of Slice 3, see its note above
 
+Post-completion observation (2026-07-30, live-tested with the admin): on the current backend (only 4 categories: Deliverance, Faith, Healing, Salvation), "For You" felt too broad rather than personalized — the matching is category-level, not per-testimony, so favoriting/reacting in even 2-3 categories pulls in most of the entire catalog. Diagnosed together: this isn't a bug in the matching logic, it's that 4 categories can't discriminate much no matter how the query is written. Options discussed (cap categories contributing to a user's signal, drop implicit favorite/reaction signal, cap items per category, time-decay old signal, or simply add more categories) — the admin's call: **add more categories first** (a content decision, not code) once the current UI/UX refinement pass is done, and revisit whether the matching logic itself needs tightening only after there's a large-enough category list to actually judge it against. No code change made here; this is intentionally deferred, not forgotten.
+
 Status: Slices 1-3 completed 2026-07-30 — see each slice's notes above. Slice 4 (admin) not started.
 
 ### Phase 17: Scripture Streak (Habit Loop)
