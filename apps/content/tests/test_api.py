@@ -708,3 +708,78 @@ class ScriptureReadApiTests(TestCase):
         self.assertTrue(streak["read_today"])
         self.assertEqual(streak["freezes_remaining"], 2)
         self.assertIn(self.today.isoformat(), streak["recent_read_dates"])
+
+
+class HomeCarouselApiTests(TestCase):
+    """Phase 20 Slice 1 -- the immersive Home carousel is fully automatic
+    (no admin curation), blending published inspirational pictures with
+    approved testimonies that have a moderator-curated pull_quote."""
+
+    def setUp(self) -> None:
+        self.category = TestimonyCategory.objects.create(name="Healing", slug="healing")
+        self.author = UserFactory(email="carousel-author@example.com")
+        ProfileFactory(user=self.author, full_name="Grace A.")
+
+    def _testimony(self, *, pull_quote: str = "", status: str = TestimonyStatus.APPROVED, title: str = "Testimony"):
+        return Testimony.objects.create(
+            author=self.author,
+            category=self.category,
+            title=title,
+            body="God did it.",
+            testimony_type=TestimonyType.WRITTEN,
+            status=status,
+            pull_quote=pull_quote,
+        )
+
+    def test_carousel_is_public_and_blends_pictures_with_pull_quote_testimonies(self) -> None:
+        picture = InspirationalPicture.objects.create(
+            title="Morning Mercy",
+            caption="God is faithful.",
+            image_url="https://images.example.com/pic.jpg",
+            status=InspirationalPictureStatus.PUBLISHED,
+        )
+        testimony = self._testimony(pull_quote="God turned my mourning into dancing.")
+
+        response = self.client.get(reverse("mobile-home-carousel"))
+
+        self.assertEqual(response.status_code, 200)
+        slides = response.json()["results"]
+        kinds = {slide["kind"] for slide in slides}
+        self.assertEqual(kinds, {"picture", "testimony_quote"})
+
+        picture_slide = next(slide for slide in slides if slide["kind"] == "picture")
+        self.assertEqual(picture_slide["id"], picture.id)
+        self.assertEqual(picture_slide["title"], "Morning Mercy")
+
+        quote_slide = next(slide for slide in slides if slide["kind"] == "testimony_quote")
+        self.assertEqual(quote_slide["id"], testimony.id)
+        self.assertEqual(quote_slide["pull_quote"], "God turned my mourning into dancing.")
+        self.assertEqual(quote_slide["speaker"], "Grace A.")
+        self.assertEqual(quote_slide["category"], "Healing")
+
+    def test_carousel_excludes_unpublished_and_expired_pictures(self) -> None:
+        InspirationalPicture.objects.create(
+            title="Draft",
+            image_url="https://images.example.com/draft.jpg",
+            status=InspirationalPictureStatus.DRAFT,
+        )
+        InspirationalPicture.objects.create(
+            title="Expired",
+            image_url="https://images.example.com/expired.jpg",
+            status=InspirationalPictureStatus.PUBLISHED,
+            expires_at=timezone.now() - timedelta(days=1),
+        )
+
+        response = self.client.get(reverse("mobile-home-carousel"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["results"], [])
+
+    def test_carousel_excludes_non_approved_and_blank_pull_quote_testimonies(self) -> None:
+        self._testimony(pull_quote="", title="No quote")
+        self._testimony(pull_quote="A pending quote.", status=TestimonyStatus.PENDING_REVIEW, title="Not approved yet")
+
+        response = self.client.get(reverse("mobile-home-carousel"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["results"], [])

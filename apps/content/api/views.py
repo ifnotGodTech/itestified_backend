@@ -27,7 +27,7 @@ from apps.content.models import (
     ScriptureStatus,
 )
 from apps.content.services.commands import mark_scripture_read, scripture_streak_freezes_remaining
-from apps.content.services.queries import scripture_streak_engagement_stats
+from apps.content.services.queries import home_carousel_slides, scripture_streak_engagement_stats
 from apps.notifications.services import notify_all_users_of_scripture_published
 from apps.testimonies.models import Testimony, TestimonyStatus
 from apps.testimonies.services.media_uploads import build_cloudinary_video_thumbnail_url
@@ -425,6 +425,13 @@ def mobile_home_feed_view(request):
             "scripture_streak": _scripture_streak_payload(request),
         }
     )
+
+
+@api_view(["GET"])
+@authentication_classes([])
+@permission_classes([])
+def mobile_home_carousel_view(request):
+    return Response({"results": home_carousel_slides()})
 
 
 @api_view(["GET"])

@@ -1,8 +1,68 @@
 from datetime import timedelta
 
+from django.db import models
 from django.utils import timezone
 
 from apps.users.models import Profile
+
+# Fully automatic (Phase 20 decision) -- no admin curation step for this
+# rotation, unlike FeaturedHomePicture/FeaturedHomeTestimony.
+HOME_CAROUSEL_PICTURE_LIMIT = 4
+HOME_CAROUSEL_QUOTE_LIMIT = 4
+
+
+def _testimony_speaker_name(testimony) -> str:
+    profile = getattr(testimony.author, "profile", None)
+    if profile and profile.full_name.strip():
+        return profile.full_name
+    return testimony.author.email
+
+
+def home_carousel_slides() -> list[dict]:
+    """Slides for the immersive Home carousel (Phase 20 Slice 1): the most
+    recent published, non-expired inspirational pictures blended with the
+    most recent approved testimonies carrying a moderator-curated
+    pull_quote (Phase 19) -- pictures first, then quotes, most recent
+    first within each kind.
+    """
+    from apps.content.models import InspirationalPicture, InspirationalPictureStatus
+    from apps.testimonies.models import Testimony, TestimonyStatus
+
+    now = timezone.now()
+    pictures = (
+        InspirationalPicture.objects.filter(status=InspirationalPictureStatus.PUBLISHED)
+        .filter(models.Q(publish_at__isnull=True) | models.Q(publish_at__lte=now))
+        .filter(models.Q(expires_at__isnull=True) | models.Q(expires_at__gt=now))
+        .order_by("-updated_at")[:HOME_CAROUSEL_PICTURE_LIMIT]
+    )
+    slides = [
+        {
+            "kind": "picture",
+            "id": picture.id,
+            "image_url": picture.image_url,
+            "title": picture.title,
+            "caption": picture.caption,
+        }
+        for picture in pictures
+    ]
+
+    quoted_testimonies = (
+        Testimony.objects.filter(status=TestimonyStatus.APPROVED)
+        .exclude(pull_quote="")
+        .select_related("category", "author__profile")
+        .order_by("-created_at")[:HOME_CAROUSEL_QUOTE_LIMIT]
+    )
+    slides += [
+        {
+            "kind": "testimony_quote",
+            "id": testimony.id,
+            "pull_quote": testimony.pull_quote,
+            "speaker": _testimony_speaker_name(testimony),
+            "category": testimony.category.name if testimony.category else "",
+        }
+        for testimony in quoted_testimonies
+    ]
+    return slides
 
 
 def scripture_streak_engagement_stats() -> dict:
