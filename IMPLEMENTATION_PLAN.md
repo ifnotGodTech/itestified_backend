@@ -14,7 +14,7 @@ It should be used together with:
 Current state, updated 2026-07-31:
 
 - **Completed**: Phase 0 (Domain Discovery And Contract Lock), Phase 1 (Project Bootstrap And Infrastructure), Phase 2 (Identity, Auth, And Admin Access), Phase 3 (Testimonies Core Domain), Phase 4 (Moderation And Review Workflows), Phase 5 (Donations And Giving), Phase 6 (Notifications And User Activity), Phase 7 (Content Management Domains), Phase 10 (App Release & Version Management), Phase 12 (Scripture Of The Day Notifications), Phase 13 (Profile Support & Community Content), Phase 14 (Self-Service Account Security — Change Password & Delete Account), Phase 15 (Testimony Reactions), Phase 16 (Personalized "For You" Feed), Phase 17 (Scripture Streak — all 4 slices completed 2026-07-30; the Slice 3 reminder push ships with a known, documented open gap around per-user timezone, sending at one fixed UTC time instead), Phase 18 (Profile Identity & Reflection "Your Journey" — all 3 slices completed 2026-07-30; Shared stays mock data until Phase 11 ships a real share sheet), Phase 19 (Testimony Type & Pull-Quote Polish — all 3 slices completed 2026-07-31) — see each phase's own dated `Status:` line and any post-completion review/fix/refinement entries below it for exact scope, what was live-tested, and what (if anything) remains an open follow-up.
-- **Not started**: Phase 8 (Reviews, Analytics, And Operational Admin Features), Phase 9 (Integration Hardening And Client Wiring Support), Phase 11 (Testimony Sharing — planning and sequencing already agreed: Android first, iOS deferred to the Apple Developer account question).
+- **Not started**: Phase 8 (Reviews, Analytics, And Operational Admin Features), Phase 9 (Integration Hardening And Client Wiring Support), Phase 11 (Testimony Sharing — planning and sequencing already agreed: Android first, iOS deferred to the Apple Developer account question), Phase 20 (Immersive Home Feed — full slice breakdown drafted 2026-07-31, prompted by the Phase 19 type-polish work; all design decisions resolved via a reviewed concept mockup).
 
 Known open items, tracked but not blocking any phase's completion (see the referenced phase for detail):
 - iOS push notifications need the Apple Developer account / APNs key resolved (Phase 6); Android push is confirmed working end-to-end on a real device.
@@ -1289,6 +1289,45 @@ Test:
 - mobile: list cards and the detail screen render correctly both with and without a `pull_quote` (no layout break either way, no orphaned empty block when absent); existing taps (favorite, open, save, comments, share, reactions) keep working unchanged after the restyle; a long single-sentence quote doesn't overflow or get clipped awkwardly on a compact-width device
 
 Status: Complete -- all 3 slices shipped 2026-07-31.
+
+### Phase 20: Immersive Home Feed
+
+Background: prompted directly by the Phase 19 type-polish work -- once testimonies read well, the surrounding screen started looking dated by comparison. Home today is a sectioned, admin-curated layout: a static "Guest Mode" banner, a Scripture of the Day card, a "For You" rail (Phase 16) with its own "See All", and a Trending rail underneath, each one a dead end you tap out of and back into. Discussed and reviewed via a published concept mockup (Artifact, not built) covering an auto-sliding carousel, a collapsing streak pill, autoplaying video, and dashboard-authored promo cards woven into the feed -- user approved the direction and all open questions below were resolved in that same review.
+
+Decisions (agreed 2026-07-31, working from the reviewed mockup):
+- **No revisit marker on looped content.** Once the feed runs out of real unseen testimonies, it loops back through already-seen ones (video and text), reshuffled -- rendered identically to a first view, no "you've seen this" badge or treatment.
+- **Carousel sourcing is fully automatic.** Top inspirational pictures (Phase 7) blended with top moderator-curated pull-quote testimonies (Phase 19), no admin hand-picking or ordering step for this specific rotation.
+- **Autoplay is connection-aware, not battery-aware.** Muted autoplay by default on Wi-Fi; a tap-to-play thumbnail (not autoplay) on cellular; one Settings toggle ("Play videos on cellular") for a user who wants it always-on. Keyed off connection type via the OS's own connectivity API, not low-power/battery-saver state, which signals something different (battery concern, not data cost).
+- **Streak pill collapse, not removal.** After today's verse is read, Phase 17's full streak card collapses to a slim, still-tappable pill (matches the mockup's `.streakpill`) rather than disappearing -- keeps the habit loop visible without permanently costing feed space. Tapping the collapsed pill jumps straight into the existing `showScriptureDetailSheet` (already shipped in Phase 17), not back into the full card.
+- **"From iTestified" cards are native, labeled, and cadence-fixed.** Same card chrome as a real testimony (so the feed doesn't feel like it's interrupted by foreign UI), but with a small "From iTestified" label so nobody mistakes one for an actual testimony. Admin-authored from the dashboard: title, body, optional CTA (label + destination), start/end date, active toggle -- same shape as `InspirationalPicture`'s existing admin-authored-content pattern. Insertion cadence (e.g. one per ~8-10 real testimonies, never as the very first card) is fixed in code, not admin-configurable at launch, so it can't be leaned on too hard.
+- **Not AdMob, never was.** No third-party ad network, no real advertising SDK, no ad revenue mechanic -- "From iTestified" cards are house promotion only (giving, events, invite-a-friend, app announcements), consistent with the app's own purpose.
+
+Build:
+- backend: extend Phase 16's `for-you` ranking logic to become the entire Home feed (not a rail alongside separately-curated Trending sections) with loop-back pagination -- once a user's cursor exhausts real unseen content, the same endpoint starts serving already-seen testimonies again, reshuffled, rather than returning an empty page; new carousel endpoint blending top `InspirationalPicture` entries and top `pull_quote`-bearing testimonies; new `HomePromoCard` model (title, body, image, cta_label, cta_destination, starts_at, ends_at, is_active) + admin CRUD endpoints, mirroring `InspirationalPicture`'s existing admin pattern; feed-composition logic inserting active, in-window promo cards at the fixed cadence
+- mobile: floating header that hides on scroll-down and reappears on scroll-up; auto-sliding carousel widget (crossfading slides, synced dot indicators); `ScriptureStreakCard` gains a collapsed-pill state wired to `showScriptureDetailSheet`; Home rebuilt as a single infinite-scroll list against the new unified feed endpoint, removing the sectioned rails and every "See All" entry point; video autoplay controller (exactly one active video at a time, muted by default, pauses off-screen, connection-aware per the decision above) plus a new Settings toggle; promo card rendering using the shared testimony card chrome
+- dashboard: new "Home Promos" admin screen (create/edit/schedule/activate-deactivate a `HomePromoCard`), following the existing `InspirationalPicture` admin screen as the template
+
+Sub-slices:
+
+- **Slice 1 — Reader sees an auto-sliding showcase at the top of Home (backend + mobile)** — a new carousel blending top inspirational pictures and featured pull-quote testimonies rotates automatically at the top of Home; ships independently of the rest of this phase, no dependency on the feed rework below
+  - Not started.
+- **Slice 2 — Streak card gets out of the way once today's verse is read (mobile)** — the full streak card collapses to a compact, still-tappable pill the moment `readToday` is true; tapping the pill opens the existing verse detail sheet directly
+  - Not started.
+- **Slice 3 — Home becomes one continuous feed that never dead-ends (backend + mobile)** — the sectioned Home (Trending rail, "For You" rail, each with its own "See All") is replaced by a single ranked, infinitely-scrolling feed; once real unseen content runs out, it loops back through already-seen testimonies, reshuffled, rather than stopping
+  - Not started.
+- **Slice 4 — Video plays automatically as it scrolls into view (mobile)** — exactly one video plays at a time, muted, as it enters the viewport, and pauses the moment it leaves; defaults to autoplay on Wi-Fi and a tap-to-play thumbnail on cellular, with a Settings toggle to always autoplay
+  - Not started.
+- **Slice 5 — Admin writes a "From iTestified" card from the dashboard (backend + admin dashboard)** — an admin can create, schedule, edit, and activate/deactivate a native promo card (title, body, optional image and CTA) from a new dashboard screen
+  - Not started.
+- **Slice 6 — Reader sees "From iTestified" cards woven into the feed (mobile)** — depends on Slices 3 and 5; active, in-window promo cards appear in the continuous feed at a fixed cadence, styled like a testimony card but clearly labeled, never as the very first card
+  - Not started.
+
+Test:
+- backend: the unified feed endpoint loops back through seen content once real unseen content is exhausted, without ever returning an empty page to an engaged user; the carousel endpoint returns only published inspirational pictures and testimonies with a non-empty `pull_quote`; a `HomePromoCard` outside its `starts_at`/`ends_at` window or with `is_active=False` never appears in the feed composition
+- mobile: exactly one video plays at a time across the whole feed, never two simultaneously and never one left playing off-screen; autoplay behavior differs correctly between a Wi-Fi and a cellular connection in a controller test; the streak pill's collapsed/expanded state matches `readToday` and opens the verse sheet on tap; promo cards never appear as the first item and never back-to-back with each other
+- dashboard: a scheduled promo card outside its date window doesn't appear as active in the admin list; deactivating a card is immediately reflected
+
+Status: Not started -- drafted 2026-07-31 following the immersive-home concept review (Artifact: "iTestified — Immersive Home Concept"), all open decisions resolved in that same discussion. Slice ordering front-loads the two independent, mobile-only wins (carousel, streak pill) before the larger feed-architecture change (Slice 3), then layers video autoplay and the promo-card system on top of that new foundation.
 
 ## Risks To Watch Early
 
