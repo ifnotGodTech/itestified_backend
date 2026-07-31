@@ -192,6 +192,7 @@ class TestimonyDetailSerializer(TestimonyListSerializer):
             "status",
             "rejection_reason",
             "my_reaction",
+            "pull_quote",
         )
 
     def get_my_reaction(self, obj: Testimony):
@@ -266,6 +267,7 @@ class AdminTestimonyDetailSerializer(AdminTestimonyListSerializer):
             "publish_at",
             "archived_at",
             "moderation_history",
+            "pull_quote",
         )
 
     def get_moderation_history(self, obj: Testimony):
@@ -579,6 +581,21 @@ class AdminVideoTestimonyEditSerializer(serializers.Serializer):
 
         if fields_to_update:
             instance.save(update_fields=[*fields_to_update, "updated_at"])
+        return instance
+
+
+class AdminTestimonyPullQuoteSerializer(serializers.Serializer):
+    # Phase 19: moderator-curated pull-quote, settable independently of the
+    # approve/reject decision -- allow_blank so a moderator can clear a
+    # quote they've already set, not just add one.
+    pull_quote = serializers.CharField(max_length=280, allow_blank=True)
+
+    def validate_pull_quote(self, value: str) -> str:
+        return value.strip()
+
+    def update(self, instance: Testimony, validated_data):
+        instance.pull_quote = validated_data["pull_quote"]
+        instance.save(update_fields=["pull_quote", "updated_at"])
         return instance
 
 

@@ -98,6 +98,12 @@ class Testimony(models.Model):
     video_url = models.URLField(blank=True)
     thumbnail_url = models.URLField(blank=True)
     rejection_reason = models.TextField(blank=True)
+    # Moderator-curated only (Phase 19) -- deliberately no automatic
+    # sentence-extraction fallback, see the phase background. Settable any
+    # time via its own small admin endpoint, independent of
+    # approve_testimony/reject_testimony. Blank means the detail screen's
+    # pull-quote block simply doesn't render -- not required to publish.
+    pull_quote = models.CharField(max_length=280, blank=True)
     publish_at = models.DateTimeField(null=True, blank=True)
     archived_at = models.DateTimeField(null=True, blank=True)
     view_count = models.PositiveIntegerField(default=0)

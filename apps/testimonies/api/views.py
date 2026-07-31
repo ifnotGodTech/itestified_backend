@@ -61,6 +61,7 @@ from .serializers import (
     AdminVideoTestimonyUploadSerializer,
     AdminVideoTestimonyEditSerializer,
     AdminVideoTestimonyCreateFromUrlSerializer,
+    AdminTestimonyPullQuoteSerializer,
     normalize_video_source,
 )
 from apps.testimonies.services.media_uploads import CloudinaryUploadError, create_direct_upload_signature
@@ -733,6 +734,25 @@ class AdminUpdateVideoTestimonyView(APIView):
         if testimony.testimony_type != TestimonyType.VIDEO:
             return Response({"message": "Only video testimonies can be edited here."}, status=status.HTTP_400_BAD_REQUEST)
         serializer = AdminVideoTestimonyEditSerializer(testimony, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(AdminTestimonyDetailSerializer(testimony).data, status=status.HTTP_200_OK)
+
+
+class AdminTestimonyPullQuoteView(APIView):
+    """Phase 19 Slice 2: lets a moderator set or clear a testimony's
+    pull-quote any time, independent of the approve/reject decision itself
+    -- no automatic sentence-extraction fallback, see the phase
+    background."""
+
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsActiveAdmin]
+
+    def patch(self, request, testimony_id: int):
+        testimony = Testimony.objects.filter(id=testimony_id).first()
+        if testimony is None:
+            return Response({"message": "Testimony not found."}, status=status.HTTP_404_NOT_FOUND)
+        serializer = AdminTestimonyPullQuoteSerializer(testimony, data=request.data)
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(AdminTestimonyDetailSerializer(testimony).data, status=status.HTTP_200_OK)

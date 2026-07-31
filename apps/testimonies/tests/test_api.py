@@ -692,6 +692,17 @@ class TestimonyApiTests(TestCase):
         self.assertEqual(item["reaction_counts"]["praying_for_you"], 3)
         self.assertNotIn("my_reaction", item)
 
+    def test_testimony_detail_exposes_pull_quote_but_the_list_does_not(self) -> None:
+        testimony = Testimony.objects.get(title="God healed me")
+        Testimony.objects.filter(id=testimony.id).update(pull_quote="He is still able.")
+
+        detail_response = self.client.get(reverse("testimony-detail", kwargs={"pk": testimony.id}))
+        self.assertEqual(detail_response.json()["pull_quote"], "He is still able.")
+
+        list_response = self.client.get(reverse("testimony-list"))
+        item = next(row for row in list_response.json()["results"] if row["id"] == testimony.id)
+        self.assertNotIn("pull_quote", item)
+
     def test_public_category_list_shows_is_followed_false_for_a_guest(self) -> None:
         response = self.client.get(reverse("testimony-category-list"))
 
@@ -1512,6 +1523,64 @@ class AdminTestimonyApiTests(TestCase):
             content_type="application/json",
         )
         self.assertEqual(response.status_code, 400)
+
+    def test_admin_can_set_a_testimonys_pull_quote(self) -> None:
+        response = self.client.patch(
+            reverse("admin-testimony-pull-quote", kwargs={"testimony_id": self.pending.id}),
+            {"pull_quote": "He is still able."},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["pull_quote"], "He is still able.")
+        self.pending.refresh_from_db()
+        self.assertEqual(self.pending.pull_quote, "He is still able.")
+
+    def test_admin_can_clear_a_testimonys_pull_quote(self) -> None:
+        self.pending.pull_quote = "Existing quote."
+        self.pending.save(update_fields=["pull_quote"])
+
+        response = self.client.patch(
+            reverse("admin-testimony-pull-quote", kwargs={"testimony_id": self.pending.id}),
+            {"pull_quote": ""},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.pending.refresh_from_db()
+        self.assertEqual(self.pending.pull_quote, "")
+
+    def test_admin_pull_quote_is_settable_independent_of_approve_or_reject(self) -> None:
+        # Setting a pull-quote on a testimony that's neither approved nor
+        # rejected yet shouldn't be blocked -- it's a separate concern from
+        # the moderation decision itself.
+        response = self.client.patch(
+            reverse("admin-testimony-pull-quote", kwargs={"testimony_id": self.pending.id}),
+            {"pull_quote": "A quote before any moderation decision."},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.pending.refresh_from_db()
+        self.assertEqual(self.pending.status, TestimonyStatus.PENDING_REVIEW)
+        self.assertEqual(self.pending.pull_quote, "A quote before any moderation decision.")
+
+    def test_admin_pull_quote_rejects_over_length_input(self) -> None:
+        response = self.client.patch(
+            reverse("admin-testimony-pull-quote", kwargs={"testimony_id": self.pending.id}),
+            {"pull_quote": "x" * 281},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("pull_quote", response.json())
+
+    def test_admin_pull_quote_requires_admin_auth(self) -> None:
+        self.client.logout()
+
+        response = self.client.patch(
+            reverse("admin-testimony-pull-quote", kwargs={"testimony_id": self.pending.id}),
+            {"pull_quote": "Should not be allowed."},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 403)
 
     def test_admin_upload_now_video_promotes_draft_to_approved(self) -> None:
         draft_video = Testimony.objects.create(
