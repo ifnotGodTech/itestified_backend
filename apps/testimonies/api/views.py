@@ -28,6 +28,7 @@ from apps.testimonies.models import (
     UserFollowedCategory,
 )
 from apps.authn.api.permissions import IsActiveAdmin
+from apps.testimonies.services.queries import home_feed_page
 from apps.testimonies.services.commands import (
     approve_testimony,
     archive_testimony,
@@ -175,6 +176,35 @@ class PublicTestimonyListView(generics.ListAPIView):
         if search_text:
             queryset = queryset.filter(title__icontains=search_text)
         return queryset
+
+
+class HomeFeedView(APIView):
+    """The immersive Home feed (Phase 20 Slice 3) -- one continuous, ranked
+    stream of approved testimonies (video and text mixed together) that
+    never dead-ends. Deliberately left un-authenticated (default auth
+    classes, AllowAny) rather than overridden, so `request.user` is the
+    real user for a valid token and AnonymousUser for a guest without
+    needing any special-casing -- the same authentication-override bug
+    this codebase has hit twice before (Phase 17/18) doesn't apply here."""
+
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        try:
+            page = int(request.query_params.get("page", "1"))
+        except (TypeError, ValueError):
+            page = 1
+        page = max(page, 1)
+
+        page_data = home_feed_page(
+            user=request.user, page=page, page_size=TestimonyPagination.page_size
+        )
+        return Response(
+            {
+                "results": TestimonyListSerializer(page_data["results"], many=True).data,
+                "next_page": page_data["next_page"],
+            }
+        )
 
 
 class PublicTestimonyDetailView(generics.RetrieveAPIView):

@@ -851,6 +851,20 @@ class TestimonyApiTests(TestCase):
         titles = {row["title"] for row in response.json()["results"]}
         self.assertEqual(titles, {"God healed me"})
 
+    def test_home_feed_works_for_a_guest_with_no_auth(self) -> None:
+        response = self.client.get(reverse("testimony-home-feed"))
+
+        self.assertEqual(response.status_code, 200)
+        titles = {row["title"] for row in response.json()["results"]}
+        self.assertEqual(titles, {"God healed me", "Breakthrough after fasting"})
+        self.assertEqual(response.json()["next_page"], 2)
+
+    def test_home_feed_never_dead_ends_on_a_far_out_page(self) -> None:
+        response = self.client.get(reverse("testimony-home-feed"), {"page": 50})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertGreater(len(response.json()["results"]), 0)
+
     def test_slice8_view_favorites_feed_returns_paginated_testimonies(self) -> None:
         user = UserFactory(email="favorite-feed@example.com")
         ProfileFactory(user=user, full_name="Favorite Feed User")
