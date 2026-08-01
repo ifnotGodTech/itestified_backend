@@ -1,3 +1,5 @@
+from unittest import mock
+
 from django.test import TestCase
 
 from apps.testimonies.models import (
@@ -102,3 +104,112 @@ class HomeFeedPageTests(TestCase):
         # With only 2 real testimonies and 5 pages of 2, some id must repeat
         # -- the feed keeps serving full pages instead of ever emptying out.
         self.assertGreater(len(seen_across_pages), len(known_ids))
+
+
+class HomeFeedSeededShuffleTests(TestCase):
+    """The seeded, bounded-window shuffle added after discussing what
+    "randomized, not itemized" should mean at scale -- a genuine per-
+    session permutation of the ranked catalog, not just a different
+    rotation of the same fixed order."""
+
+    def setUp(self) -> None:
+        category = TestimonyCategory.objects.create(name="Faith", slug="faith")
+        author = UserFactory(email="seeded-home-feed-author@example.com")
+        ProfileFactory(user=author, full_name="Seeded Feed Author")
+        # 10 items: enough that two different seeds producing the exact
+        # same permutation by chance is effectively impossible (1 in 10!),
+        # while still cheap to create per test.
+        self.testimonies = [
+            Testimony.objects.create(
+                author=author,
+                category=category,
+                title=f"Testimony {index}",
+                body="...",
+                testimony_type=TestimonyType.WRITTEN,
+                status=TestimonyStatus.APPROVED,
+            )
+            for index in range(10)
+        ]
+
+    def test_same_seed_produces_the_same_order_on_repeated_calls(self) -> None:
+        first = home_feed_page(user=None, page=1, page_size=10, seed="abc")
+        second = home_feed_page(user=None, page=1, page_size=10, seed="abc")
+
+        self.assertEqual(
+            [row.id for row in first["results"]],
+            [row.id for row in second["results"]],
+        )
+
+    def test_different_seeds_produce_different_orders(self) -> None:
+        first = home_feed_page(user=None, page=1, page_size=10, seed="abc")
+        second = home_feed_page(user=None, page=1, page_size=10, seed="xyz")
+
+        self.assertNotEqual(
+            [row.id for row in first["results"]],
+            [row.id for row in second["results"]],
+        )
+
+    def test_seeded_order_is_a_genuine_shuffle_not_just_a_rotation(self) -> None:
+        # A rotation preserves every item's neighbor (whoever's next in
+        # rank order is still next after rotating); a real shuffle breaks
+        # that for at least some items. Comparing the seeded order against
+        # every possible rotation of the plain recency order rules out
+        # "this is secretly still just a rotation."
+        plain_ids = [
+            row.id
+            for row in home_feed_page(user=None, page=1, page_size=10)["results"]
+        ]
+        seeded_ids = [
+            row.id
+            for row in home_feed_page(
+                user=None, page=1, page_size=10, seed="rotation-check"
+            )["results"]
+        ]
+
+        possible_rotations = {
+            tuple(plain_ids[i:] + plain_ids[:i]) for i in range(len(plain_ids))
+        }
+        self.assertNotIn(tuple(seeded_ids), possible_rotations)
+
+    def test_seeded_pagination_has_no_duplicates_or_gaps_within_one_loop(self) -> None:
+        seen_ids = []
+        for page_number in range(1, 6):
+            page = home_feed_page(
+                user=None, page=page_number, page_size=2, seed="pagination-check"
+            )
+            seen_ids.extend(row.id for row in page["results"])
+
+        # 5 pages of 2 = exactly one full loop through 10 real items --
+        # every id appears exactly once, none missing, none duplicated.
+        self.assertEqual(sorted(seen_ids), sorted(t.id for t in self.testimonies))
+
+    def test_only_the_shuffle_window_is_shuffled_the_rest_stays_ranked(self) -> None:
+        with mock.patch(
+            "apps.testimonies.services.queries.HOME_FEED_SHUFFLE_WINDOW", 3
+        ):
+            plain_ids = [
+                row.id
+                for row in home_feed_page(user=None, page=1, page_size=10)["results"]
+            ]
+            seeded_ids = [
+                row.id
+                for row in home_feed_page(
+                    user=None, page=1, page_size=10, seed="window-check"
+                )["results"]
+            ]
+
+        # Items past the (patched) 3-item window are untouched by the
+        # shuffle, so they still read in plain rank order.
+        self.assertEqual(seeded_ids[3:], plain_ids[3:])
+        # The window itself (first 3) is some permutation of the same ids,
+        # not necessarily identical to the plain order.
+        self.assertEqual(sorted(seeded_ids[:3]), sorted(plain_ids[:3]))
+
+    def test_no_seed_behaves_exactly_as_before_seeding_existed(self) -> None:
+        with_none = home_feed_page(user=None, page=1, page_size=10, seed=None)
+        without_param = home_feed_page(user=None, page=1, page_size=10)
+
+        self.assertEqual(
+            [row.id for row in with_none["results"]],
+            [row.id for row in without_param["results"]],
+        )

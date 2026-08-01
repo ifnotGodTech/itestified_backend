@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+import random
 from collections import Counter
 
 from django.db.models import Case, IntegerField, When
@@ -24,6 +27,60 @@ THEME_DISTRIBUTION_LIMIT = 4
 # could appear on two different "pages" within one loop), so this rotates
 # the whole ordering deterministically instead.
 HOME_FEED_ROTATION_STEP = 7
+
+# A per-session seed (minted by mobile once per fresh load / pull-to-
+# refresh, reused across pagination within that session) lets the reader
+# see a genuinely different, truly shuffled starting mix each time, not
+# just a different rotation of the same fixed order. Only the first
+# HOME_FEED_SHUFFLE_WINDOW ranked items are actually shuffled -- realistic
+# sessions rarely scroll past that, so the shuffle cost stays O(window)
+# per request regardless of catalog size, and the untouched remainder
+# still reads in the existing signal-then-recency rank order. This is the
+# "seeded Fisher-Yates over a bounded window" approach agreed after
+# discussing scale: cheap now, and migrates cleanly later (same seed
+# param, same response shape) to a precomputed random-rank column with a
+# periodic reshuffle job if traffic ever outgrows it.
+HOME_FEED_SHUFFLE_WINDOW = 200
+
+
+def _seeded_shuffle_ids(base_ids: list[int], seed: str) -> list[int]:
+    window = base_ids[:HOME_FEED_SHUFFLE_WINDOW]
+    rest = base_ids[HOME_FEED_SHUFFLE_WINDOW:]
+    shuffled_window = window[:]
+    random.Random(seed).shuffle(shuffled_window)
+    return shuffled_window + rest
+
+
+def _rotated_window_ids(
+    ordered_ids: list[int], start: int, page_size: int, total: int
+) -> list[int]:
+    """The wraparound-safe slice of `ordered_ids` for one page, rotated by
+    a deterministic per-loop offset once `start` has read past `total` --
+    shared by the seeded and un-seeded loop-back paths below."""
+    loop_number = start // total
+    rotation = (loop_number * HOME_FEED_ROTATION_STEP) % total
+    rotated_ids = ordered_ids[rotation:] + ordered_ids[:rotation]
+
+    window_ids = []
+    remaining = page_size
+    cursor = start % total
+    while remaining > 0:
+        take = min(remaining, total - cursor)
+        window_ids.extend(rotated_ids[cursor : cursor + take])
+        remaining -= take
+        cursor = (cursor + take) % total
+    return window_ids
+
+
+def _testimonies_for_ids(window_ids: list[int]) -> list[Testimony]:
+    testimonies_by_id = Testimony.objects.select_related(
+        "author", "author__profile", "category"
+    ).in_bulk(window_ids)
+    return [
+        testimonies_by_id[testimony_id]
+        for testimony_id in window_ids
+        if testimony_id in testimonies_by_id
+    ]
 
 
 def _home_feed_base_queryset(user):
@@ -62,28 +119,49 @@ def _home_feed_base_queryset(user):
     return base_queryset.order_by("-created_at", "id")
 
 
-def home_feed_page(*, user, page: int, page_size: int) -> dict:
+def home_feed_page(
+    *, user, page: int, page_size: int, seed: str | None = None
+) -> dict:
     """One page of the immersive Home feed (Phase 20 Slice 3) -- never
     truly ends: once `page` reads past the real ordered list, it wraps
     around (rotated per loop, see HOME_FEED_ROTATION_STEP) instead of
     returning an empty page.
 
-    Optimized for the common case: as long as the requested window still
-    fits inside the real, un-looped content, this is a single indexed
-    COUNT plus a plain DB-level OFFSET/LIMIT slice -- select_related
-    covers the serializer's needs, no extra queries. The full ordered-ID
-    list (and the O(total) rotation math) is only ever materialized once
-    a request actually reads past the end of the real content, which is a
-    small fraction of traffic for any catalog bigger than a page or two.
+    With a `seed` (minted by mobile once per feed session, reused across
+    that session's pagination -- see HOME_FEED_SHUFFLE_WINDOW), the first
+    page of items is a genuine shuffle rather than the plain ranked order,
+    so two different sessions -- or the same user's next pull-to-refresh
+    -- see a different mix, not just a different rotation of the same
+    fixed order. Without a seed, behavior is unchanged from before this
+    was added (backward compatible for any caller that doesn't send one).
+
+    Optimized for the common no-seed case: as long as the requested
+    window still fits inside the real, un-looped content, this is a
+    single indexed COUNT plus a plain DB-level OFFSET/LIMIT slice --
+    select_related covers the serializer's needs, no extra queries. A
+    seeded request always needs the ordered ID list up front instead,
+    since a shuffle can't be expressed as a DB-level slice -- cheap
+    regardless (only IDs are fetched, and only HOME_FEED_SHUFFLE_WINDOW of
+    them are actually shuffled).
     """
     base_queryset = _home_feed_base_queryset(user).select_related(
         "author", "author__profile", "category"
     )
+    start = (page - 1) * page_size
+
+    if seed:
+        base_ids = list(base_queryset.values_list("id", flat=True))
+        total = len(base_ids)
+        if total == 0:
+            return {"results": [], "next_page": page + 1}
+        ordered_ids = _seeded_shuffle_ids(base_ids, seed)
+        window_ids = _rotated_window_ids(ordered_ids, start, page_size, total)
+        return {"results": _testimonies_for_ids(window_ids), "next_page": page + 1}
+
     total = base_queryset.count()
     if total == 0:
         return {"results": [], "next_page": page + 1}
 
-    start = (page - 1) * page_size
     if start + page_size <= total:
         return {
             "results": list(base_queryset[start : start + page_size]),
@@ -91,29 +169,8 @@ def home_feed_page(*, user, page: int, page_size: int) -> dict:
         }
 
     base_ids = list(base_queryset.values_list("id", flat=True))
-    loop_number = start // total
-    rotation = (loop_number * HOME_FEED_ROTATION_STEP) % total
-    rotated_ids = base_ids[rotation:] + base_ids[:rotation]
-
-    window_ids = []
-    remaining = page_size
-    cursor = start % total
-    while remaining > 0:
-        take = min(remaining, total - cursor)
-        window_ids.extend(rotated_ids[cursor : cursor + take])
-        remaining -= take
-        cursor = (cursor + take) % total
-
-    testimonies_by_id = Testimony.objects.select_related(
-        "author", "author__profile", "category"
-    ).in_bulk(window_ids)
-    ordered_testimonies = [
-        testimonies_by_id[testimony_id]
-        for testimony_id in window_ids
-        if testimony_id in testimonies_by_id
-    ]
-
-    return {"results": ordered_testimonies, "next_page": page + 1}
+    window_ids = _rotated_window_ids(base_ids, start, page_size, total)
+    return {"results": _testimonies_for_ids(window_ids), "next_page": page + 1}
 
 
 def user_engagement_journey(user) -> dict:

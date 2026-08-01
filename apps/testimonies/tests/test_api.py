@@ -865,6 +865,25 @@ class TestimonyApiTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertGreater(len(response.json()["results"]), 0)
 
+    def test_home_feed_accepts_a_seed_and_stays_consistent_for_that_seed(self) -> None:
+        first = self.client.get(reverse("testimony-home-feed"), {"seed": "mobile-session-1"})
+        second = self.client.get(reverse("testimony-home-feed"), {"seed": "mobile-session-1"})
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(
+            [row["title"] for row in first.json()["results"]],
+            [row["title"] for row in second.json()["results"]],
+        )
+
+    def test_home_feed_ignores_a_seed_longer_than_the_accepted_length(self) -> None:
+        # Just needs to not error -- the view truncates rather than
+        # rejecting, so an oversized seed still gets a normal 200.
+        response = self.client.get(
+            reverse("testimony-home-feed"), {"seed": "x" * 500}
+        )
+
+        self.assertEqual(response.status_code, 200)
+
     def test_slice8_view_favorites_feed_returns_paginated_testimonies(self) -> None:
         user = UserFactory(email="favorite-feed@example.com")
         ProfileFactory(user=user, full_name="Favorite Feed User")

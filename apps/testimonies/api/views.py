@@ -189,6 +189,12 @@ class HomeFeedView(APIView):
 
     permission_classes = [AllowAny]
 
+    # Mobile-minted, so cap the length rather than trust it -- only ever
+    # used as a random.Random() seed, never interpolated into a query or
+    # displayed, but an unbounded client-supplied string is still not
+    # something to pass through unchecked.
+    MAX_SEED_LENGTH = 64
+
     def get(self, request):
         try:
             page = int(request.query_params.get("page", "1"))
@@ -196,8 +202,15 @@ class HomeFeedView(APIView):
             page = 1
         page = max(page, 1)
 
+        seed = request.query_params.get("seed") or None
+        if seed is not None:
+            seed = seed[: self.MAX_SEED_LENGTH]
+
         page_data = home_feed_page(
-            user=request.user, page=page, page_size=TestimonyPagination.page_size
+            user=request.user,
+            page=page,
+            page_size=TestimonyPagination.page_size,
+            seed=seed,
         )
         return Response(
             {
