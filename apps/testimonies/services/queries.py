@@ -3,6 +3,7 @@ from __future__ import annotations
 import random
 from collections import Counter
 
+from django.core.cache import cache
 from django.db.models import Case, IntegerField, When
 
 from apps.testimonies.models import (
@@ -33,14 +34,41 @@ HOME_FEED_ROTATION_STEP = 7
 # see a genuinely different, truly shuffled starting mix each time, not
 # just a different rotation of the same fixed order. Only the first
 # HOME_FEED_SHUFFLE_WINDOW ranked items are actually shuffled -- realistic
-# sessions rarely scroll past that, so the shuffle cost stays O(window)
-# per request regardless of catalog size, and the untouched remainder
-# still reads in the existing signal-then-recency rank order. This is the
-# "seeded Fisher-Yates over a bounded window" approach agreed after
-# discussing scale: cheap now, and migrates cleanly later (same seed
-# param, same response shape) to a precomputed random-rank column with a
-# periodic reshuffle job if traffic ever outgrows it.
+# sessions rarely scroll past that, so the in-memory shuffle itself stays
+# O(window) regardless of catalog size. The ordered id list still has to
+# come from somewhere for that shuffle to run against, though -- see
+# _cached_base_ids for how the DB query behind it is kept off the hot path
+# for repeat pages within one session. This is the "seeded Fisher-Yates
+# over a bounded window" approach agreed after discussing scale: cheap
+# now, and migrates cleanly later (same seed param, same response shape)
+# to a precomputed random-rank column with a periodic reshuffle job if
+# traffic ever outgrows it.
 HOME_FEED_SHUFFLE_WINDOW = 200
+
+# How long one session's ordered id list stays cached (keyed by user +
+# seed) so that scrolling through several pages of the same session only
+# re-queries the eligible catalog once, not once per page -- mobile mints
+# a fresh seed on every fresh load/refresh, so a new session always gets a
+# genuinely fresh query regardless of this TTL; it only bounds how long a
+# single very-long-lived scroll session goes before picking up newly
+# approved content. LocMemCache (Django's default, no CACHES setting
+# configured) is per-process, so on a multi-worker deployment this is a
+# best-effort hit rate, not a guarantee -- a miss just falls back to the
+# same query that always ran before this cache existed, so it's safe
+# either way.
+HOME_FEED_ID_CACHE_TTL_SECONDS = 900
+
+
+def _cached_base_ids(user, seed: str) -> list[int]:
+    is_authenticated = user is not None and getattr(user, "is_authenticated", False)
+    user_key = user.pk if is_authenticated else "guest"
+    cache_key = f"home_feed_ids:{user_key}:{seed}"
+    cached_ids = cache.get(cache_key)
+    if cached_ids is not None:
+        return cached_ids
+    ids = list(_home_feed_base_queryset(user).values_list("id", flat=True))
+    cache.set(cache_key, ids, HOME_FEED_ID_CACHE_TTL_SECONDS)
+    return ids
 
 
 def _seeded_shuffle_ids(base_ids: list[int], seed: str) -> list[int]:
@@ -140,17 +168,18 @@ def home_feed_page(
     single indexed COUNT plus a plain DB-level OFFSET/LIMIT slice --
     select_related covers the serializer's needs, no extra queries. A
     seeded request always needs the ordered ID list up front instead,
-    since a shuffle can't be expressed as a DB-level slice -- cheap
-    regardless (only IDs are fetched, and only HOME_FEED_SHUFFLE_WINDOW of
-    them are actually shuffled).
+    since a shuffle can't be expressed as a DB-level slice; that list is
+    fetched without select_related (only `id` is ever read off it, so the
+    joins select_related would add are pure waste here) and cached per
+    (user, seed) via _cached_base_ids so repeat pages within one session
+    don't re-run that query -- only the id-list fetch is cached, the
+    shuffle and the final select_related testimony fetch still run fresh
+    every call, same as before.
     """
-    base_queryset = _home_feed_base_queryset(user).select_related(
-        "author", "author__profile", "category"
-    )
     start = (page - 1) * page_size
 
     if seed:
-        base_ids = list(base_queryset.values_list("id", flat=True))
+        base_ids = _cached_base_ids(user, seed)
         total = len(base_ids)
         if total == 0:
             return {"results": [], "next_page": page + 1}
@@ -158,6 +187,9 @@ def home_feed_page(
         window_ids = _rotated_window_ids(ordered_ids, start, page_size, total)
         return {"results": _testimonies_for_ids(window_ids), "next_page": page + 1}
 
+    base_queryset = _home_feed_base_queryset(user).select_related(
+        "author", "author__profile", "category"
+    )
     total = base_queryset.count()
     if total == 0:
         return {"results": [], "next_page": page + 1}

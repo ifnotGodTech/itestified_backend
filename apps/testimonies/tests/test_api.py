@@ -1,3 +1,4 @@
+from django.core.cache import cache
 from django.test import TestCase
 from django.urls import NoReverseMatch, reverse
 from django.utils import timezone
@@ -25,6 +26,11 @@ from apps.users.choices import AdminRoleCode
 
 class TestimonyApiTests(TestCase):
     def setUp(self) -> None:
+        # home_feed_page's seeded id-list cache lives in the process-level
+        # LocMemCache, which isn't tied to this TestCase's transaction
+        # rollback -- clear it so no test can leak a cached id list into
+        # another via a reused (user, seed) cache key.
+        cache.clear()
         self.category_faith = TestimonyCategory.objects.create(
             name="Faith",
             slug="faith",

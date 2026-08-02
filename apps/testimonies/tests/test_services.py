@@ -1,5 +1,6 @@
 from unittest import mock
 
+from django.core.cache import cache
 from django.test import TestCase
 
 from apps.testimonies.models import (
@@ -113,6 +114,12 @@ class HomeFeedSeededShuffleTests(TestCase):
     rotation of the same fixed order."""
 
     def setUp(self) -> None:
+        # _cached_base_ids caches by (user, seed) in the process-level
+        # LocMemCache, which isn't tied to the DB transaction rollback
+        # TestCase gives each test -- without clearing it, a cached id
+        # list from one test could leak into another if they ever reuse
+        # a seed against different underlying testimonies.
+        cache.clear()
         category = TestimonyCategory.objects.create(name="Faith", slug="faith")
         author = UserFactory(email="seeded-home-feed-author@example.com")
         ProfileFactory(user=author, full_name="Seeded Feed Author")
@@ -213,3 +220,35 @@ class HomeFeedSeededShuffleTests(TestCase):
             [row.id for row in with_none["results"]],
             [row.id for row in without_param["results"]],
         )
+
+    def test_no_seed_fast_path_costs_exactly_a_count_and_a_slice(self) -> None:
+        # Guest/signal-less path: no extra queries computing category_ids
+        # (see _home_feed_base_queryset), so this should be exactly
+        # count() + the select_related slice -- nothing more, regardless
+        # of catalog size, as the docstring claims.
+        with self.assertNumQueries(2):
+            home_feed_page(user=None, page=1, page_size=10)
+
+    def test_seeded_first_call_costs_exactly_an_id_fetch_and_a_testimony_fetch(
+        self,
+    ) -> None:
+        with self.assertNumQueries(2):
+            home_feed_page(user=None, page=1, page_size=10, seed="query-count-a")
+
+    def test_seeded_repeat_call_with_same_seed_skips_the_id_query(self) -> None:
+        # First call warms the (user, seed) cache entry.
+        home_feed_page(user=None, page=1, page_size=2, seed="query-count-b")
+
+        # A later page within the same session reuses the cached id list
+        # -- only the final testimony fetch should hit the database.
+        with self.assertNumQueries(1):
+            home_feed_page(user=None, page=2, page_size=2, seed="query-count-b")
+
+    def test_seeded_call_with_a_different_seed_does_not_reuse_the_cache(self) -> None:
+        home_feed_page(user=None, page=1, page_size=2, seed="query-count-c1")
+
+        # A different seed is a different session -- it must not silently
+        # reuse another session's cached id list, so it pays the full cost
+        # again.
+        with self.assertNumQueries(2):
+            home_feed_page(user=None, page=1, page_size=2, seed="query-count-c2")
