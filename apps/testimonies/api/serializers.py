@@ -209,6 +209,41 @@ class TestimonyDetailSerializer(TestimonyListSerializer):
         )
 
 
+class PublicTestimonyShareSerializer(serializers.ModelSerializer):
+    """Phase 11 Slice 1's public, unauthenticated share page -- deliberately
+    a standalone serializer, not built on TestimonyListSerializer, so there
+    is no author_name/author_avatar field to ever expose here at all (not
+    even by omitting it downstream). TestimonyListSerializer.get_author_name
+    falls back to the author's email when no profile full_name is set --
+    fine for the in-app experience, not something a public, crawler-indexed
+    page (search engines, WhatsApp/Facebook/Twitter link-preview caches)
+    should ever be able to render. Attribution on the public page is always
+    the fixed "iTestified" branding, decided at the frontend template level,
+    not derived per-testimony -- so this serializer carries no author field
+    for that to read in the first place."""
+
+    category = serializers.CharField(source="category.name", read_only=True)
+    thumbnail_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Testimony
+        fields = (
+            "id",
+            "title",
+            "testimony_type",
+            "category",
+            "body",
+            "pull_quote",
+            "video_url",
+            "thumbnail_url",
+        )
+
+    def get_thumbnail_url(self, obj: Testimony) -> str:
+        if obj.thumbnail_url.strip():
+            return obj.thumbnail_url
+        return build_cloudinary_video_thumbnail_url(obj.video_url)
+
+
 class AdminTestimonyListSerializer(serializers.ModelSerializer):
     author_name = serializers.SerializerMethodField()
     author_email = serializers.CharField(source="author.email", read_only=True)

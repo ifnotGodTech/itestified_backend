@@ -169,6 +169,88 @@ class TestimonyApiTests(TestCase):
             "https://res.cloudinary.com/demo/image/upload/avatar.jpg",
         )
 
+    def test_public_share_view_returns_fields_needed_for_og_tags(self) -> None:
+        testimony = Testimony.objects.get(title="God healed me")
+        testimony.pull_quote = "God healed me after prayer."
+        testimony.save(update_fields=["pull_quote"])
+
+        response = self.client.get(reverse("testimony-share", kwargs={"pk": testimony.pk}))
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["title"], testimony.title)
+        self.assertEqual(body["body"], testimony.body)
+        self.assertEqual(body["pull_quote"], "God healed me after prayer.")
+        self.assertEqual(body["category"], testimony.category.name)
+        self.assertEqual(body["testimony_type"], testimony.testimony_type)
+
+    def test_public_share_view_never_exposes_author_identity(self) -> None:
+        # Phase 11 Slice 1's whole reason for its own serializer: this is a
+        # public, crawler-indexed page, so no author_name/author_avatar/
+        # email should ever be reachable from it -- not even indirectly,
+        # regardless of whether the author has a profile full_name set.
+        author = UserFactory(email="no-profile-author@example.com")
+        testimony = Testimony.objects.create(
+            author=author,
+            category=self.category_faith,
+            title="Testimony with no profile set",
+            body="Body text.",
+            testimony_type=TestimonyType.WRITTEN,
+            status=TestimonyStatus.APPROVED,
+        )
+
+        response = self.client.get(reverse("testimony-share", kwargs={"pk": testimony.pk}))
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertNotIn("author_name", body)
+        self.assertNotIn("author_avatar", body)
+        self.assertNotIn("no-profile-author@example.com", response.content.decode())
+
+    def test_public_share_view_generates_cloudinary_thumbnail_when_missing(self) -> None:
+        author = UserFactory(email="share-video@author.com")
+        video = Testimony.objects.create(
+            author=author,
+            category=self.category_healing,
+            title="Cloudinary share video",
+            body="A video testimony.",
+            testimony_type=TestimonyType.VIDEO,
+            status=TestimonyStatus.APPROVED,
+            video_url="https://res.cloudinary.com/itestified/video/upload/v1784671784/amtlhus0uyr7wovwvb6v.mp4",
+            thumbnail_url="",
+        )
+
+        response = self.client.get(reverse("testimony-share", kwargs={"pk": video.pk}))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["thumbnail_url"],
+            "https://res.cloudinary.com/itestified/video/upload/so_2,w_1280,h_720,c_fill,g_auto/v1784671784/amtlhus0uyr7wovwvb6v.jpg",
+        )
+
+    def test_public_share_view_404s_for_a_pending_testimony(self) -> None:
+        pending = Testimony.objects.get(title="Pending testimony")
+
+        response = self.client.get(reverse("testimony-share", kwargs={"pk": pending.pk}))
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_public_share_view_404s_once_a_previously_shared_testimony_is_unapproved(
+        self,
+    ) -> None:
+        # A link may already be shared/cached before an admin later reverses
+        # an approval -- the share page must stop resolving it, not keep
+        # serving stale content.
+        testimony = Testimony.objects.get(title="God healed me")
+        still_live = self.client.get(reverse("testimony-share", kwargs={"pk": testimony.pk}))
+        self.assertEqual(still_live.status_code, 200)
+
+        testimony.status = TestimonyStatus.REJECTED
+        testimony.save(update_fields=["status"])
+
+        response = self.client.get(reverse("testimony-share", kwargs={"pk": testimony.pk}))
+        self.assertEqual(response.status_code, 404)
+
     def test_view_increment_increases_view_count(self) -> None:
         testimony = Testimony.objects.get(title="God healed me")
         before = testimony.view_count

@@ -32,6 +32,7 @@ from .views import (
     PublicCategoryListView,
     PublicTestimonyDetailView,
     PublicTestimonyListView,
+    PublicTestimonyShareView,
     PublicTestimonyViewIncrementView,
     TestimonyCommentDeleteView,
     TestimonyCommentListCreateView,
@@ -43,6 +44,7 @@ urlpatterns = [
     path("categories/<int:category_id>/follow/", CategoryFollowToggleView.as_view(), name="testimony-category-follow-toggle"),
     path("", PublicTestimonyListView.as_view(), name="testimony-list"),
     path("<int:pk>/", PublicTestimonyDetailView.as_view(), name="testimony-detail"),
+    path("<int:pk>/share/", PublicTestimonyShareView.as_view(), name="testimony-share"),
     path("<int:testimony_id>/view/", PublicTestimonyViewIncrementView.as_view(), name="testimony-view-increment"),
     path("mine/", AuthenticatedMyTestimonyListView.as_view(), name="testimony-mine-list"),
     path(

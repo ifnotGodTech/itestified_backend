@@ -63,6 +63,7 @@ from .serializers import (
     AdminVideoTestimonyEditSerializer,
     AdminVideoTestimonyCreateFromUrlSerializer,
     AdminTestimonyPullQuoteSerializer,
+    PublicTestimonyShareSerializer,
     normalize_video_source,
 )
 from apps.testimonies.services.media_uploads import CloudinaryUploadError, create_direct_upload_signature
@@ -226,6 +227,26 @@ class PublicTestimonyDetailView(generics.RetrieveAPIView):
 
     def get_queryset(self):
         return Testimony.objects.select_related("author", "author__profile", "category").filter(
+            status=TestimonyStatus.APPROVED,
+            category__is_active=True,
+        )
+
+
+class PublicTestimonyShareView(generics.RetrieveAPIView):
+    """Phase 11 Slice 1's public share page endpoint -- deliberately its own
+    view rather than reusing PublicTestimonyDetailView above. That view's
+    serializer carries an author_name field that falls back to the author's
+    email when no profile full_name is set; fine for mobile's own in-app
+    guest testimony viewing, not safe for a page search engines crawl and
+    WhatsApp/Facebook/Twitter cache link previews from. select_related
+    doesn't include "author"/"author__profile" here since
+    PublicTestimonyShareSerializer never reads either."""
+
+    permission_classes = [AllowAny]
+    serializer_class = PublicTestimonyShareSerializer
+
+    def get_queryset(self):
+        return Testimony.objects.select_related("category").filter(
             status=TestimonyStatus.APPROVED,
             category__is_active=True,
         )
