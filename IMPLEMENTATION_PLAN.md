@@ -1380,12 +1380,12 @@ Build:
 Sub-slices:
 
 #### Mobile User Flows
-- **Slice 1 — Subscribe to premium** — user picks a plan and pays via Flutterwave; the backend creates a subscription in `pending` status and moves it to `active` only on webhook confirmation, never on the client's say-so
-- **Slice 2 — Subscription renews or fails** — webhook-driven renewal; a failed renewal moves to `past_due` with a grace period before `expired`, never an instant hard cutoff
-- **Slice 3 — Manage my subscription** — user views subscription status and cancels; cancellation takes effect at the end of the current paid period, never claws back time already paid for
+- **Slice 1 — Subscribe to premium** — new "Plans" screen (mobile) listing the premium tier and price, leading into the same Flutterwave checkout-webview flow Giving (Phase 5) already established rather than a second payment UI pattern; the backend creates a subscription in `pending` status and moves it to `active` only on webhook confirmation, never on the client's say-so
+- **Slice 2 — Subscription renews or fails** — webhook-driven, backend-only, no direct UI; a failed renewal moves to `past_due` with a grace period before `expired`, never an instant hard cutoff. Mobile does need to *reflect* the resulting status wherever entitlement matters (e.g. a premium feature quietly re-locking if a renewal fails) — covered by Phase 21's shared entitlement check, not a screen of its own
+- **Slice 3 — Manage my subscription** — new "My Subscription" screen (mobile), reachable from Profile alongside Change Password/Delete Account (Phase 14's existing settings pattern), showing plan, status, renewal date, and a Cancel action; cancellation takes effect at the end of the current paid period, never claws back time already paid for
 
 #### Admin Flows
-- **Slice 4 — View and manage subscriptions** — admin lists subscriptions, filters by status, and can manually override one for support cases
+- **Slice 4 — View and manage subscriptions** — new "Subscriptions" page (dashboard), mirroring the existing Donations list/detail pattern (Phase 5): list, filter by status, per-subscription detail, manual override action for support cases
 
 Test:
 - webhook idempotency: a replayed webhook delivery must never double-renew or double-charge
