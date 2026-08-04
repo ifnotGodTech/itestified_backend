@@ -14,7 +14,8 @@ It should be used together with:
 Current state, updated 2026-07-31:
 
 - **Completed**: Phase 0 (Domain Discovery And Contract Lock), Phase 1 (Project Bootstrap And Infrastructure), Phase 2 (Identity, Auth, And Admin Access), Phase 3 (Testimonies Core Domain), Phase 4 (Moderation And Review Workflows), Phase 5 (Donations And Giving), Phase 6 (Notifications And User Activity), Phase 7 (Content Management Domains), Phase 10 (App Release & Version Management), Phase 12 (Scripture Of The Day Notifications), Phase 13 (Profile Support & Community Content), Phase 14 (Self-Service Account Security — Change Password & Delete Account), Phase 15 (Testimony Reactions), Phase 16 (Personalized "For You" Feed), Phase 17 (Scripture Streak — all 4 slices completed 2026-07-30; the Slice 3 reminder push ships with a known, documented open gap around per-user timezone, sending at one fixed UTC time instead), Phase 18 (Profile Identity & Reflection "Your Journey" — all 3 slices completed 2026-07-30; Shared stays mock data until Phase 11 ships a real share sheet), Phase 19 (Testimony Type & Pull-Quote Polish — all 3 slices completed 2026-07-31) — see each phase's own dated `Status:` line and any post-completion review/fix/refinement entries below it for exact scope, what was live-tested, and what (if anything) remains an open follow-up.
-- **Not started**: Phase 8 (Reviews, Analytics, And Operational Admin Features), Phase 9 (Integration Hardening And Client Wiring Support), Phase 11 (Testimony Sharing — planning and sequencing already agreed: Android first, iOS deferred to the Apple Developer account question), Phase 20 (Immersive Home Feed — full slice breakdown drafted 2026-07-31, prompted by the Phase 19 type-polish work; all design decisions resolved via a reviewed concept mockup).
+- **In progress**: Phase 11 (Testimony Sharing — Slices 1-3 implemented 2026-08-03/04, see its own `Status:` line; Slice 4/iOS blocked on the Apple Developer account question), Phase 20 (Immersive Home Feed — Slices 1-5 shipped 2026-07-31/08-01, Slices 6-7 the promo-card system remain, see its own `Status:` line).
+- **Not started**: Phase 8 (Reviews, Analytics, And Operational Admin Features), Phase 9 (Integration Hardening And Client Wiring Support), Phase 21 (Premium Subscriptions & Billing Foundation), Phase 22 (AI Transcription & Translation), Phase 23 (Creator & Ministry Profiles), Phase 24 (Referral Program — Attribution + Manual Month-End Payout), Phase 25 (Offline Download, Premium), Phase 26 (Multi-Currency & Multi-Region Expansion), Phase 27 (Live Testimony Broadcasts) — Phases 21-27 proposed 2026-08-04 from the Christian Testimony Platform Business Blueprint; see each phase's own `Background:` note for sequencing rationale and open product/legal questions.
 
 Known open items, tracked but not blocking any phase's completion (see the referenced phase for detail):
 - iOS push notifications need the Apple Developer account / APNs key resolved (Phase 6); Android push is confirmed working end-to-end on a real device.
@@ -1364,6 +1365,163 @@ Test:
 - dashboard: a scheduled promo card outside its date window doesn't appear as active in the admin list; deactivating a card is immediately reflected
 
 Status: In progress -- drafted 2026-07-31 following the immersive-home concept review (Artifact: "iTestified — Immersive Home Concept"), all open decisions resolved in that same discussion. Slices 1-4 shipped 2026-07-31 (see their notes above), including the floating-header piece of this phase's own Build note (folded into Slice 3) and the video/text card polish requested alongside it; a Home-only type-scale floor refinement shipped 2026-08-01 (see Slice 4's own entry) after real-device testing showed the mockup-matched sizes read too small outside a desktop render; Slice 5 (seeded feed shuffle + Inspirational Pictures woven into the feed) shipped 2026-08-01, was built outside the normal mockup-reviewed slice process so got a dedicated review pass on 2026-08-02 against AGENTS.md's query-discipline rules (2 backend performance gaps + 1 mobile gap found and fixed, see Slice 5's own entry), and is live in production (Render auto-deploys `main`). Slices 6-7 (the promo-card system) remain, unstarted. Known follow-up noted in Slice 3's own entry: `AppRouter.trendingVideos`/`trendingTexts`/`forYouFeed` and the screens they exclusively reached are now dead code, left in place rather than deleted to keep that slice scoped.
+
+### Phase 21: Premium Subscriptions & Billing Foundation
+
+Background: proposed 2026-08-04 from the Christian Testimony Platform Business Blueprint (monetization/creator-economy vision, reviewed with the admin the same day). This phase is the foundation every other paid feature below (Phases 22, 24, 25, 26) depends on and must ship first.
+
+Build:
+- subscription tier model (`free`/`premium`) backed by Flutterwave's recurring "Payment Plans" API, extending the existing Phase 5 payment integration rather than introducing a new provider
+- subscription state machine (`pending`, `active`, `past_due`, `canceled`, `expired`) driven exclusively by Flutterwave webhook events, never by client-reported status
+- a single, reusable entitlement check that every later premium-gated phase depends on, rather than each feature re-implementing its own gate
+- dashboard: admin visibility into subscriptions, mirroring the existing donations admin views
+- all state-changing billing logic follows `backend/AGENTS.md` without exception: wrapped in `transaction.atomic()`, webhook handlers idempotent, business logic in services (never in views/serializers), explicit success- and failure-path tests -- given real money is involved, deviation from these rules is not acceptable here
+
+Sub-slices:
+
+#### Mobile User Flows
+- **Slice 1 — Subscribe to premium** — user picks a plan and pays via Flutterwave; the backend creates a subscription in `pending` status and moves it to `active` only on webhook confirmation, never on the client's say-so
+- **Slice 2 — Subscription renews or fails** — webhook-driven renewal; a failed renewal moves to `past_due` with a grace period before `expired`, never an instant hard cutoff
+- **Slice 3 — Manage my subscription** — user views subscription status and cancels; cancellation takes effect at the end of the current paid period, never claws back time already paid for
+
+#### Admin Flows
+- **Slice 4 — View and manage subscriptions** — admin lists subscriptions, filters by status, and can manually override one for support cases
+
+Test:
+- webhook idempotency: a replayed webhook delivery must never double-renew or double-charge
+- amount/currency correctness at every step, with an explicit regression test — this exact class of bug already broke Phase 5's donation flow once, undetected until a later review
+- the entitlement check behaves correctly through every state transition, including the `past_due` grace period
+
+Status: not started
+
+### Phase 22: AI Transcription & Translation
+
+Background: proposed 2026-08-04, same blueprint review as Phase 21.
+
+Build:
+- async transcription pipeline for video/audio testimonies (Whisper-class API), triggered on upload
+- on-demand translation of testimony text/transcripts into a configurable language set (DeepL/GPT-class API), cached per (testimony, language) rather than regenerated per request
+- gated behind Phase 21's entitlement check per the blueprint — confirm with the admin at build time whether transcription itself should stay free (accessibility/SEO value) with only translation premium-gated, since that split is a product decision, not an engineering one
+- dashboard: visibility into transcription/translation job status and failures, since this is an async pipeline where a silent failure would strand a testimony indefinitely
+
+Sub-slices:
+
+#### Mobile User Flows
+- **Slice 1 — Read a transcript** — transcript appears alongside video/audio playback once the async job completes
+- **Slice 2 — Translate a testimony** — user selects a language and sees translated text, generated once and cached
+
+#### Backend/Admin Flows
+- **Slice 3 — Transcription job runs on upload** — a new video/audio testimony triggers an async transcription job automatically
+- **Slice 4 — Admin sees job failures** — a failed transcription/translation job is visible in the dashboard with a retry action, never silently stuck in "processing"
+
+Test:
+- a failed job produces a visible, retryable failed state, never an indefinite "processing" status
+- a repeated translation request for the same (testimony, language) pair reuses the cached result rather than re-calling the paid API
+
+Status: not started
+
+### Phase 23: Creator & Ministry Profiles
+
+Background: proposed 2026-08-04, same blueprint review as Phase 21.
+
+Build:
+- extends the existing profile system (Phase 13) rather than introducing a separate account type — a creator/ministry profile is a richer profile, not a parallel identity
+- admin-granted verified badge, mirroring the existing admin-role pattern
+- follower relationships, with follower notifications reusing Phase 6's existing notification infrastructure — batched/digest, not one push per testimony, so following a prolific creator doesn't spam a follower
+- creator analytics aggregating view/reaction counts that already exist per-testimony (Phase 3, Phase 15) — no new data collection needed
+- **prayer follow-up, built on the existing 🙏 "Praying for you" reaction (Phase 15) rather than a new button** — this phase adds a creator-facing inbox of who reacted, with a response action. The reaction itself is not duplicated or replaced; this is a new view onto data that already exists.
+
+Sub-slices:
+
+#### Admin Flows
+- **Slice 1 — Verify a creator/ministry** — admin grants a verified badge to a profile
+
+#### Mobile User Flows
+- **Slice 2 — Follow a creator** — user follows a creator/ministry and is notified (digest, not per-item) when they publish
+- **Slice 3 — View creator engagement stats** — creator sees aggregated view/reaction counts across their testimonies
+- **Slice 4 — Respond to a prayer reaction** — creator sees who reacted "Praying for you" on their testimony and can send a response; the person who reacted sees that response
+
+Test:
+- follower notifications batch correctly and never spam a follower of a prolific creator
+- a creator's response to a prayer reaction reaches the original reactor, not just a dashboard log
+
+Status: not started — no billing dependency, can run in parallel with Phase 21/22 if resourcing allows.
+
+### Phase 24: Referral Program (Attribution + Manual Month-End Payout)
+
+Background: proposed 2026-08-04, same blueprint review as Phase 21. Payout approach confirmed with the admin 2026-08-04: **manual, month-end payout for now** — no automated disbursement. Recurring revenue-share payouts to individuals, especially cross-border (e.g. a Nigeria-based referrer earning commission on a US-based subscriber), can implicate tax reporting and money-transmission rules depending on jurisdiction and payout method; automating disbursement is deliberately deferred until that question has a real legal answer. Building the attribution/ledger tracking now is safe regardless of how that question resolves.
+
+Build:
+- unique referral link per subscriber; attribution recorded at signup, never retroactively
+- commission ledger computed per billing cycle directly from Phase 21's renewal events; commission stops the instant a referred subscription lapses, per the blueprint's own rule
+- **no automated payout in this phase.** The ledger is admin-visible with a mark-as-paid workflow; the actual transfer happens outside the system (bank transfer) and is only tracked here as paid/unpaid
+
+Sub-slices:
+
+#### Mobile User Flows
+- **Slice 1 — Get my referral link** — subscriber sees their unique referral link
+- **Slice 2 — Signup attribution** — a new subscriber who signs up via a referral link is attributed to that referrer at signup time
+
+#### Backend/Admin Flows
+- **Slice 3 — Commission computed per billing cycle** — ties directly to Phase 21's renewal webhook; a lapsed subscription stops future commission immediately, no manual intervention needed
+- **Slice 4 — Admin reviews and marks month-end payouts** — admin sees the commission ledger for the period, reviews it, and marks entries paid once the manual transfer is done
+
+Test:
+- commission stops exactly at lapse and never continues into a canceled period
+- no double-attribution if a user follows two different referral links before signing up
+- the month-end ledger total reconciles exactly against the underlying renewal events for that period
+
+Status: not started
+
+### Phase 25: Offline Download (Premium)
+
+Background: proposed 2026-08-04, same blueprint review as Phase 21.
+
+Build:
+- local caching of video/audio testimonies for offline playback, gated behind Phase 21's entitlement check
+- scoped explicitly as convenience caching, not DRM-protected download — redistribution protection is a separate, much larger problem intentionally kept out of scope here
+
+Sub-slices:
+
+#### Mobile User Flows
+- **Slice 1 — Download a testimony for offline playback**
+- **Slice 2 — Manage downloaded content** — storage limits, remove downloads
+
+Test:
+- an explicit product decision, then a matching test, for whether downloaded content stays playable after a subscription lapses
+
+Status: not started
+
+### Phase 26: Multi-Currency & Multi-Region Expansion
+
+Background: proposed 2026-08-04, same blueprint review as Phase 21.
+
+Build:
+- extends Flutterwave's existing NGN/USD support (Phase 5 precedent) to additional currencies
+- localized pricing display at checkout, not just currency conversion
+- evaluate whether UK/US coverage needs a second payment processor alongside Flutterwave, whose strongest coverage is Africa
+
+Status: not started — sequenced after Phase 21 since it expands an already-working subscription system rather than preceding it.
+
+### Phase 27: Live Testimony Broadcasts
+
+Background: proposed 2026-08-04, same blueprint review as Phase 21.
+
+Build:
+- real-time video infrastructure (Mux Live / Agora / LiveKit-class vendor) — a genuinely separate technical domain from the existing Cloudinary pre-recorded upload pipeline, not an extension of it
+- scheduling, live viewer count, automatic archival into the normal testimony catalog after the broadcast ends
+
+Sub-slices:
+
+#### Mobile User Flows
+- **Slice 1 — Creator schedules and starts a live broadcast**
+- **Slice 2 — Viewer watches a live broadcast**
+- **Slice 3 — Broadcast is archived as a normal video testimony afterward**
+
+Test:
+- a dropped stream mid-broadcast is handled gracefully (real-time infra has different failure modes than anything else in this app) and viewers see a clear "broadcast ended" state rather than a stuck player
+
+Status: not started — recommend building this last of all seven new phases. Different technical domain, materially higher infra/operational cost (live streams need active health monitoring), and the blueprint itself treats it as one bullet among many rather than a headline feature.
 
 ## Risks To Watch Early
 
