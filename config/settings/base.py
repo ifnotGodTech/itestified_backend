@@ -27,6 +27,7 @@ INSTALLED_APPS = [
     "apps.authn",
     "apps.testimonies",
     "apps.donations",
+    "apps.subscriptions",
     "apps.notifications",
     "apps.content",
     "apps.app_versions",
@@ -165,3 +166,15 @@ FLUTTERWAVE_SECRET_KEY = os.environ.get("FLUTTERWAVE_SECRET_KEY", "")
 FLUTTERWAVE_SECRET_HASH = os.environ.get("FLUTTERWAVE_SECRET_HASH", "")
 FLUTTERWAVE_BASE_URL = os.environ.get("FLUTTERWAVE_BASE_URL", "https://api.flutterwave.com")
 FLUTTERWAVE_REDIRECT_URL = os.environ.get("FLUTTERWAVE_REDIRECT_URL", "")
+
+# Phase 21: the Premium payment plan's Flutterwave-side id. Created once via
+# `manage.py create_premium_payment_plan` (writes the plan id to stdout);
+# there is deliberately no code path that creates this plan automatically at
+# request time, since a single, stable plan id is meant to live for the
+# lifetime of the product, not get recreated per-deploy.
+FLUTTERWAVE_PREMIUM_PLAN_ID = os.environ.get("FLUTTERWAVE_PREMIUM_PLAN_ID", "")
+# Minor currency units (kobo) -- matches the illustrative price already
+# shown on the mobile Plans screen mock and the business blueprint's own
+# referral-commission example.
+PREMIUM_PLAN_AMOUNT_KOBO = 300000
+PREMIUM_PLAN_CURRENCY = "NGN"

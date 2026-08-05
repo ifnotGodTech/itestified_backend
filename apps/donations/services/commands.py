@@ -9,7 +9,7 @@ from apps.donations.exceptions import (
     DonationNotReversibleError,
 )
 from apps.donations.models import Donation, DonationStatus, DonationStatusHistory
-from apps.donations.services.flutterwave import FlutterwaveGateway, FlutterwaveGatewayError
+from apps.common.services.flutterwave import FlutterwaveGateway, FlutterwaveGatewayError
 from apps.donations.services.notifications import (
     maybe_notify_new_donation,
     maybe_send_donation_thank_you_email,

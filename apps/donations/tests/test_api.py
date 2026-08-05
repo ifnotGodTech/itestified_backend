@@ -26,7 +26,7 @@ class DonationApiTests(TestCase):
 
         with (
             patch("apps.donations.api.views.settings.FLUTTERWAVE_SECRET_KEY", "sk_test"),
-            patch("apps.donations.services.flutterwave.FlutterwaveGateway._post") as post_mock,
+            patch("apps.common.services.flutterwave.FlutterwaveGateway._post") as post_mock,
         ):
             post_mock.return_value = {
                 "data": {"link": "https://checkout.flutterwave.com/v3/hosted/pay/abc123", "id": "999"}
@@ -73,7 +73,7 @@ class DonationApiTests(TestCase):
 
         with (
             patch("apps.donations.api.views.settings.FLUTTERWAVE_SECRET_KEY", "sk_test"),
-            patch("apps.donations.services.flutterwave.FlutterwaveGateway._post") as post_mock,
+            patch("apps.common.services.flutterwave.FlutterwaveGateway._post") as post_mock,
         ):
             post_mock.return_value = {"data": {"link": "https://checkout.flutterwave.com/pay/abc123", "id": "999"}}
             response = self.client.post(

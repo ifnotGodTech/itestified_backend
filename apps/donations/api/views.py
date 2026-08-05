@@ -21,7 +21,13 @@ from apps.donations.services.commands import (
     reverse_donation,
     verify_donation,
 )
-from apps.donations.services.flutterwave import FlutterwaveGatewayError
+from apps.subscriptions.api.serializers import SubscriptionSerializer
+from apps.subscriptions.services.commands import (
+    apply_cancellation_callback,
+    apply_charge_callback,
+    log_unrecognized_event,
+)
+from apps.common.services.flutterwave import FlutterwaveGatewayError
 
 from .serializers import (
     AdminDonationDetailSerializer,
@@ -108,6 +114,15 @@ class DonationMineDetailView(generics.RetrieveAPIView):
 
 
 class DonationProviderCallbackView(APIView):
+    """Flutterwave sends webhook events to exactly one URL per account
+    (there is no per-feature webhook registration), so this single
+    endpoint is the real, shared entry point for BOTH donation charges
+    (Phase 5) and Phase 21's subscription charges/cancellations -- hence
+    the otherwise-unusual cross-app import of apps.subscriptions here.
+    Moving this to a neutral URL would require the admin to reconfigure
+    Flutterwave's dashboard webhook setting; keeping the existing,
+    already-configured URL and routing internally avoids that entirely."""
+
     authentication_classes = []
     permission_classes = [AllowAny]
 
@@ -122,7 +137,14 @@ class DonationProviderCallbackView(APIView):
         if signature != settings.FLUTTERWAVE_SECRET_HASH:
             return Response({"message": "Invalid webhook signature."}, status=status.HTTP_403_FORBIDDEN)
 
+        event = str(request.data.get("event", ""))
         payload = request.data.get("data", request.data)
+
+        if event == "subscription.cancelled":
+            return self._handle_subscription_cancelled(event, payload)
+        return self._handle_charge_completed(event, payload)
+
+    def _handle_charge_completed(self, event: str, payload: dict):
         serializer = DonationProviderCallbackSerializer(data=payload)
         serializer.is_valid(raise_exception=True)
 
@@ -134,17 +156,55 @@ class DonationProviderCallbackView(APIView):
             or payload.get("id")
             or ""
         )
+        payment_reference = serializer.validated_data["payment_reference"]
+        status_reason = serializer.validated_data.get("status_reason", "")
 
         donation = apply_provider_callback(
-            payment_reference=serializer.validated_data["payment_reference"],
+            payment_reference=payment_reference,
             status_value=status_value,
             provider_transaction_id=str(provider_txn_id),
-            status_reason=serializer.validated_data.get("status_reason", ""),
+            status_reason=status_reason,
         )
-        if donation is None:
-            return Response({"message": "Donation not found."}, status=status.HTTP_404_NOT_FOUND)
+        if donation is not None:
+            return Response(DonationSerializer(donation).data, status=status.HTTP_200_OK)
 
-        return Response(DonationSerializer(donation).data, status=status.HTTP_200_OK)
+        customer_email = str((payload.get("customer") or {}).get("email", ""))
+        subscription = apply_charge_callback(
+            payment_reference=payment_reference,
+            customer_email=customer_email,
+            status_value=status_value,
+            provider_transaction_id=str(provider_txn_id),
+            status_reason=status_reason,
+        )
+        if subscription is not None:
+            return Response(SubscriptionSerializer(subscription).data, status=status.HTTP_200_OK)
+
+        log_unrecognized_event(
+            event=event,
+            raw_payload=payload,
+            note="No matching donation or subscription for this charge.",
+        )
+        return Response({"message": "No matching record found."}, status=status.HTTP_404_NOT_FOUND)
+
+    def _handle_subscription_cancelled(self, event: str, payload: dict):
+        provider_subscription_id = str(payload.get("id") or "")
+        customer_email = str((payload.get("customer") or {}).get("email", ""))
+        reason = str(payload.get("status") or "Cancelled by provider.")
+
+        subscription = apply_cancellation_callback(
+            provider_subscription_id=provider_subscription_id,
+            customer_email=customer_email,
+            reason=reason,
+        )
+        if subscription is None:
+            log_unrecognized_event(
+                event=event,
+                raw_payload=payload,
+                note="No matching subscription for this cancellation.",
+            )
+            return Response({"message": "No matching subscription found."}, status=status.HTTP_404_NOT_FOUND)
+
+        return Response(SubscriptionSerializer(subscription).data, status=status.HTTP_200_OK)
 
 
 class AdminDonationListView(generics.ListAPIView):
