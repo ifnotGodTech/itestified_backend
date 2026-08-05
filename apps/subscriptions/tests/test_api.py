@@ -34,16 +34,16 @@ class SubscribeApiTests(TestCase):
 
     def test_subscribe_returns_503_when_gateway_not_configured(self):
         with patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_SECRET_KEY", ""):
-            response = self.client.post(reverse("subscription-subscribe"), **self._auth_headers())
+            response = self.client.post(reverse("subscription-subscribe"), {}, content_type="application/json", **self._auth_headers())
         self.assertEqual(response.status_code, 503)
         self.assertFalse(Subscription.objects.exists())
 
     def test_subscribe_returns_503_when_plan_id_not_configured(self):
         with (
             patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_SECRET_KEY", "sk_test"),
-            patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_PREMIUM_PLAN_ID", ""),
+            patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_PREMIUM_PLAN_IDS", {}),
         ):
-            response = self.client.post(reverse("subscription-subscribe"), **self._auth_headers())
+            response = self.client.post(reverse("subscription-subscribe"), {}, content_type="application/json", **self._auth_headers())
         self.assertEqual(response.status_code, 503)
 
     def test_subscribe_creates_pending_subscription_and_sends_major_unit_amount_with_plan(self):
@@ -52,13 +52,13 @@ class SubscribeApiTests(TestCase):
         # units (kobo), only the outbound Flutterwave payload converts.
         with (
             patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_SECRET_KEY", "sk_test"),
-            patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_PREMIUM_PLAN_ID", "plan_123"),
+            patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_PREMIUM_PLAN_IDS", {"NGN": "plan_123"}),
             patch("apps.common.services.flutterwave.FlutterwaveGateway._post") as post_mock,
         ):
             post_mock.return_value = {
                 "data": {"link": "https://checkout.flutterwave.com/v3/hosted/pay/sub123", "id": "555"}
             }
-            response = self.client.post(reverse("subscription-subscribe"), **self._auth_headers())
+            response = self.client.post(reverse("subscription-subscribe"), {}, content_type="application/json", **self._auth_headers())
 
         self.assertEqual(response.status_code, 201)
         payload = response.json()
@@ -73,6 +73,67 @@ class SubscribeApiTests(TestCase):
         subscription = Subscription.objects.get()
         self.assertTrue(subscription.payment_reference.startswith("SUB-"))
 
+    def test_subscribe_in_usd_uses_the_usd_plan_and_price(self):
+        with (
+            patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_SECRET_KEY", "sk_test"),
+            patch(
+                "apps.subscriptions.services.commands.settings.FLUTTERWAVE_PREMIUM_PLAN_IDS",
+                {"NGN": "plan_ngn", "USD": "plan_usd"},
+            ),
+            patch("apps.common.services.flutterwave.FlutterwaveGateway._post") as post_mock,
+        ):
+            post_mock.return_value = {
+                "data": {"link": "https://checkout.flutterwave.com/v3/hosted/pay/usdsub", "id": "556"}
+            }
+            response = self.client.post(
+                reverse("subscription-subscribe"),
+                {"currency": "usd"},
+                content_type="application/json",
+                **self._auth_headers(),
+            )
+
+        self.assertEqual(response.status_code, 201)
+        payload = response.json()
+        self.assertEqual(payload["currency"], "USD")
+        self.assertEqual(payload["amount"], 499)
+
+        sent_payload = post_mock.call_args[0][1]
+        self.assertEqual(sent_payload["amount"], "4.99")
+        self.assertEqual(sent_payload["payment_plan"], "plan_usd")
+
+    def test_subscribe_rejects_an_unsupported_currency(self):
+        with (
+            patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_SECRET_KEY", "sk_test"),
+            patch(
+                "apps.subscriptions.services.commands.settings.FLUTTERWAVE_PREMIUM_PLAN_IDS",
+                {"NGN": "plan_ngn", "USD": "plan_usd"},
+            ),
+        ):
+            response = self.client.post(
+                reverse("subscription-subscribe"),
+                {"currency": "GBP"},
+                content_type="application/json",
+                **self._auth_headers(),
+            )
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(Subscription.objects.exists())
+
+    def test_subscribe_returns_503_when_only_the_other_currencys_plan_is_configured(self):
+        with (
+            patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_SECRET_KEY", "sk_test"),
+            patch(
+                "apps.subscriptions.services.commands.settings.FLUTTERWAVE_PREMIUM_PLAN_IDS",
+                {"NGN": "plan_ngn", "USD": ""},
+            ),
+        ):
+            response = self.client.post(
+                reverse("subscription-subscribe"),
+                {"currency": "USD"},
+                content_type="application/json",
+                **self._auth_headers(),
+            )
+        self.assertEqual(response.status_code, 503)
+
     def test_subscribe_rejects_a_second_subscription_while_one_is_in_progress(self):
         Subscription.objects.create(
             user=self.user,
@@ -82,9 +143,9 @@ class SubscribeApiTests(TestCase):
         )
         with (
             patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_SECRET_KEY", "sk_test"),
-            patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_PREMIUM_PLAN_ID", "plan_123"),
+            patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_PREMIUM_PLAN_IDS", {"NGN": "plan_123"}),
         ):
-            response = self.client.post(reverse("subscription-subscribe"), **self._auth_headers())
+            response = self.client.post(reverse("subscription-subscribe"), {}, content_type="application/json", **self._auth_headers())
         self.assertEqual(response.status_code, 400)
         self.assertEqual(Subscription.objects.count(), 1)
 
@@ -99,9 +160,9 @@ class SubscribeApiTests(TestCase):
         )
         with (
             patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_SECRET_KEY", "sk_test"),
-            patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_PREMIUM_PLAN_ID", "plan_123"),
+            patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_PREMIUM_PLAN_IDS", {"NGN": "plan_123"}),
         ):
-            response = self.client.post(reverse("subscription-subscribe"), **self._auth_headers())
+            response = self.client.post(reverse("subscription-subscribe"), {}, content_type="application/json", **self._auth_headers())
         self.assertEqual(response.status_code, 400)
         self.assertEqual(Subscription.objects.count(), 1)
 
@@ -119,13 +180,13 @@ class SubscribeApiTests(TestCase):
         )
         with (
             patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_SECRET_KEY", "sk_test"),
-            patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_PREMIUM_PLAN_ID", "plan_123"),
+            patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_PREMIUM_PLAN_IDS", {"NGN": "plan_123"}),
             patch("apps.common.services.flutterwave.FlutterwaveGateway._post") as post_mock,
         ):
             post_mock.return_value = {
                 "data": {"link": "https://checkout.flutterwave.com/pay/new", "id": "2"}
             }
-            response = self.client.post(reverse("subscription-subscribe"), **self._auth_headers())
+            response = self.client.post(reverse("subscription-subscribe"), {}, content_type="application/json", **self._auth_headers())
         self.assertEqual(response.status_code, 201)
         old.refresh_from_db()
         self.assertEqual(old.status, SubscriptionStatus.CANCELED)
@@ -134,11 +195,11 @@ class SubscribeApiTests(TestCase):
     def test_subscribe_marks_canceled_when_gateway_call_fails(self):
         with (
             patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_SECRET_KEY", "sk_test"),
-            patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_PREMIUM_PLAN_ID", "plan_123"),
+            patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_PREMIUM_PLAN_IDS", {"NGN": "plan_123"}),
             patch("apps.common.services.flutterwave.FlutterwaveGateway._post") as post_mock,
         ):
             post_mock.return_value = {"data": {}}  # no "link" -> gateway error
-            response = self.client.post(reverse("subscription-subscribe"), **self._auth_headers())
+            response = self.client.post(reverse("subscription-subscribe"), {}, content_type="application/json", **self._auth_headers())
 
         self.assertEqual(response.status_code, 502)
         subscription = Subscription.objects.get()
@@ -147,11 +208,11 @@ class SubscribeApiTests(TestCase):
         # A canceled attempt must not block a real retry.
         with (
             patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_SECRET_KEY", "sk_test"),
-            patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_PREMIUM_PLAN_ID", "plan_123"),
+            patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_PREMIUM_PLAN_IDS", {"NGN": "plan_123"}),
             patch("apps.common.services.flutterwave.FlutterwaveGateway._post") as post_mock,
         ):
             post_mock.return_value = {"data": {"link": "https://checkout.flutterwave.com/pay/x", "id": "1"}}
-            retry_response = self.client.post(reverse("subscription-subscribe"), **self._auth_headers())
+            retry_response = self.client.post(reverse("subscription-subscribe"), {}, content_type="application/json", **self._auth_headers())
         self.assertEqual(retry_response.status_code, 201)
 
 

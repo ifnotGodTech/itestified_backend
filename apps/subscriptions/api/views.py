@@ -12,6 +12,7 @@ from apps.subscriptions.exceptions import (
     SubscriptionGatewayNotConfiguredError,
     SubscriptionNotCancelableError,
     SubscriptionNotFoundError,
+    SubscriptionUnsupportedCurrencyError,
 )
 from apps.subscriptions.models import Subscription, SubscriptionStatus
 from apps.subscriptions.selectors import get_current_subscription
@@ -20,6 +21,7 @@ from apps.subscriptions.services.commands import cancel_subscription, subscribe
 from .serializers import (
     AdminSubscriptionDetailSerializer,
     AdminSubscriptionListSerializer,
+    SubscribeRequestSerializer,
     SubscriptionSerializer,
 )
 
@@ -35,13 +37,18 @@ class SubscribeView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        serializer = SubscribeRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
         try:
-            subscription = subscribe(user=request.user)
+            subscription = subscribe(user=request.user, currency=serializer.validated_data["currency"])
         except SubscriptionAlreadyExistsError:
             return Response(
                 {"message": "You already have a subscription in progress or active."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        except SubscriptionUnsupportedCurrencyError:
+            return Response({"message": "Unsupported currency."}, status=status.HTTP_400_BAD_REQUEST)
         except SubscriptionGatewayNotConfiguredError:
             return Response(
                 {"message": "Premium subscriptions are not configured yet."},

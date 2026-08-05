@@ -1,6 +1,19 @@
+from django.conf import settings
 from rest_framework import serializers
 
 from apps.subscriptions.models import Subscription, SubscriptionStatusHistory
+
+
+class SubscribeRequestSerializer(serializers.Serializer):
+    # Defaults to NGN so an existing client that doesn't send this field yet
+    # (e.g. an already-shipped app build) keeps working unchanged.
+    currency = serializers.CharField(max_length=3, default="NGN")
+
+    def validate_currency(self, value: str) -> str:
+        currency = value.strip().upper()
+        if currency not in settings.PREMIUM_PLAN_PRICING_MINOR_UNITS:
+            raise serializers.ValidationError("Unsupported currency.")
+        return currency
 
 
 class SubscriptionSerializer(serializers.ModelSerializer):

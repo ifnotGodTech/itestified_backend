@@ -12,6 +12,7 @@ from apps.subscriptions.exceptions import (
     SubscriptionGatewayNotConfiguredError,
     SubscriptionNotCancelableError,
     SubscriptionNotFoundError,
+    SubscriptionUnsupportedCurrencyError,
 )
 from apps.subscriptions.models import (
     NON_TERMINAL_STATUSES,
@@ -66,16 +67,25 @@ def _attach_provider_subscription_id(subscription: Subscription) -> None:
         subscription.provider_subscription_id = record.provider_subscription_id
 
 
-def subscribe(*, user) -> Subscription:
+def subscribe(*, user, currency: str = "NGN") -> Subscription:
     """Deliberately NOT a single @transaction.atomic function: the Flutterwave
     call in the middle is a real external side effect, and if it fails we
     still need the CANCELED record (with its failure reason) to persist so
     the attempt is visible/auditable -- wrapping the whole function would
     roll that write back along with everything else the moment we re-raise.
-    Each DB-writing step below gets its own short atomic block instead."""
+    Each DB-writing step below gets its own short atomic block instead.
+
+    Each supported currency has its own Flutterwave Payment Plan (a plan is
+    tied to one currency at creation time on Flutterwave's side), so the
+    caller picks which one to subscribe to -- mirrors Giving's existing
+    NGN/USD choice (Phase 5) rather than a single hardcoded currency."""
+    currency = currency.upper()
+    if currency not in settings.PREMIUM_PLAN_PRICING_MINOR_UNITS:
+        raise SubscriptionUnsupportedCurrencyError(currency)
     if not settings.FLUTTERWAVE_SECRET_KEY:
         raise SubscriptionGatewayNotConfiguredError()
-    if not settings.FLUTTERWAVE_PREMIUM_PLAN_ID:
+    plan_id = settings.FLUTTERWAVE_PREMIUM_PLAN_IDS.get(currency, "")
+    if not plan_id:
         raise SubscriptionGatewayNotConfiguredError()
 
     with transaction.atomic():
@@ -109,10 +119,10 @@ def subscribe(*, user) -> Subscription:
 
         subscription = Subscription.objects.create(
             user=user,
-            amount=settings.PREMIUM_PLAN_AMOUNT_KOBO,
-            currency=settings.PREMIUM_PLAN_CURRENCY,
+            amount=settings.PREMIUM_PLAN_PRICING_MINOR_UNITS[currency],
+            currency=currency,
             payment_reference=Subscription.generate_reference(),
-            provider_plan_id=settings.FLUTTERWAVE_PREMIUM_PLAN_ID,
+            provider_plan_id=plan_id,
         )
 
     redirect_url = settings.FLUTTERWAVE_REDIRECT_URL or "https://www.itestified.app/premium/return"
@@ -124,7 +134,7 @@ def subscribe(*, user) -> Subscription:
             customer_email=user.email,
             customer_name=getattr(user, "full_name", "") or user.email,
             redirect_url=redirect_url,
-            payment_plan=settings.FLUTTERWAVE_PREMIUM_PLAN_ID,
+            payment_plan=plan_id,
         )
     except FlutterwaveGatewayError as exc:
         # No active access existed yet for this attempt (still PENDING), so

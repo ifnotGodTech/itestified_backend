@@ -167,14 +167,24 @@ FLUTTERWAVE_SECRET_HASH = os.environ.get("FLUTTERWAVE_SECRET_HASH", "")
 FLUTTERWAVE_BASE_URL = os.environ.get("FLUTTERWAVE_BASE_URL", "https://api.flutterwave.com")
 FLUTTERWAVE_REDIRECT_URL = os.environ.get("FLUTTERWAVE_REDIRECT_URL", "")
 
-# Phase 21: the Premium payment plan's Flutterwave-side id. Created once via
-# `manage.py create_premium_payment_plan` (writes the plan id to stdout);
-# there is deliberately no code path that creates this plan automatically at
-# request time, since a single, stable plan id is meant to live for the
-# lifetime of the product, not get recreated per-deploy.
-FLUTTERWAVE_PREMIUM_PLAN_ID = os.environ.get("FLUTTERWAVE_PREMIUM_PLAN_ID", "")
-# Minor currency units (kobo) -- matches the illustrative price already
-# shown on the mobile Plans screen mock and the business blueprint's own
-# referral-commission example.
-PREMIUM_PLAN_AMOUNT_KOBO = 300000
-PREMIUM_PLAN_CURRENCY = "NGN"
+# Phase 21: one Flutterwave payment plan per supported currency (a Payment
+# Plan is tied to a single currency at creation time on Flutterwave's side,
+# so "Premium in USD" needs its own plan id, distinct from the NGN one).
+# Created once per currency via `manage.py create_premium_payment_plan
+# --currency=NGN` / `--currency=USD` (writes the plan id to stdout); there is
+# deliberately no code path that creates these automatically at request
+# time, since a plan id is meant to live for the lifetime of the product,
+# not get recreated per-deploy. Mirrors Giving's existing NGN/USD choice
+# (Phase 5) rather than introducing a new currency-selection pattern.
+FLUTTERWAVE_PREMIUM_PLAN_IDS = {
+    "NGN": os.environ.get("FLUTTERWAVE_PREMIUM_PLAN_ID_NGN", ""),
+    "USD": os.environ.get("FLUTTERWAVE_PREMIUM_PLAN_ID_USD", ""),
+}
+# Minor currency units (kobo/cents). NGN matches the illustrative price
+# already shown on the mobile Plans screen mock and the business blueprint's
+# own referral-commission example; USD is an illustrative placeholder
+# pending a real pricing decision, same caveat as the NGN figure.
+PREMIUM_PLAN_PRICING_MINOR_UNITS = {
+    "NGN": 300000,
+    "USD": 499,
+}

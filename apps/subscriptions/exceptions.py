@@ -12,3 +12,7 @@ class SubscriptionGatewayNotConfiguredError(Exception):
 
 class SubscriptionNotCancelableError(Exception):
     pass
+
+
+class SubscriptionUnsupportedCurrencyError(Exception):
+    pass
