@@ -1,3 +1,4 @@
+from datetime import timedelta
 from unittest.mock import patch
 
 from django.test import TestCase
@@ -87,6 +88,49 @@ class SubscribeApiTests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(Subscription.objects.count(), 1)
 
+    def test_subscribe_rejects_a_still_current_scheduled_cancellation(self):
+        Subscription.objects.create(
+            user=self.user,
+            amount=300000,
+            payment_reference="SUB-SCHEDCURR1",
+            status=SubscriptionStatus.ACTIVE,
+            cancel_at_period_end=True,
+            current_period_end=timezone.now() + timedelta(days=5),
+        )
+        with (
+            patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_SECRET_KEY", "sk_test"),
+            patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_PREMIUM_PLAN_ID", "plan_123"),
+        ):
+            response = self.client.post(reverse("subscription-subscribe"), **self._auth_headers())
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(Subscription.objects.count(), 1)
+
+    def test_subscribe_allows_resubscribing_after_a_lapsed_scheduled_cancellation(self):
+        # The DB's UniqueConstraint only knows about `status`, so the old
+        # ACTIVE-but-lapsed row must be lazily closed out to CANCELED here
+        # or the new INSERT below would violate that constraint.
+        old = Subscription.objects.create(
+            user=self.user,
+            amount=300000,
+            payment_reference="SUB-LAPSEDOLD1",
+            status=SubscriptionStatus.ACTIVE,
+            cancel_at_period_end=True,
+            current_period_end=timezone.now() - timedelta(days=1),
+        )
+        with (
+            patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_SECRET_KEY", "sk_test"),
+            patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_PREMIUM_PLAN_ID", "plan_123"),
+            patch("apps.common.services.flutterwave.FlutterwaveGateway._post") as post_mock,
+        ):
+            post_mock.return_value = {
+                "data": {"link": "https://checkout.flutterwave.com/pay/new", "id": "2"}
+            }
+            response = self.client.post(reverse("subscription-subscribe"), **self._auth_headers())
+        self.assertEqual(response.status_code, 201)
+        old.refresh_from_db()
+        self.assertEqual(old.status, SubscriptionStatus.CANCELED)
+        self.assertEqual(Subscription.objects.count(), 2)
+
     def test_subscribe_marks_canceled_when_gateway_call_fails(self):
         with (
             patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_SECRET_KEY", "sk_test"),
@@ -144,6 +188,36 @@ class MySubscriptionApiTests(TestCase):
         response = self.client.get(reverse("subscription-mine"), **self._auth_headers())
         self.assertEqual(response.status_code, 404)
 
+    def test_shows_a_scheduled_cancellation_as_still_current(self):
+        Subscription.objects.create(
+            user=self.user,
+            amount=300000,
+            payment_reference="SUB-SCHED0001",
+            status=SubscriptionStatus.ACTIVE,
+            cancel_at_period_end=True,
+            current_period_end=timezone.now() + timedelta(days=5),
+        )
+        response = self.client.get(reverse("subscription-mine"), **self._auth_headers())
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["status"], SubscriptionStatus.ACTIVE)
+        self.assertTrue(payload["cancel_at_period_end"])
+
+    def test_hides_a_lapsed_scheduled_cancellation(self):
+        # Nothing else will ever flip this row's status once Flutterwave has
+        # stopped billing it -- get_current_subscription must compute this
+        # lazily rather than depend on a scheduled job.
+        Subscription.objects.create(
+            user=self.user,
+            amount=300000,
+            payment_reference="SUB-LAPSED0001",
+            status=SubscriptionStatus.ACTIVE,
+            cancel_at_period_end=True,
+            current_period_end=timezone.now() - timedelta(days=1),
+        )
+        response = self.client.get(reverse("subscription-mine"), **self._auth_headers())
+        self.assertEqual(response.status_code, 404)
+
 
 class CancelSubscriptionApiTests(TestCase):
     def setUp(self):
@@ -167,7 +241,10 @@ class CancelSubscriptionApiTests(TestCase):
         response = self.client.post(reverse("subscription-cancel"), **self._auth_headers())
         self.assertEqual(response.status_code, 400)
 
-    def test_cancel_marks_active_subscription_canceled_without_remote_call_when_no_provider_id(self):
+    def test_cancel_schedules_cancellation_without_revoking_current_access(self):
+        # Cancellation must not claw back time already paid for: status
+        # stays ACTIVE (entitlement intact) and cancel_at_period_end
+        # records the request instead of jumping straight to CANCELED.
         Subscription.objects.create(
             user=self.user,
             amount=300000,
@@ -176,7 +253,20 @@ class CancelSubscriptionApiTests(TestCase):
         )
         response = self.client.post(reverse("subscription-cancel"), **self._auth_headers())
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["status"], SubscriptionStatus.CANCELED)
+        payload = response.json()
+        self.assertEqual(payload["status"], SubscriptionStatus.ACTIVE)
+        self.assertTrue(payload["cancel_at_period_end"])
+
+    def test_cancel_a_second_time_is_rejected(self):
+        Subscription.objects.create(
+            user=self.user,
+            amount=300000,
+            payment_reference="SUB-ACT00004",
+            status=SubscriptionStatus.ACTIVE,
+            cancel_at_period_end=True,
+        )
+        response = self.client.post(reverse("subscription-cancel"), **self._auth_headers())
+        self.assertEqual(response.status_code, 400)
 
     def test_cancel_calls_flutterwave_when_a_provider_subscription_id_is_known(self):
         Subscription.objects.create(
@@ -380,10 +470,10 @@ class SubscriptionWebhookTests(TestCase):
         subscription.refresh_from_db()
         self.assertEqual(subscription.status, SubscriptionStatus.EXPIRED)
 
-    def test_subscription_cancelled_event_on_an_active_subscription_becomes_canceled_not_expired(self):
+    def test_subscription_cancelled_event_on_an_active_subscription_schedules_not_revokes(self):
         # Unprompted cancellation (e.g. via Flutterwave's own dashboard) is
-        # not a payment failure, so EXPIRED (which implies "payment kept
-        # failing") would be the wrong signal to show the user.
+        # not a payment failure -- it must not claw back the period already
+        # paid for, same policy as a user-initiated cancel_subscription().
         subscription = Subscription.objects.create(
             user=self.user,
             amount=300000,
@@ -399,7 +489,32 @@ class SubscriptionWebhookTests(TestCase):
         )
         self.assertEqual(response.status_code, 200)
         subscription.refresh_from_db()
-        self.assertEqual(subscription.status, SubscriptionStatus.CANCELED)
+        self.assertEqual(subscription.status, SubscriptionStatus.ACTIVE)
+        self.assertTrue(subscription.cancel_at_period_end)
+
+    def test_subscription_cancelled_event_is_idempotent_when_already_scheduled(self):
+        subscription = Subscription.objects.create(
+            user=self.user,
+            amount=300000,
+            payment_reference="SUB-ACTIVE002",
+            status=SubscriptionStatus.ACTIVE,
+            provider_subscription_id="fw-sub-101b",
+            cancel_at_period_end=True,
+        )
+        history_count_before = SubscriptionStatusHistory.objects.filter(subscription=subscription).count()
+        response = self._post_webhook(
+            {
+                "event": "subscription.cancelled",
+                "data": {"id": "fw-sub-101b", "status": "cancelled", "customer": {"email": self.user.email}},
+            }
+        )
+        self.assertEqual(response.status_code, 200)
+        subscription.refresh_from_db()
+        self.assertEqual(subscription.status, SubscriptionStatus.ACTIVE)
+        self.assertEqual(
+            SubscriptionStatusHistory.objects.filter(subscription=subscription).count(),
+            history_count_before,
+        )
 
     def test_subscription_cancelled_event_is_idempotent_on_an_already_canceled_subscription(self):
         subscription = Subscription.objects.create(

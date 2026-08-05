@@ -20,6 +20,7 @@ from apps.subscriptions.models import (
     SubscriptionStatus,
     SubscriptionStatusHistory,
 )
+from apps.subscriptions.selectors import current_subscription_queryset
 
 # Approximate a monthly billing cycle for current_period_end -- this field is
 # informational (drives the mobile "Renews on" display) rather than the
@@ -78,13 +79,33 @@ def subscribe(*, user) -> Subscription:
         raise SubscriptionGatewayNotConfiguredError()
 
     with transaction.atomic():
+        # Query the raw non-terminal row here (not current_subscription_queryset's
+        # lapsed-exclusion) -- the DB's partial UniqueConstraint only knows
+        # about `status`, so a lapsed cancel_at_period_end row must actually
+        # be closed out to CANCELED before a new row can be created, or the
+        # INSERT below would violate that constraint.
         existing = (
             Subscription.objects.select_for_update()
             .filter(user=user, status__in=NON_TERMINAL_STATUSES)
             .first()
         )
         if existing is not None:
-            raise SubscriptionAlreadyExistsError()
+            has_lapsed = (
+                existing.cancel_at_period_end
+                and existing.current_period_end is not None
+                and existing.current_period_end < timezone.now()
+            )
+            if not has_lapsed:
+                raise SubscriptionAlreadyExistsError()
+            from_status = existing.status
+            existing.status = SubscriptionStatus.CANCELED
+            existing.save(update_fields=["status", "updated_at"])
+            _log_status_history(
+                subscription=existing,
+                from_status=from_status,
+                to_status=existing.status,
+                reason="Lapsed after a scheduled cancellation.",
+            )
 
         subscription = Subscription.objects.create(
             user=user,
@@ -204,10 +225,7 @@ def apply_cancellation_callback(*, provider_subscription_id: str, customer_email
     """Handles a subscription.cancelled webhook event. Matched by
     provider_subscription_id when we have it (set once the first
     successful charge told us Flutterwave's own subscription id), falling
-    back to customer_email otherwise. Idempotent: a subscription already
-    CANCELED (because our own cancel_subscription() already made the
-    synchronous cancel call and this webhook is just Flutterwave's
-    confirmation echo of that) is a no-op, not a double transition."""
+    back to customer_email otherwise."""
     subscription = None
     if provider_subscription_id:
         subscription = (
@@ -226,21 +244,38 @@ def apply_cancellation_callback(*, provider_subscription_id: str, customer_email
 
     from_status = subscription.status
     if from_status == SubscriptionStatus.CANCELED:
-        return subscription  # idempotent echo of our own cancel call
+        return subscription  # already fully terminal
 
-    # PAST_DUE -> EXPIRED (payment failures exhausted Flutterwave's own
-    # retry schedule). Anything else unprompted (e.g. cancelled directly
-    # via Flutterwave's dashboard/support) -> CANCELED, since it wasn't a
-    # payment failure.
-    subscription.status = (
-        SubscriptionStatus.EXPIRED if from_status == SubscriptionStatus.PAST_DUE else SubscriptionStatus.CANCELED
-    )
+    if from_status == SubscriptionStatus.PAST_DUE:
+        # Flutterwave gave up its own retry schedule -- the last paid
+        # period has already ended, so there's no remaining paid time to
+        # honor; this is a real, immediate revocation (unlike the ACTIVE
+        # case below).
+        subscription.status = SubscriptionStatus.EXPIRED
+        subscription.status_reason = reason
+        subscription.save(update_fields=["status", "status_reason", "updated_at"])
+        _log_status_history(
+            subscription=subscription,
+            from_status=from_status,
+            to_status=subscription.status,
+            reason=reason,
+        )
+        return subscription
+
+    if subscription.cancel_at_period_end:
+        return subscription  # idempotent echo of our own cancel_subscription() call
+
+    # Unprompted (cancelled directly via Flutterwave's dashboard/support,
+    # not through our own cancel_subscription()) -- still honor the
+    # remaining paid period rather than clawing back access, same policy
+    # as a user-initiated cancel.
+    subscription.cancel_at_period_end = True
     subscription.status_reason = reason
-    subscription.save(update_fields=["status", "status_reason", "updated_at"])
-    _log_status_history(
+    subscription.save(update_fields=["cancel_at_period_end", "status_reason", "updated_at"])
+    SubscriptionStatusHistory.objects.create(
         subscription=subscription,
         from_status=from_status,
-        to_status=subscription.status,
+        to_status=from_status,
         reason=reason,
     )
     return subscription
@@ -248,15 +283,24 @@ def apply_cancellation_callback(*, provider_subscription_id: str, customer_email
 
 @transaction.atomic
 def cancel_subscription(*, user) -> Subscription:
-    subscription = (
-        Subscription.objects.select_for_update()
-        .filter(user=user, status__in=NON_TERMINAL_STATUSES)
-        .first()
-    )
+    """Cancels the renewal, not the access already paid for: status stays
+    ACTIVE/PAST_DUE and cancel_at_period_end is set instead of jumping
+    straight to CANCELED, so entitlement (is_user_premium) keeps returning
+    True until current_period_end passes -- "cancellation takes effect at
+    the end of the current paid period, never claws back time already paid
+    for" per Phase 21 Slice 3's own build note. The status transition to
+    CANCELED itself happens lazily (see current_subscription_queryset)
+    rather than via a scheduled job, since no further webhook will ever
+    arrive for a Flutterwave-cancelled subscription to drive it."""
+    subscription = current_subscription_queryset(user).select_for_update().first()
     if subscription is None:
         raise SubscriptionNotFoundError()
     if subscription.status == SubscriptionStatus.PENDING:
         raise SubscriptionNotCancelableError("Subscription hasn't been activated yet.")
+    if subscription.cancel_at_period_end:
+        raise SubscriptionNotCancelableError(
+            "Already scheduled to cancel at the end of the current period."
+        )
 
     if subscription.provider_subscription_id and settings.FLUTTERWAVE_SECRET_KEY:
         try:
@@ -264,16 +308,19 @@ def cancel_subscription(*, user) -> Subscription:
         except FlutterwaveGatewayError as exc:
             # Don't leave the user thinking they cancelled when Flutterwave
             # never got the request -- surface the failure rather than
-            # optimistically marking CANCELED anyway.
+            # optimistically scheduling the cancellation anyway.
             raise SubscriptionNotCancelableError(str(exc)) from exc
 
-    from_status = subscription.status
-    subscription.status = SubscriptionStatus.CANCELED
-    subscription.status_reason = "Canceled by user."
-    subscription.save(update_fields=["status", "status_reason", "updated_at"])
-    _log_status_history(
+    subscription.cancel_at_period_end = True
+    subscription.status_reason = "Canceled by user; access continues until the current period ends."
+    subscription.save(update_fields=["cancel_at_period_end", "status_reason", "updated_at"])
+    # Status itself is unchanged, so the guarded _log_status_history helper
+    # would treat this as a no-op -- log directly so the cancellation
+    # request is still visible in the audit trail (admin visibility is an
+    # explicit Phase 21 build requirement).
+    SubscriptionStatusHistory.objects.create(
         subscription=subscription,
-        from_status=from_status,
+        from_status=subscription.status,
         to_status=subscription.status,
         reason=subscription.status_reason,
         actor=user,

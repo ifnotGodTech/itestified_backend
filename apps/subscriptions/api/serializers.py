@@ -13,6 +13,7 @@ class SubscriptionSerializer(serializers.ModelSerializer):
             "currency",
             "checkout_url",
             "current_period_end",
+            "cancel_at_period_end",
             "status_reason",
             "created_at",
             "updated_at",
@@ -48,6 +49,7 @@ class AdminSubscriptionListSerializer(serializers.ModelSerializer):
             "currency",
             "status",
             "current_period_end",
+            "cancel_at_period_end",
             "created_at",
             "updated_at",
         )

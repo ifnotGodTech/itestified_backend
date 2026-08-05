@@ -56,6 +56,12 @@ class Subscription(models.Model):
     checkout_url = models.URLField(blank=True)
     provider_transaction_id = models.CharField(max_length=80, blank=True)
     current_period_end = models.DateTimeField(null=True, blank=True)
+    cancel_at_period_end = models.BooleanField(
+        default=False,
+        help_text="User asked to cancel -- status stays ACTIVE/PAST_DUE (access "
+        "continues) until current_period_end passes, rather than clawing back "
+        "time already paid for. No further renewal charge will occur.",
+    )
     status_reason = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
