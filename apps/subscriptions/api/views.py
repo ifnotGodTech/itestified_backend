@@ -16,13 +16,14 @@ from apps.subscriptions.exceptions import (
 )
 from apps.subscriptions.models import Subscription, SubscriptionStatus
 from apps.subscriptions.selectors import get_current_subscription
-from apps.subscriptions.services.commands import cancel_subscription, subscribe
+from apps.subscriptions.services.commands import cancel_subscription, subscribe, verify_subscription
 
 from .serializers import (
     AdminSubscriptionDetailSerializer,
     AdminSubscriptionListSerializer,
     SubscribeRequestSerializer,
     SubscriptionSerializer,
+    SubscriptionVerifySerializer,
 )
 
 
@@ -58,6 +59,31 @@ class SubscribeView(APIView):
             return Response({"message": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
 
         return Response(SubscriptionSerializer(subscription).data, status=status.HTTP_201_CREATED)
+
+
+class VerifySubscriptionView(APIView):
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = SubscriptionVerifySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            subscription = verify_subscription(
+                user=request.user,
+                payment_reference=serializer.validated_data["payment_reference"],
+                transaction_id=serializer.validated_data["transaction_id"],
+            )
+        except SubscriptionNotFoundError:
+            return Response({"message": "Subscription not found."}, status=status.HTTP_404_NOT_FOUND)
+        except SubscriptionGatewayNotConfiguredError:
+            return Response(
+                {"message": "Premium subscriptions are not configured yet."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        return Response(SubscriptionSerializer(subscription).data, status=status.HTTP_200_OK)
 
 
 class MySubscriptionView(APIView):

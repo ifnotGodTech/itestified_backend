@@ -16,6 +16,11 @@ class SubscribeRequestSerializer(serializers.Serializer):
         return currency
 
 
+class SubscriptionVerifySerializer(serializers.Serializer):
+    payment_reference = serializers.CharField(max_length=80)
+    transaction_id = serializers.CharField(max_length=80)
+
+
 class SubscriptionSerializer(serializers.ModelSerializer):
     class Meta:
         model = Subscription
@@ -24,6 +29,7 @@ class SubscriptionSerializer(serializers.ModelSerializer):
             "status",
             "amount",
             "currency",
+            "payment_reference",
             "checkout_url",
             "current_period_end",
             "cancel_at_period_end",

@@ -216,6 +216,130 @@ class SubscribeApiTests(TestCase):
         self.assertEqual(retry_response.status_code, 201)
 
 
+class VerifySubscriptionApiTests(TestCase):
+    """Synchronous fallback for the first charge, mirroring donations'
+    verify endpoint -- added 2026-08-06 after a real test payment sat stuck
+    in `pending` because the webhook never reached the backend."""
+
+    def setUp(self):
+        self.user = UserFactory(email="verify-sub@example.com")
+        self.token = Token.objects.create(user=self.user)
+
+    def _auth_headers(self):
+        return {"HTTP_AUTHORIZATION": f"Token {self.token.key}"}
+
+    def test_verify_requires_authentication(self):
+        response = self.client.post(reverse("subscription-verify"))
+        self.assertEqual(response.status_code, 401)
+
+    def test_verify_returns_404_for_someone_elses_or_unknown_reference(self):
+        with patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_SECRET_KEY", "sk_test"):
+            response = self.client.post(
+                reverse("subscription-verify"),
+                {"payment_reference": "SUB-DOES-NOT-EXIST", "transaction_id": "1"},
+                content_type="application/json",
+                **self._auth_headers(),
+            )
+        self.assertEqual(response.status_code, 404)
+
+    def test_verify_activates_a_successful_pending_subscription(self):
+        subscription = Subscription.objects.create(
+            user=self.user,
+            amount=499,
+            currency="USD",
+            payment_reference="SUB-VERIFY0001",
+            status=SubscriptionStatus.PENDING,
+        )
+        with (
+            patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_SECRET_KEY", "sk_test"),
+            patch("apps.subscriptions.services.commands.FlutterwaveGateway.verify") as verify_mock,
+        ):
+            verify_mock.return_value.status = "successful"
+            verify_mock.return_value.provider_transaction_id = "txn-999"
+            verify_mock.return_value.status_reason = "Approved"
+            response = self.client.post(
+                reverse("subscription-verify"),
+                {"payment_reference": "SUB-VERIFY0001", "transaction_id": "txn-999"},
+                content_type="application/json",
+                **self._auth_headers(),
+            )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["status"], SubscriptionStatus.ACTIVE)
+        self.assertIsNotNone(payload["current_period_end"])
+
+        subscription.refresh_from_db()
+        self.assertEqual(subscription.status, SubscriptionStatus.ACTIVE)
+
+    def test_verify_cancels_a_declined_pending_subscription(self):
+        Subscription.objects.create(
+            user=self.user,
+            amount=300000,
+            payment_reference="SUB-VERIFY0002",
+            status=SubscriptionStatus.PENDING,
+        )
+        with (
+            patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_SECRET_KEY", "sk_test"),
+            patch("apps.subscriptions.services.commands.FlutterwaveGateway.verify") as verify_mock,
+        ):
+            verify_mock.return_value.status = "declined"
+            verify_mock.return_value.provider_transaction_id = "txn-1000"
+            verify_mock.return_value.status_reason = "Card declined"
+            response = self.client.post(
+                reverse("subscription-verify"),
+                {"payment_reference": "SUB-VERIFY0002", "transaction_id": "txn-1000"},
+                content_type="application/json",
+                **self._auth_headers(),
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], SubscriptionStatus.CANCELED)
+
+    def test_verify_is_a_no_op_when_the_webhook_already_won_the_race(self):
+        # The subscription is already ACTIVE (webhook got there first) --
+        # verify() must not be called at all, and must not double-log.
+        subscription = Subscription.objects.create(
+            user=self.user,
+            amount=300000,
+            payment_reference="SUB-VERIFY0003",
+            status=SubscriptionStatus.ACTIVE,
+            current_period_end=timezone.now() + timedelta(days=30),
+        )
+        history_count_before = SubscriptionStatusHistory.objects.filter(subscription=subscription).count()
+        with (
+            patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_SECRET_KEY", "sk_test"),
+            patch("apps.subscriptions.services.commands.FlutterwaveGateway.verify") as verify_mock,
+        ):
+            response = self.client.post(
+                reverse("subscription-verify"),
+                {"payment_reference": "SUB-VERIFY0003", "transaction_id": "txn-1001"},
+                content_type="application/json",
+                **self._auth_headers(),
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], SubscriptionStatus.ACTIVE)
+        verify_mock.assert_not_called()
+        self.assertEqual(
+            SubscriptionStatusHistory.objects.filter(subscription=subscription).count(),
+            history_count_before,
+        )
+
+    def test_verify_returns_503_when_gateway_not_configured(self):
+        Subscription.objects.create(
+            user=self.user,
+            amount=300000,
+            payment_reference="SUB-VERIFY0004",
+            status=SubscriptionStatus.PENDING,
+        )
+        with patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_SECRET_KEY", ""):
+            response = self.client.post(
+                reverse("subscription-verify"),
+                {"payment_reference": "SUB-VERIFY0004", "transaction_id": "txn-1002"},
+                content_type="application/json",
+                **self._auth_headers(),
+            )
+        self.assertEqual(response.status_code, 503)
+
+
 class MySubscriptionApiTests(TestCase):
     def setUp(self):
         self.user = UserFactory(email="mine@example.com")

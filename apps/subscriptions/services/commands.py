@@ -177,6 +177,66 @@ def subscribe(*, user, currency: str = "NGN") -> Subscription:
 
 
 @transaction.atomic
+def verify_subscription(*, user, payment_reference: str, transaction_id: str) -> Subscription:
+    """Synchronous fallback for the FIRST charge only, mirroring donations'
+    verify_donation() exactly. Webhooks stay authoritative for renewals and
+    cancellations (there's no "return to app" moment for those to hook
+    into), but a webhook-only first charge is fragile: Flutterwave's own
+    docs describe webhooks as being for payment methods "not processed in
+    real-time" (e.g. bank transfers) -- for a real-time card charge, the
+    reliable confirmation path is the client calling this right after the
+    checkout redirect, same as donations already does. Real gap found and
+    fixed 2026-08-06: a subscription could sit stuck in `pending` -- looking
+    identical to a user who never subscribed -- if the webhook was ever
+    slow, dropped, or failed to match."""
+    subscription = (
+        Subscription.objects.select_for_update()
+        .filter(payment_reference=payment_reference, user=user)
+        .first()
+    )
+    if subscription is None:
+        raise SubscriptionNotFoundError()
+    if subscription.status == SubscriptionStatus.ACTIVE:
+        return subscription  # webhook already won the race; nothing to do
+    if not settings.FLUTTERWAVE_SECRET_KEY:
+        raise SubscriptionGatewayNotConfiguredError()
+
+    verify_result = _gateway().verify(transaction_id)
+    from_status = subscription.status
+    if verify_result.status == "successful":
+        subscription.status = SubscriptionStatus.ACTIVE
+        subscription.current_period_end = _add_one_month(timezone.now())
+        if not subscription.provider_subscription_id:
+            _attach_provider_subscription_id(subscription)
+    else:
+        # No active access existed yet for this attempt (still PENDING), so
+        # there's nothing to protect with a grace period -- same reasoning
+        # as a failed first charge in apply_charge_callback below.
+        subscription.status = SubscriptionStatus.CANCELED
+
+    subscription.provider_transaction_id = verify_result.provider_transaction_id
+    subscription.status_reason = verify_result.status_reason
+    subscription.save(
+        update_fields=[
+            "status",
+            "current_period_end",
+            "provider_subscription_id",
+            "provider_transaction_id",
+            "status_reason",
+            "updated_at",
+        ]
+    )
+    _log_status_history(
+        subscription=subscription,
+        from_status=from_status,
+        to_status=subscription.status,
+        reason=subscription.status_reason,
+        actor=user,
+    )
+    return subscription
+
+
+@transaction.atomic
 def apply_charge_callback(
     *,
     payment_reference: str,
