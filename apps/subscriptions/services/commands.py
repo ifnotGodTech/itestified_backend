@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import timedelta
+from calendar import monthrange
+from datetime import datetime
 
 from django.conf import settings
 from django.db import transaction
@@ -23,12 +24,25 @@ from apps.subscriptions.models import (
 )
 from apps.subscriptions.selectors import current_subscription_queryset
 
-# Approximate a monthly billing cycle for current_period_end -- this field is
-# informational (drives the mobile "Renews on" display) rather than the
-# actual billing trigger, which Flutterwave owns entirely on its own
-# schedule. Exact calendar-month arithmetic isn't worth a new dependency for
-# that purpose.
-_BILLING_CYCLE = timedelta(days=30)
+
+def _add_one_month(dt: datetime) -> datetime:
+    """current_period_end is informational (drives the mobile "Renews on"
+    display) rather than the actual billing trigger, which Flutterwave owns
+    entirely on its own schedule -- Flutterwave's API exposes no next-billing-
+    date field to read back (confirmed against their docs), and doesn't
+    document whether "monthly" means +30 days or the same calendar date next
+    month. Every payment processor we could confirm behavior for (Stripe,
+    PayPal) bills recurring "monthly" plans on the same calendar date each
+    month, so this matches that rather than a flat 30-day window, which would
+    silently drift against the real charge date by 1-3 days depending on the
+    month. Clamps to the last day of the target month when the source day
+    doesn't exist there (e.g. Jan 31 -> Feb 28/29), rather than overflowing
+    into the following month."""
+    year = dt.year + (dt.month // 12)
+    month = dt.month % 12 + 1
+    last_day_of_target_month = monthrange(year, month)[1]
+    day = min(dt.day, last_day_of_target_month)
+    return dt.replace(year=year, month=month, day=day)
 
 
 def _log_status_history(*, subscription: Subscription, from_status: str, to_status: str, reason: str = "", actor=None) -> None:
@@ -196,7 +210,7 @@ def apply_charge_callback(
     from_status = subscription.status
     if status_value == "successful":
         subscription.status = SubscriptionStatus.ACTIVE
-        subscription.current_period_end = timezone.now() + _BILLING_CYCLE
+        subscription.current_period_end = _add_one_month(timezone.now())
         if is_first_charge and not subscription.provider_subscription_id:
             _attach_provider_subscription_id(subscription)
     elif from_status == SubscriptionStatus.ACTIVE:
