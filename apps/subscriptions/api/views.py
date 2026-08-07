@@ -4,6 +4,7 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from django.db.models import Q
 
 from apps.authn.api.permissions import IsActiveAdmin
 from apps.common.services.flutterwave import FlutterwaveGatewayError
@@ -16,9 +17,15 @@ from apps.subscriptions.exceptions import (
 )
 from apps.subscriptions.models import Subscription, SubscriptionStatus
 from apps.subscriptions.selectors import get_current_subscription
-from apps.subscriptions.services.commands import cancel_subscription, subscribe, verify_subscription
+from apps.subscriptions.services.commands import (
+    admin_cancel_subscription,
+    cancel_subscription,
+    subscribe,
+    verify_subscription,
+)
 
 from .serializers import (
+    AdminSubscriptionCancelSerializer,
     AdminSubscriptionDetailSerializer,
     AdminSubscriptionListSerializer,
     SubscribeRequestSerializer,
@@ -121,8 +128,15 @@ class AdminSubscriptionListView(generics.ListAPIView):
     def get_queryset(self):
         queryset = Subscription.objects.select_related("user", "user__profile")
         status_filter = (self.request.query_params.get("status") or "").strip().lower()
+        q = (self.request.query_params.get("q") or "").strip()
         if status_filter in SubscriptionStatus.values:
             queryset = queryset.filter(status=status_filter)
+        if q:
+            queryset = queryset.filter(
+                Q(user__email__icontains=q)
+                | Q(user__profile__full_name__icontains=q)
+                | Q(payment_reference__icontains=q)
+            )
         return queryset.order_by("-created_at")
 
 
@@ -133,3 +147,25 @@ class AdminSubscriptionDetailView(generics.RetrieveAPIView):
     queryset = Subscription.objects.select_related("user", "user__profile").prefetch_related(
         "status_history", "status_history__actor"
     )
+
+
+class AdminSubscriptionCancelView(APIView):
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsAuthenticated, IsActiveAdmin]
+
+    def post(self, request, subscription_id: int):
+        serializer = AdminSubscriptionCancelSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            subscription = admin_cancel_subscription(
+                subscription_id=subscription_id,
+                actor=request.user,
+                reason=serializer.validated_data["reason"],
+            )
+        except SubscriptionNotFoundError:
+            return Response({"message": "Subscription not found."}, status=status.HTTP_404_NOT_FOUND)
+        except SubscriptionNotCancelableError as exc:
+            return Response({"message": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(AdminSubscriptionDetailSerializer(subscription).data, status=status.HTTP_200_OK)

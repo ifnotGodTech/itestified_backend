@@ -834,3 +834,194 @@ class AdminSubscriptionApiTests(TestCase):
         response = self.client.get(reverse("admin-subscription-detail", kwargs={"pk": self.subscription.pk}))
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.json()["status_history"]), 1)
+
+    def test_admin_list_searches_by_subscriber_email(self):
+        Subscription.objects.create(
+            user=UserFactory(email="someoneelse@example.com"),
+            amount=300000,
+            payment_reference="SUB-ADMIN0002",
+            status=SubscriptionStatus.ACTIVE,
+        )
+        self.client.force_login(self.admin_user)
+        response = self.client.get(reverse("admin-subscription-list"), {"q": "regular-subscriber"})
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["count"], 1)
+        self.assertEqual(payload["results"][0]["subscriber_email"], "regular-subscriber@example.com")
+
+    def test_admin_list_filters_by_status(self):
+        Subscription.objects.create(
+            user=UserFactory(email="canceled-user@example.com"),
+            amount=300000,
+            payment_reference="SUB-ADMIN0003",
+            status=SubscriptionStatus.CANCELED,
+        )
+        self.client.force_login(self.admin_user)
+        response = self.client.get(reverse("admin-subscription-list"), {"status": "canceled"})
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["count"], 1)
+        self.assertEqual(payload["results"][0]["status"], SubscriptionStatus.CANCELED)
+
+
+class AdminCancelSubscriptionApiTests(TestCase):
+    """Phase 21 Slice 4's manual override action for support cases."""
+
+    def setUp(self):
+        self.admin_user = UserFactory(email="admin2@example.com")
+        role = AdminRoleFactory(code=AdminRoleCode.SUPER_ADMIN)
+        AdminAssignmentFactory(user=self.admin_user, role=role)
+        self.subscriber = UserFactory(email="support-case@example.com")
+
+    def _login(self):
+        self.client.force_login(self.admin_user)
+
+    def test_requires_admin_role(self):
+        subscription = Subscription.objects.create(
+            user=self.subscriber,
+            amount=300000,
+            payment_reference="SUB-CANCEL0001",
+            status=SubscriptionStatus.ACTIVE,
+        )
+        token = Token.objects.create(user=self.subscriber)
+        response = self.client.post(
+            reverse("admin-subscription-cancel", kwargs={"subscription_id": subscription.pk}),
+            {"reason": "Support request"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_rejects_token_authentication(self):
+        subscription = Subscription.objects.create(
+            user=self.subscriber,
+            amount=300000,
+            payment_reference="SUB-CANCEL0002",
+            status=SubscriptionStatus.ACTIVE,
+        )
+        token = Token.objects.create(user=self.admin_user)
+        response = self.client.post(
+            reverse("admin-subscription-cancel", kwargs={"subscription_id": subscription.pk}),
+            {"reason": "Support request"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_requires_a_reason(self):
+        subscription = Subscription.objects.create(
+            user=self.subscriber,
+            amount=300000,
+            payment_reference="SUB-CANCEL0003",
+            status=SubscriptionStatus.ACTIVE,
+        )
+        self._login()
+        response = self.client.post(
+            reverse("admin-subscription-cancel", kwargs={"subscription_id": subscription.pk}),
+            {"reason": ""},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_returns_404_for_an_unknown_subscription(self):
+        self._login()
+        response = self.client.post(
+            reverse("admin-subscription-cancel", kwargs={"subscription_id": 999999}),
+            {"reason": "Support request"},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_cancels_an_active_subscription_without_revoking_current_access(self):
+        subscription = Subscription.objects.create(
+            user=self.subscriber,
+            amount=300000,
+            payment_reference="SUB-CANCEL0004",
+            status=SubscriptionStatus.ACTIVE,
+            current_period_end=timezone.now() + timedelta(days=10),
+        )
+        self._login()
+        response = self.client.post(
+            reverse("admin-subscription-cancel", kwargs={"subscription_id": subscription.pk}),
+            {"reason": "Customer requested a refund via support ticket #123."},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["status"], SubscriptionStatus.ACTIVE)
+        self.assertTrue(payload["cancel_at_period_end"])
+        self.assertEqual(len(payload["status_history"]), 1)
+        self.assertEqual(payload["status_history"][0]["actor_email"], self.admin_user.email)
+
+    def test_cancels_a_stuck_pending_subscription_immediately_and_terminally(self):
+        # The exact real-world support scenario this action exists for --
+        # a payment that succeeded on Flutterwave but never got locally
+        # activated has no active access to protect, unlike an ACTIVE one.
+        subscription = Subscription.objects.create(
+            user=self.subscriber,
+            amount=300000,
+            payment_reference="SUB-CANCEL0005",
+            status=SubscriptionStatus.PENDING,
+        )
+        self._login()
+        response = self.client.post(
+            reverse("admin-subscription-cancel", kwargs={"subscription_id": subscription.pk}),
+            {"reason": "Stuck payment, resolved manually by support."},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], SubscriptionStatus.CANCELED)
+
+    def test_rejects_canceling_an_already_terminal_subscription(self):
+        subscription = Subscription.objects.create(
+            user=self.subscriber,
+            amount=300000,
+            payment_reference="SUB-CANCEL0006",
+            status=SubscriptionStatus.EXPIRED,
+        )
+        self._login()
+        response = self.client.post(
+            reverse("admin-subscription-cancel", kwargs={"subscription_id": subscription.pk}),
+            {"reason": "Support request"},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_rejects_canceling_an_already_scheduled_cancellation(self):
+        subscription = Subscription.objects.create(
+            user=self.subscriber,
+            amount=300000,
+            payment_reference="SUB-CANCEL0007",
+            status=SubscriptionStatus.ACTIVE,
+            cancel_at_period_end=True,
+        )
+        self._login()
+        response = self.client.post(
+            reverse("admin-subscription-cancel", kwargs={"subscription_id": subscription.pk}),
+            {"reason": "Support request"},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_calls_flutterwave_when_a_provider_subscription_id_is_known(self):
+        subscription = Subscription.objects.create(
+            user=self.subscriber,
+            amount=300000,
+            payment_reference="SUB-CANCEL0008",
+            status=SubscriptionStatus.ACTIVE,
+            provider_subscription_id="fw-sub-admin-1",
+        )
+        self._login()
+        with (
+            patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_SECRET_KEY", "sk_test"),
+            patch("apps.common.services.flutterwave.FlutterwaveGateway._put") as put_mock,
+        ):
+            put_mock.return_value = {"data": {"status": "cancelled"}}
+            response = self.client.post(
+                reverse("admin-subscription-cancel", kwargs={"subscription_id": subscription.pk}),
+                {"reason": "Support request"},
+                content_type="application/json",
+            )
+        self.assertEqual(response.status_code, 200)
+        put_mock.assert_called_once()
+        self.assertIn("fw-sub-admin-1", put_mock.call_args[0][0])

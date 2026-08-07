@@ -412,5 +412,62 @@ def cancel_subscription(*, user) -> Subscription:
     return subscription
 
 
+@transaction.atomic
+def admin_cancel_subscription(*, subscription_id: int, actor, reason: str) -> Subscription:
+    """Phase 21 Slice 4's "manual override action for support cases" --
+    mirrors reverse_donation()'s shape (admin, id-based lookup, required
+    reason, actor recorded), but the correct subscription analog to a
+    donation reversal is a cancellation, not a refund-style status flip.
+    Same non-destructive policy as the user-initiated cancel_subscription()
+    for an already-active subscription (schedule the cancellation, never
+    claw back time already paid for) -- except a still-PENDING subscription
+    (e.g. exactly the stuck-payment support scenario this phase's own
+    Status notes describe) has no active access to protect, so that case
+    cancels immediately and terminally instead of being scheduled."""
+    subscription = Subscription.objects.select_for_update().filter(pk=subscription_id).first()
+    if subscription is None:
+        raise SubscriptionNotFoundError()
+    if subscription.status not in NON_TERMINAL_STATUSES:
+        raise SubscriptionNotCancelableError(
+            "Only a pending, active, or past-due subscription can be canceled."
+        )
+    if subscription.cancel_at_period_end:
+        raise SubscriptionNotCancelableError(
+            "Already scheduled to cancel at the end of the current period."
+        )
+
+    if subscription.provider_subscription_id and settings.FLUTTERWAVE_SECRET_KEY:
+        try:
+            _gateway().cancel_subscription(subscription.provider_subscription_id)
+        except FlutterwaveGatewayError as exc:
+            raise SubscriptionNotCancelableError(str(exc)) from exc
+
+    from_status = subscription.status
+    if from_status == SubscriptionStatus.PENDING:
+        subscription.status = SubscriptionStatus.CANCELED
+        subscription.status_reason = reason
+        subscription.save(update_fields=["status", "status_reason", "updated_at"])
+        _log_status_history(
+            subscription=subscription,
+            from_status=from_status,
+            to_status=subscription.status,
+            reason=reason,
+            actor=actor,
+        )
+        return subscription
+
+    subscription.cancel_at_period_end = True
+    subscription.status_reason = reason
+    subscription.save(update_fields=["cancel_at_period_end", "status_reason", "updated_at"])
+    SubscriptionStatusHistory.objects.create(
+        subscription=subscription,
+        from_status=from_status,
+        to_status=from_status,
+        reason=reason,
+        actor=actor,
+    )
+    return subscription
+
+
 def log_unrecognized_event(*, event: str, raw_payload: dict, note: str) -> None:
     SubscriptionEventLog.objects.create(event=event, raw_payload=raw_payload, note=note)

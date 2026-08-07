@@ -89,3 +89,7 @@ class AdminSubscriptionDetailSerializer(AdminSubscriptionListSerializer):
             "status_reason",
             "status_history",
         )
+
+
+class AdminSubscriptionCancelSerializer(serializers.Serializer):
+    reason = serializers.CharField(min_length=3, max_length=500)
