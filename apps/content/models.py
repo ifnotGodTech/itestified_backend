@@ -259,3 +259,102 @@ class FeaturedHomePicture(models.Model):
 
     def __str__(self) -> str:
         return f"FeaturedHomePicture<{self.picture_id}:{self.position}>"
+
+
+class HomePromoCardStatus(models.TextChoices):
+    """Derived, not stored -- computed from is_active + the starts_at/ends_at
+    window (see HomePromoCard.computed_status). An admin reasons about a
+    promo card the same way they already do a scheduled picture: is it
+    live, coming up, already over, or turned off on purpose."""
+
+    ACTIVE = "active", "Active"
+    SCHEDULED = "scheduled", "Scheduled"
+    ENDED = "ended", "Ended"
+    INACTIVE = "inactive", "Inactive"
+
+
+class HomePromoCtaDestination(models.TextChoices):
+    """Deliberately a fixed menu, not a free-text deep link -- matches the
+    phase's own named use cases (giving, events, invite-a-friend,
+    announcements) and rules out a broken/malicious deep link by
+    construction. EXTERNAL_URL is the escape hatch for anything else
+    (an event page, a blog post) via HomePromoCard.cta_url."""
+
+    GIVING = "giving", "Giving screen"
+    SUBMIT_TESTIMONY = "submit_testimony", "Submit a testimony"
+    EXTERNAL_URL = "external_url", "External URL"
+
+
+class HomePromoCard(models.Model):
+    """Phase 20 Slice 6/7: a native "From iTestified" card an admin writes
+    from the dashboard, woven into the mobile continuous feed at a fixed
+    cadence (Slice 7, mobile-side, mirroring how Slice 5 wove in
+    InspirationalPicture). Deliberately not a real ad -- house promotion
+    only (giving, events, invite-a-friend, app announcements), same card
+    chrome as a real testimony so the feed isn't interrupted by foreign UI.
+
+    Existing subscribers/readers are never retroactively affected by an
+    edit here -- there's nothing to "keep" the way a Subscription keeps its
+    own price, since a promo card is re-read fresh from the feed on every
+    request; editing or deactivating one takes effect immediately."""
+
+    title = models.CharField(max_length=160)
+    body = models.TextField()
+    image_url = models.URLField(blank=True)
+    cta_label = models.CharField(max_length=40, blank=True)
+    cta_destination = models.CharField(
+        max_length=20,
+        choices=HomePromoCtaDestination.choices,
+        blank=True,
+    )
+    cta_url = models.URLField(
+        blank=True,
+        help_text="Only used when cta_destination is external_url.",
+    )
+    starts_at = models.DateTimeField(default=timezone.now)
+    ends_at = models.DateTimeField(null=True, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="home_promo_cards_created",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="home_promo_cards_updated",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+
+    def clean(self):
+        if self.ends_at is not None and self.ends_at <= self.starts_at:
+            raise ValidationError("ends_at must be after starts_at.")
+        has_cta = bool(self.cta_label or self.cta_destination)
+        if has_cta and not (self.cta_label and self.cta_destination):
+            raise ValidationError("A CTA needs both a label and a destination, or neither.")
+        if self.cta_destination == HomePromoCtaDestination.EXTERNAL_URL and not self.cta_url:
+            raise ValidationError("cta_url is required when the CTA destination is an external URL.")
+
+    def computed_status(self, *, now=None) -> str:
+        now = now or timezone.now()
+        if not self.is_active:
+            return HomePromoCardStatus.INACTIVE
+        if self.starts_at > now:
+            return HomePromoCardStatus.SCHEDULED
+        if self.ends_at is not None and self.ends_at <= now:
+            return HomePromoCardStatus.ENDED
+        return HomePromoCardStatus.ACTIVE
+
+    def is_eligible_for_feed(self, *, now=None) -> bool:
+        return self.computed_status(now=now) == HomePromoCardStatus.ACTIVE
+
+    def __str__(self) -> str:
+        return f"HomePromoCard<{self.id}:{self.title}>"

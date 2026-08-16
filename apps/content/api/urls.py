@@ -4,6 +4,10 @@ from .views import (
     AdminFeaturedHomePictureDeleteView,
     AdminFeaturedHomeTestimonyDeleteView,
     AdminHomeCurationView,
+    AdminHomePromoCardActivationView,
+    AdminHomePromoCardDetailView,
+    AdminHomePromoCardListCreateView,
+    AdminHomePromoCardUploadSignatureView,
     AdminInspirationalPictureCategoryActivationView,
     AdminInspirationalPictureCategoryDetailView,
     AdminInspirationalPictureCategoryListCreateView,
@@ -56,6 +60,26 @@ urlpatterns = [
         "admin/inspirational-pictures/<int:picture_id>/unpublish/",
         AdminInspirationalPictureUnpublishView.as_view(),
         name="admin-inspirational-picture-unpublish",
+    ),
+    path(
+        "admin/home-promos/",
+        AdminHomePromoCardListCreateView.as_view(),
+        name="admin-home-promo-list-create",
+    ),
+    path(
+        "admin/home-promos/upload-signature/",
+        AdminHomePromoCardUploadSignatureView.as_view(),
+        name="admin-home-promo-upload-signature",
+    ),
+    path(
+        "admin/home-promos/<int:pk>/",
+        AdminHomePromoCardDetailView.as_view(),
+        name="admin-home-promo-detail",
+    ),
+    path(
+        "admin/home-promos/<int:promo_id>/activation/",
+        AdminHomePromoCardActivationView.as_view(),
+        name="admin-home-promo-activation",
     ),
     path(
         "admin/scriptures/",

@@ -77,6 +77,12 @@ def create_direct_upload_signature(*, resource_type: str) -> CloudinaryUploadSig
             or common_upload_folder
             or "itestified/content/inspirational-pictures"
         )
+    elif resource_type == "home_promo_card":
+        folder = (
+            os.environ.get("CLOUDINARY_HOME_PROMO_CARD_FOLDER", "").strip()
+            or common_upload_folder
+            or "itestified/content/home-promo-cards"
+        )
     else:
         raise CloudinaryUploadError("Unsupported upload resource type.")
 

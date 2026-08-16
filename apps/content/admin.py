@@ -2,6 +2,7 @@ from django.contrib import admin
 
 from .models import (
     FeaturedHomeTestimony,
+    HomePromoCard,
     HomeSectionOrder,
     InspirationalPicture,
     InspirationalPictureCategory,
@@ -48,3 +49,10 @@ class HomeSectionOrderAdmin(admin.ModelAdmin):
 class FeaturedHomeTestimonyAdmin(admin.ModelAdmin):
     list_display = ("id", "testimony", "position", "updated_at")
     list_filter = ("testimony__testimony_type", "testimony__status")
+
+
+@admin.register(HomePromoCard)
+class HomePromoCardAdmin(admin.ModelAdmin):
+    list_display = ("id", "title", "is_active", "starts_at", "ends_at", "updated_at")
+    list_filter = ("is_active", "cta_destination")
+    search_fields = ("title", "body")

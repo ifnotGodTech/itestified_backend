@@ -12,6 +12,8 @@ from rest_framework.authtoken.models import Token
 from apps.content.models import (
     FeaturedHomePicture,
     FeaturedHomeTestimony,
+    HomePromoCard,
+    HomePromoCardStatus,
     HomeSectionKey,
     HomeSectionOrder,
     InspirationalPicture,
@@ -783,3 +785,192 @@ class HomeCarouselApiTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["results"], [])
+
+
+class HomePromoCardApiTests(TestCase):
+    """Phase 20 Slice 6: admin authors a native "From iTestified" card from
+    the dashboard. Mobile rendering (Slice 7) isn't built yet -- this
+    covers only the admin CRUD/activation surface, mirroring
+    InspirationalPicture's own admin tests above."""
+
+    def setUp(self):
+        self.admin = UserFactory(email="promo-admin@example.com")
+        AdminAssignmentFactory(user=self.admin, role=AdminRoleFactory(code=AdminRoleCode.CONTENT_ADMIN))
+        self.client.force_login(self.admin)
+
+    def test_requires_authentication(self):
+        # SessionAuthentication sets no WWW-Authenticate header, so DRF
+        # returns 403 (not 401) for a fully anonymous request here, same as
+        # every other session-only admin view in this codebase.
+        self.client.logout()
+        response = self.client.get(reverse("admin-home-promo-list-create"))
+        self.assertEqual(response.status_code, 403)
+
+    def test_rejects_token_authentication(self):
+        # Admin views must stay Session-authenticated only, matching every
+        # other admin surface in this app.
+        self.client.logout()
+        token = Token.objects.create(user=self.admin)
+        response = self.client.get(
+            reverse("admin-home-promo-list-create"), HTTP_AUTHORIZATION=f"Token {token.key}"
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_create_a_promo_card_with_no_cta(self):
+        response = self.client.post(
+            reverse("admin-home-promo-list-create"),
+            {
+                "title": "Invite a friend to iTestified",
+                "body": "Share the app with someone who needs a testimony today.",
+            },
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 201)
+        card = HomePromoCard.objects.get()
+        self.assertEqual(card.title, "Invite a friend to iTestified")
+        self.assertEqual(card.created_by, self.admin)
+        self.assertEqual(card.updated_by, self.admin)
+        self.assertEqual(response.json()["status"], HomePromoCardStatus.ACTIVE)
+
+    def test_create_a_promo_card_with_a_giving_cta(self):
+        response = self.client.post(
+            reverse("admin-home-promo-list-create"),
+            {
+                "title": "Someone's breakthrough is waiting on yours",
+                "body": "Every gift keeps testimonies free to read, share, and film.",
+                "cta_label": "Give Today",
+                "cta_destination": "giving",
+            },
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 201)
+        card = HomePromoCard.objects.get()
+        self.assertEqual(card.cta_label, "Give Today")
+        self.assertEqual(card.cta_destination, "giving")
+
+    def test_rejects_a_cta_label_without_a_destination(self):
+        response = self.client.post(
+            reverse("admin-home-promo-list-create"),
+            {"title": "T", "body": "B", "cta_label": "Give Today"},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(HomePromoCard.objects.exists())
+
+    def test_rejects_an_external_url_cta_with_no_url(self):
+        response = self.client.post(
+            reverse("admin-home-promo-list-create"),
+            {
+                "title": "Join us live",
+                "body": "B",
+                "cta_label": "Learn More",
+                "cta_destination": "external_url",
+            },
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(HomePromoCard.objects.exists())
+
+    def test_accepts_an_external_url_cta_with_a_url(self):
+        response = self.client.post(
+            reverse("admin-home-promo-list-create"),
+            {
+                "title": "Join us live",
+                "body": "B",
+                "cta_label": "Learn More",
+                "cta_destination": "external_url",
+                "cta_url": "https://itestified.app/events/convention",
+            },
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 201)
+
+    def test_rejects_an_end_date_before_the_start_date(self):
+        now = timezone.now()
+        response = self.client.post(
+            reverse("admin-home-promo-list-create"),
+            {
+                "title": "T",
+                "body": "B",
+                "starts_at": (now + timedelta(days=5)).isoformat(),
+                "ends_at": (now + timedelta(days=1)).isoformat(),
+            },
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(HomePromoCard.objects.exists())
+
+    def test_edit_updates_fields_and_records_the_editor(self):
+        card = HomePromoCard.objects.create(title="Old title", body="Old body", created_by=self.admin)
+        other_admin = UserFactory(email="second-admin@example.com")
+        AdminAssignmentFactory(user=other_admin, role=AdminRoleFactory(code=AdminRoleCode.CONTENT_ADMIN))
+        self.client.force_login(other_admin)
+
+        response = self.client.patch(
+            reverse("admin-home-promo-detail", kwargs={"pk": card.id}),
+            {"title": "New title"},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+        card.refresh_from_db()
+        self.assertEqual(card.title, "New title")
+        self.assertEqual(card.updated_by, other_admin)
+
+    def test_activation_toggle_post_activates_and_delete_deactivates(self):
+        card = HomePromoCard.objects.create(title="T", body="B", is_active=False)
+
+        activate = self.client.post(reverse("admin-home-promo-activation", kwargs={"promo_id": card.id}))
+        self.assertEqual(activate.status_code, 200)
+        card.refresh_from_db()
+        self.assertTrue(card.is_active)
+
+        deactivate = self.client.delete(reverse("admin-home-promo-activation", kwargs={"promo_id": card.id}))
+        self.assertEqual(deactivate.status_code, 200)
+        card.refresh_from_db()
+        self.assertFalse(card.is_active)
+        self.assertEqual(deactivate.json()["status"], HomePromoCardStatus.INACTIVE)
+
+    def test_activation_on_a_missing_card_returns_404(self):
+        response = self.client.post(reverse("admin-home-promo-activation", kwargs={"promo_id": 999999}))
+        self.assertEqual(response.status_code, 404)
+
+    def test_list_computed_status_reflects_the_date_window(self):
+        now = timezone.now()
+        active = HomePromoCard.objects.create(title="Active", body="B", starts_at=now - timedelta(days=1))
+        scheduled = HomePromoCard.objects.create(title="Scheduled", body="B", starts_at=now + timedelta(days=1))
+        ended = HomePromoCard.objects.create(
+            title="Ended", body="B", starts_at=now - timedelta(days=10), ends_at=now - timedelta(days=1)
+        )
+        inactive = HomePromoCard.objects.create(title="Inactive", body="B", is_active=False)
+
+        response = self.client.get(reverse("admin-home-promo-list-create"))
+
+        self.assertEqual(response.status_code, 200)
+        status_by_id = {row["id"]: row["status"] for row in response.json()["results"]}
+        self.assertEqual(status_by_id[active.id], HomePromoCardStatus.ACTIVE)
+        self.assertEqual(status_by_id[scheduled.id], HomePromoCardStatus.SCHEDULED)
+        self.assertEqual(status_by_id[ended.id], HomePromoCardStatus.ENDED)
+        self.assertEqual(status_by_id[inactive.id], HomePromoCardStatus.INACTIVE)
+
+    def test_list_filters_by_computed_status(self):
+        now = timezone.now()
+        HomePromoCard.objects.create(title="Active", body="B", starts_at=now - timedelta(days=1))
+        HomePromoCard.objects.create(title="Scheduled", body="B", starts_at=now + timedelta(days=1))
+
+        response = self.client.get(reverse("admin-home-promo-list-create"), {"status": "scheduled"})
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()["results"]
+        self.assertEqual(len(payload), 1)
+        self.assertEqual(payload[0]["title"], "Scheduled")
+
+    def test_list_searches_by_title(self):
+        HomePromoCard.objects.create(title="Give today", body="B")
+        HomePromoCard.objects.create(title="Invite a friend", body="B")
+
+        response = self.client.get(reverse("admin-home-promo-list-create"), {"q": "invite"})
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()["results"]
+        self.assertEqual(len(payload), 1)
+        self.assertEqual(payload[0]["title"], "Invite a friend")

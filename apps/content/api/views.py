@@ -17,6 +17,7 @@ from apps.content.exceptions import ContentError
 from apps.content.models import (
     FeaturedHomePicture,
     FeaturedHomeTestimony,
+    HomePromoCard,
     HomeSectionKey,
     HomeSectionOrder,
     InspirationalPicture,
@@ -37,6 +38,7 @@ from .serializers import (
     FeaturedHomePictureSerializer,
     FeaturedHomeTestimonySerializer,
     HomeCurationUpdateSerializer,
+    HomePromoCardSerializer,
     HomeSectionOrderSerializer,
     InspirationalPictureCategorySerializer,
     InspirationalPictureSerializer,
@@ -159,6 +161,90 @@ class AdminInspirationalPictureUnpublishView(APIView):
         picture.updated_by = request.user
         picture.save(update_fields=["status", "updated_by", "updated_at"])
         return Response(InspirationalPictureSerializer(picture).data, status=status.HTTP_200_OK)
+
+
+class AdminHomePromoCardUploadSignatureView(APIView):
+    """Same direct-to-Cloudinary signing pattern as
+    AdminInspirationalPictureUploadSignatureView -- the dashboard uploads
+    the file straight to Cloudinary, this server never proxies the bytes."""
+
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsAuthenticated, IsActiveAdmin]
+
+    def post(self, request):
+        try:
+            upload_signature = create_direct_upload_signature(resource_type="home_promo_card")
+        except CloudinaryUploadError as exc:
+            return Response({"message": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(
+            {
+                "cloud_name": upload_signature.cloud_name,
+                "api_key": upload_signature.api_key,
+                "timestamp": upload_signature.timestamp,
+                "folder": upload_signature.folder,
+                "signature": upload_signature.signature,
+                "resource_type": "image",
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class AdminHomePromoCardListCreateView(generics.ListCreateAPIView):
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsAuthenticated, IsActiveAdmin]
+    serializer_class = HomePromoCardSerializer
+    pagination_class = ContentPagination
+
+    def get_queryset(self):
+        queryset = HomePromoCard.objects.all()
+        search_text = (self.request.query_params.get("q") or "").strip()
+        if search_text:
+            queryset = queryset.filter(title__icontains=search_text)
+
+        status_filter = (self.request.query_params.get("status") or "").strip().lower()
+        if status_filter in {"active", "scheduled", "ended", "inactive"}:
+            # computed_status() isn't a DB column -- filter in Python over a
+            # bounded admin list rather than duplicating the same window
+            # logic as a queryset filter (this table is small by design,
+            # unlike testimonies/donations).
+            now = timezone.now()
+            matching_ids = [card.id for card in queryset if card.computed_status(now=now) == status_filter]
+            queryset = queryset.filter(id__in=matching_ids)
+        return queryset
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user, updated_by=self.request.user)
+
+
+class AdminHomePromoCardDetailView(generics.RetrieveUpdateAPIView):
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsAuthenticated, IsActiveAdmin]
+    serializer_class = HomePromoCardSerializer
+    queryset = HomePromoCard.objects.all()
+
+    def perform_update(self, serializer):
+        serializer.save(updated_by=self.request.user)
+
+
+class AdminHomePromoCardActivationView(APIView):
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsAuthenticated, IsActiveAdmin]
+
+    def post(self, request, promo_id: int):
+        return self._set_active(request, promo_id, True)
+
+    def delete(self, request, promo_id: int):
+        return self._set_active(request, promo_id, False)
+
+    def _set_active(self, request, promo_id: int, is_active: bool):
+        card = HomePromoCard.objects.filter(id=promo_id).first()
+        if card is None:
+            return Response({"message": "Promo card not found."}, status=status.HTTP_404_NOT_FOUND)
+        card.is_active = is_active
+        card.updated_by = request.user
+        card.save(update_fields=["is_active", "updated_by", "updated_at"])
+        return Response(HomePromoCardSerializer(card).data, status=status.HTTP_200_OK)
 
 
 class AdminScriptureListCreateView(generics.ListCreateAPIView):

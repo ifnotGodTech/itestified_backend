@@ -4,6 +4,8 @@ from rest_framework import serializers
 from apps.content.models import (
     FeaturedHomePicture,
     FeaturedHomeTestimony,
+    HomePromoCard,
+    HomePromoCtaDestination,
     HomeSectionKey,
     HomeSectionOrder,
     InspirationalPicture,
@@ -223,3 +225,47 @@ class HomeCurationUpdateSerializer(serializers.Serializer):
         if missing:
             raise serializers.ValidationError("All featured pictures must exist and be published.")
         return value
+
+
+class HomePromoCardSerializer(serializers.ModelSerializer):
+    status = serializers.SerializerMethodField()
+    updated_by_email = serializers.EmailField(source="updated_by.email", read_only=True, default="")
+
+    class Meta:
+        model = HomePromoCard
+        fields = (
+            "id",
+            "title",
+            "body",
+            "image_url",
+            "cta_label",
+            "cta_destination",
+            "cta_url",
+            "starts_at",
+            "ends_at",
+            "is_active",
+            "status",
+            "updated_by_email",
+            "created_at",
+            "updated_at",
+        )
+
+    def get_status(self, obj: HomePromoCard) -> str:
+        return obj.computed_status()
+
+    def validate(self, attrs):
+        starts_at = attrs.get("starts_at", getattr(self.instance, "starts_at", None))
+        ends_at = attrs.get("ends_at", getattr(self.instance, "ends_at", None))
+        if starts_at and ends_at and ends_at <= starts_at:
+            raise serializers.ValidationError({"ends_at": "Must be after the start date."})
+
+        cta_label = attrs.get("cta_label", getattr(self.instance, "cta_label", "")) or ""
+        cta_destination = attrs.get("cta_destination", getattr(self.instance, "cta_destination", "")) or ""
+        has_cta = bool(cta_label or cta_destination)
+        if has_cta and not (cta_label and cta_destination):
+            raise serializers.ValidationError("A CTA needs both a label and a destination, or neither.")
+        if cta_destination == HomePromoCtaDestination.EXTERNAL_URL:
+            cta_url = attrs.get("cta_url", getattr(self.instance, "cta_url", "")) or ""
+            if not cta_url:
+                raise serializers.ValidationError({"cta_url": "Required when the CTA destination is an external URL."})
+        return attrs
