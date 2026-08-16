@@ -1705,11 +1705,12 @@ Build:
 - entitlement check reuses Phase 21's premium check instead of `IsActiveAdmin`; a non-premium attempt gets a clear upgrade-prompting rejection, never a generic 403
 - submitted video testimonies enter the exact same Phase 4 moderation queue as any other testimony — no new moderation logic
 - mobile: a user-facing video recording/upload screen (the free-user-visible counterpart to the existing admin-only upload tooling), plus an upsell prompt when a non-premium user attempts it
+- **security hardening, required before this signature endpoint is opened beyond admins**: today `create_direct_upload_signature` only signs `folder`+`timestamp` (`apps/common/services/media_uploads.py:97-100`) — no file-size/duration cap or format allowlist is enforced, and `resource_type` itself isn't cryptographically bound by the signature (it's just whichever Cloudinary endpoint the client happens to call). That's tolerable while only admins can obtain a video signature, but Phase 32 hands the same capability to every premium subscriber — a much larger, less-trusted population — so this phase must add, as part of Slice 1, not after: an explicit max file size/duration signed into the upload params (Cloudinary supports signing `max_file_size`/eager transformation constraints), and a validated `allowed_formats` restriction so the signature can't be replayed against an unintended resource type
 
 Sub-slices:
 
 #### Backend Flows
-- **Slice 1 — User-facing video upload requires Premium** — new non-admin submission endpoint reusing the existing signed-upload infrastructure, entitlement-checked via Phase 21
+- **Slice 1 — User-facing video upload requires Premium** — new non-admin submission endpoint reusing the existing signed-upload infrastructure, entitlement-checked via Phase 21; signature is issued with an enforced max file size/duration and an `allowed_formats` allowlist (see security hardening note above) — this is not deferred to a follow-up
 
 #### Mobile User Flows
 - **Slice 2 — Non-premium user is prompted to upgrade** — attempting to submit a video testimony as a free user shows an upsell, not a dead end
@@ -1720,6 +1721,7 @@ Test:
 - a non-premium user's video-submission attempt is rejected with a clear premium-required message, never a generic error
 - a premium user's submitted video testimony enters moderation exactly like any other testimony and, once approved, is fully watchable by every user including guests — upload is gated, watching never is
 - offline download of that same video remains governed solely by Phase 25's own entitlement check, unaffected by this phase
+- an upload attempt exceeding the signed max file size/duration, or using a format outside the allowlist, is rejected by Cloudinary rather than silently accepted
 
 Status: not started — parallel to Phase 28 (same pattern, different media type, no code dependency beyond both reusing Phase 21's entitlement check); companion to Phase 25 for the "download offline" half of the video premium story.
 
