@@ -3,7 +3,7 @@ from __future__ import annotations
 from django.db.models import Q, QuerySet
 from django.utils import timezone
 
-from apps.subscriptions.models import ENTITLED_STATUSES, NON_TERMINAL_STATUSES, Subscription
+from apps.subscriptions.models import ENTITLED_STATUSES, NON_TERMINAL_STATUSES, PremiumPricing, Subscription
 
 
 def current_subscription_queryset(user) -> QuerySet[Subscription]:
@@ -47,3 +47,7 @@ def is_user_premium(user) -> bool:
     if subscription.cancel_at_period_end and subscription.current_period_end:
         return subscription.current_period_end > timezone.now()
     return True
+
+
+def list_premium_pricing() -> QuerySet[PremiumPricing]:
+    return PremiumPricing.objects.select_related("updated_by").order_by("currency")

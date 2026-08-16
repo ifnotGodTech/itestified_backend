@@ -1,6 +1,8 @@
 from django.urls import path
 
 from .views import (
+    AdminPremiumPricingListView,
+    AdminSetPremiumPriceView,
     AdminSubscriptionCancelView,
     AdminSubscriptionDetailView,
     AdminSubscriptionListView,
@@ -22,4 +24,6 @@ urlpatterns = [
         AdminSubscriptionCancelView.as_view(),
         name="admin-subscription-cancel",
     ),
+    path("admin/pricing/", AdminPremiumPricingListView.as_view(), name="admin-premium-pricing-list"),
+    path("admin/pricing/set/", AdminSetPremiumPriceView.as_view(), name="admin-premium-pricing-set"),
 ]

@@ -109,6 +109,62 @@ class SubscriptionStatusHistory(models.Model):
         return f"SubscriptionStatusHistory<{self.subscription_id}:{self.from_status}->{self.to_status}>"
 
 
+class PremiumPricing(models.Model):
+    """One row per currency -- the CURRENT Premium price and the Flutterwave
+    Payment Plan new subscribers are charged against (Phase 21 Slice 5).
+    Existing subscribers are unaffected by a change here: each Subscription
+    captures its own amount/provider_plan_id at subscribe() time and keeps
+    them for the life of that subscription (never repriced mid-subscription,
+    same principle as Slice 3's non-destructive cancellation) -- this table
+    only governs what a NEW subscribe() call sees. Replaces the old
+    PREMIUM_PLAN_PRICING_MINOR_UNITS / FLUTTERWAVE_PREMIUM_PLAN_IDS settings
+    dicts so an admin's price change persists and is visible in the
+    dashboard rather than requiring a redeploy."""
+
+    currency = models.CharField(max_length=3, unique=True)
+    amount = models.PositiveIntegerField(
+        help_text="Amount in minor currency units (kobo/cents), matching Subscription's convention.",
+    )
+    provider_plan_id = models.CharField(max_length=40)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="premium_pricing_updates",
+        null=True,
+        blank=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["currency"]
+
+    def __str__(self) -> str:
+        return f"PremiumPricing<{self.currency}:{self.amount}>"
+
+
+class PremiumPricingHistory(models.Model):
+    pricing = models.ForeignKey(PremiumPricing, on_delete=models.CASCADE, related_name="history")
+    from_amount = models.PositiveIntegerField(null=True, blank=True)
+    to_amount = models.PositiveIntegerField()
+    from_provider_plan_id = models.CharField(max_length=40, blank=True)
+    to_provider_plan_id = models.CharField(max_length=40)
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="premium_pricing_history_actions",
+        null=True,
+        blank=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"PremiumPricingHistory<{self.pricing_id}:{self.from_amount}->{self.to_amount}>"
+
+
 class SubscriptionEventLog(models.Model):
     """Captures a Flutterwave webhook event that arrived on the shared
     provider-callback endpoint and could not be confidently matched to a

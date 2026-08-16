@@ -7,6 +7,7 @@ from django.utils import timezone
 from rest_framework.authtoken.models import Token
 
 from apps.subscriptions.models import (
+    PremiumPricing,
     Subscription,
     SubscriptionEventLog,
     SubscriptionStatus,
@@ -24,35 +25,58 @@ class SubscribeApiTests(TestCase):
     def setUp(self):
         self.user = UserFactory(email="subscriber@example.com")
         self.token = Token.objects.create(user=self.user)
+        # Found in the 2026-08-15 audit: subscribe() was migrated to read
+        # pricing from PremiumPricing (Phase 21 Slice 5) instead of the
+        # FLUTTERWAVE_PREMIUM_PLAN_IDS setting, but this whole test class
+        # kept patching that now-dead setting -- it had no effect, and 4 of
+        # these tests were silently asserting against whatever real
+        # migration-seeded PremiumPricing rows happened to exist from
+        # config/settings/test.py's real Flutterwave plan ids, not what
+        # they thought they controlled. Clearing the table here makes every
+        # test explicit and deterministic about the pricing it depends on.
+        PremiumPricing.objects.all().delete()
 
     def _auth_headers(self):
         return {"HTTP_AUTHORIZATION": f"Token {self.token.key}"}
+
+    def _seed_pricing(self, currency="NGN", amount=300000, provider_plan_id="plan_123"):
+        return PremiumPricing.objects.create(
+            currency=currency, amount=amount, provider_plan_id=provider_plan_id
+        )
 
     def test_subscribe_requires_authentication(self):
         response = self.client.post(reverse("subscription-subscribe"))
         self.assertEqual(response.status_code, 401)
 
     def test_subscribe_returns_503_when_gateway_not_configured(self):
+        self._seed_pricing()
         with patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_SECRET_KEY", ""):
             response = self.client.post(reverse("subscription-subscribe"), {}, content_type="application/json", **self._auth_headers())
         self.assertEqual(response.status_code, 503)
         self.assertFalse(Subscription.objects.exists())
 
-    def test_subscribe_returns_503_when_plan_id_not_configured(self):
-        with (
-            patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_SECRET_KEY", "sk_test"),
-            patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_PREMIUM_PLAN_IDS", {}),
-        ):
+    def test_subscribe_returns_400_when_plan_id_not_configured(self):
+        # A PremiumPricing row exists (so serializer-level currency
+        # validation passes) but with no provider_plan_id yet -- a "priced
+        # but not yet wired to a real Flutterwave plan" state, which
+        # subscribe() treats the same as "no pricing row at all" (both are
+        # SubscriptionUnsupportedCurrencyError -> 400). Under the old
+        # settings-dict design this was a 503 "gateway not configured";
+        # Slice 5's DB-backed pricing reclassified it as a client-facing
+        # "unsupported currency" instead, since it's now something an
+        # admin can fix per-currency rather than a whole-gateway outage.
+        self._seed_pricing(provider_plan_id="")
+        with patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_SECRET_KEY", "sk_test"):
             response = self.client.post(reverse("subscription-subscribe"), {}, content_type="application/json", **self._auth_headers())
-        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.status_code, 400)
 
     def test_subscribe_creates_pending_subscription_and_sends_major_unit_amount_with_plan(self):
         # Regression coverage for the exact bug class that once broke Phase
         # 5's donation amount conversion: the DB/API always speak minor
         # units (kobo), only the outbound Flutterwave payload converts.
+        self._seed_pricing(provider_plan_id="plan_123")
         with (
             patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_SECRET_KEY", "sk_test"),
-            patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_PREMIUM_PLAN_IDS", {"NGN": "plan_123"}),
             patch("apps.common.services.flutterwave.FlutterwaveGateway._post") as post_mock,
         ):
             post_mock.return_value = {
@@ -74,12 +98,10 @@ class SubscribeApiTests(TestCase):
         self.assertTrue(subscription.payment_reference.startswith("SUB-"))
 
     def test_subscribe_in_usd_uses_the_usd_plan_and_price(self):
+        self._seed_pricing(currency="NGN", amount=300000, provider_plan_id="plan_ngn")
+        self._seed_pricing(currency="USD", amount=499, provider_plan_id="plan_usd")
         with (
             patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_SECRET_KEY", "sk_test"),
-            patch(
-                "apps.subscriptions.services.commands.settings.FLUTTERWAVE_PREMIUM_PLAN_IDS",
-                {"NGN": "plan_ngn", "USD": "plan_usd"},
-            ),
             patch("apps.common.services.flutterwave.FlutterwaveGateway._post") as post_mock,
         ):
             post_mock.return_value = {
@@ -102,13 +124,9 @@ class SubscribeApiTests(TestCase):
         self.assertEqual(sent_payload["payment_plan"], "plan_usd")
 
     def test_subscribe_rejects_an_unsupported_currency(self):
-        with (
-            patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_SECRET_KEY", "sk_test"),
-            patch(
-                "apps.subscriptions.services.commands.settings.FLUTTERWAVE_PREMIUM_PLAN_IDS",
-                {"NGN": "plan_ngn", "USD": "plan_usd"},
-            ),
-        ):
+        self._seed_pricing(currency="NGN", amount=300000, provider_plan_id="plan_ngn")
+        self._seed_pricing(currency="USD", amount=499, provider_plan_id="plan_usd")
+        with patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_SECRET_KEY", "sk_test"):
             response = self.client.post(
                 reverse("subscription-subscribe"),
                 {"currency": "GBP"},
@@ -118,38 +136,33 @@ class SubscribeApiTests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertFalse(Subscription.objects.exists())
 
-    def test_subscribe_returns_503_when_only_the_other_currencys_plan_is_configured(self):
-        with (
-            patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_SECRET_KEY", "sk_test"),
-            patch(
-                "apps.subscriptions.services.commands.settings.FLUTTERWAVE_PREMIUM_PLAN_IDS",
-                {"NGN": "plan_ngn", "USD": ""},
-            ),
-        ):
+    def test_subscribe_returns_400_when_only_the_other_currencys_plan_is_configured(self):
+        self._seed_pricing(currency="NGN", amount=300000, provider_plan_id="plan_ngn")
+        self._seed_pricing(currency="USD", amount=499, provider_plan_id="")
+        with patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_SECRET_KEY", "sk_test"):
             response = self.client.post(
                 reverse("subscription-subscribe"),
                 {"currency": "USD"},
                 content_type="application/json",
                 **self._auth_headers(),
             )
-        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.status_code, 400)
 
     def test_subscribe_rejects_a_second_subscription_while_one_is_in_progress(self):
+        self._seed_pricing(provider_plan_id="plan_123")
         Subscription.objects.create(
             user=self.user,
             amount=300000,
             payment_reference="SUB-EXISTING1",
             status=SubscriptionStatus.ACTIVE,
         )
-        with (
-            patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_SECRET_KEY", "sk_test"),
-            patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_PREMIUM_PLAN_IDS", {"NGN": "plan_123"}),
-        ):
+        with patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_SECRET_KEY", "sk_test"):
             response = self.client.post(reverse("subscription-subscribe"), {}, content_type="application/json", **self._auth_headers())
         self.assertEqual(response.status_code, 400)
         self.assertEqual(Subscription.objects.count(), 1)
 
     def test_subscribe_rejects_a_still_current_scheduled_cancellation(self):
+        self._seed_pricing(provider_plan_id="plan_123")
         Subscription.objects.create(
             user=self.user,
             amount=300000,
@@ -158,10 +171,7 @@ class SubscribeApiTests(TestCase):
             cancel_at_period_end=True,
             current_period_end=timezone.now() + timedelta(days=5),
         )
-        with (
-            patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_SECRET_KEY", "sk_test"),
-            patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_PREMIUM_PLAN_IDS", {"NGN": "plan_123"}),
-        ):
+        with patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_SECRET_KEY", "sk_test"):
             response = self.client.post(reverse("subscription-subscribe"), {}, content_type="application/json", **self._auth_headers())
         self.assertEqual(response.status_code, 400)
         self.assertEqual(Subscription.objects.count(), 1)
@@ -170,6 +180,7 @@ class SubscribeApiTests(TestCase):
         # The DB's UniqueConstraint only knows about `status`, so the old
         # ACTIVE-but-lapsed row must be lazily closed out to CANCELED here
         # or the new INSERT below would violate that constraint.
+        self._seed_pricing(provider_plan_id="plan_123")
         old = Subscription.objects.create(
             user=self.user,
             amount=300000,
@@ -180,7 +191,6 @@ class SubscribeApiTests(TestCase):
         )
         with (
             patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_SECRET_KEY", "sk_test"),
-            patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_PREMIUM_PLAN_IDS", {"NGN": "plan_123"}),
             patch("apps.common.services.flutterwave.FlutterwaveGateway._post") as post_mock,
         ):
             post_mock.return_value = {
@@ -193,9 +203,9 @@ class SubscribeApiTests(TestCase):
         self.assertEqual(Subscription.objects.count(), 2)
 
     def test_subscribe_marks_canceled_when_gateway_call_fails(self):
+        self._seed_pricing(provider_plan_id="plan_123")
         with (
             patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_SECRET_KEY", "sk_test"),
-            patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_PREMIUM_PLAN_IDS", {"NGN": "plan_123"}),
             patch("apps.common.services.flutterwave.FlutterwaveGateway._post") as post_mock,
         ):
             post_mock.return_value = {"data": {}}  # no "link" -> gateway error
@@ -208,7 +218,6 @@ class SubscribeApiTests(TestCase):
         # A canceled attempt must not block a real retry.
         with (
             patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_SECRET_KEY", "sk_test"),
-            patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_PREMIUM_PLAN_IDS", {"NGN": "plan_123"}),
             patch("apps.common.services.flutterwave.FlutterwaveGateway._post") as post_mock,
         ):
             post_mock.return_value = {"data": {"link": "https://checkout.flutterwave.com/pay/x", "id": "1"}}
@@ -1025,3 +1034,217 @@ class AdminCancelSubscriptionApiTests(TestCase):
         self.assertEqual(response.status_code, 200)
         put_mock.assert_called_once()
         self.assertIn("fw-sub-admin-1", put_mock.call_args[0][0])
+
+
+class AdminPremiumPricingApiTests(TestCase):
+    """Phase 21 Slice 5: admin sets the Premium subscription price per
+    currency. Added 2026-08-15 -- the views/service/model already existed
+    but had zero test coverage before this."""
+
+    def setUp(self):
+        PremiumPricing.objects.all().delete()
+        self.admin_user = UserFactory(email="pricing-admin@example.com")
+        role = AdminRoleFactory(code=AdminRoleCode.SUPER_ADMIN)
+        AdminAssignmentFactory(user=self.admin_user, role=role)
+        self.subscriber = UserFactory(email="pricing-subscriber@example.com")
+
+    def _login(self):
+        self.client.force_login(self.admin_user)
+
+    # -- GET admin/pricing/ ------------------------------------------------
+
+    def test_list_requires_admin_role(self):
+        token = Token.objects.create(user=self.subscriber)
+        response = self.client.get(
+            reverse("admin-premium-pricing-list"), HTTP_AUTHORIZATION=f"Token {token.key}"
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_list_rejects_token_authentication(self):
+        # Matches the existing admin-endpoint hardening: admin views must
+        # stay Session-authenticated only.
+        token = Token.objects.create(user=self.admin_user)
+        response = self.client.get(
+            reverse("admin-premium-pricing-list"), HTTP_AUTHORIZATION=f"Token {token.key}"
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_list_returns_empty_when_no_pricing_set(self):
+        self._login()
+        response = self.client.get(reverse("admin-premium-pricing-list"))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), [])
+
+    def test_list_returns_pricing_rows_ordered_by_currency(self):
+        PremiumPricing.objects.create(
+            currency="USD", amount=499, provider_plan_id="plan_usd", updated_by=self.admin_user
+        )
+        PremiumPricing.objects.create(
+            currency="NGN", amount=300000, provider_plan_id="plan_ngn", updated_by=self.admin_user
+        )
+        self._login()
+        response = self.client.get(reverse("admin-premium-pricing-list"))
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual([row["currency"] for row in payload], ["NGN", "USD"])
+        self.assertEqual(payload[0]["amount"], 300000)
+        self.assertEqual(payload[0]["updated_by_email"], "pricing-admin@example.com")
+
+    # -- POST admin/pricing/set/ --------------------------------------------
+
+    def test_set_requires_admin_role(self):
+        token = Token.objects.create(user=self.subscriber)
+        response = self.client.post(
+            reverse("admin-premium-pricing-set"),
+            {"currency": "NGN", "amount": 300000},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_set_rejects_token_authentication(self):
+        token = Token.objects.create(user=self.admin_user)
+        response = self.client.post(
+            reverse("admin-premium-pricing-set"),
+            {"currency": "NGN", "amount": 300000},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_set_rejects_a_non_3_letter_currency_code(self):
+        self._login()
+        response = self.client.post(
+            reverse("admin-premium-pricing-set"),
+            {"currency": "NAIRA", "amount": 300000},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(PremiumPricing.objects.exists())
+
+    def test_set_rejects_a_zero_or_negative_amount(self):
+        self._login()
+        response = self.client.post(
+            reverse("admin-premium-pricing-set"),
+            {"currency": "NGN", "amount": 0},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(PremiumPricing.objects.exists())
+
+    def test_set_returns_503_when_gateway_not_configured(self):
+        self._login()
+        with patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_SECRET_KEY", ""):
+            response = self.client.post(
+                reverse("admin-premium-pricing-set"),
+                {"currency": "NGN", "amount": 300000},
+                content_type="application/json",
+            )
+        self.assertEqual(response.status_code, 503)
+        self.assertFalse(PremiumPricing.objects.exists())
+
+    def test_set_returns_502_when_the_gateway_call_fails(self):
+        self._login()
+        with (
+            patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_SECRET_KEY", "sk_test"),
+            patch("apps.common.services.flutterwave.FlutterwaveGateway._post") as post_mock,
+        ):
+            post_mock.return_value = {"data": {}}  # no "id" -> gateway error
+            response = self.client.post(
+                reverse("admin-premium-pricing-set"),
+                {"currency": "NGN", "amount": 300000},
+                content_type="application/json",
+            )
+        self.assertEqual(response.status_code, 502)
+        self.assertFalse(PremiumPricing.objects.exists())
+
+    def test_set_creates_a_new_pricing_row_and_sends_major_unit_amount_to_the_gateway(self):
+        # Regression coverage for the same minor/major-unit conversion bug
+        # class already covered for subscribe() and donations.
+        self._login()
+        with (
+            patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_SECRET_KEY", "sk_test"),
+            patch("apps.common.services.flutterwave.FlutterwaveGateway._post") as post_mock,
+        ):
+            post_mock.return_value = {"data": {"id": "plan_new_ngn"}}
+            response = self.client.post(
+                reverse("admin-premium-pricing-set"),
+                {"currency": "ngn", "amount": 350000},
+                content_type="application/json",
+            )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["currency"], "NGN")
+        self.assertEqual(payload["amount"], 350000)
+        self.assertEqual(payload["provider_plan_id"], "plan_new_ngn")
+        self.assertEqual(payload["updated_by_email"], "pricing-admin@example.com")
+
+        sent_payload = post_mock.call_args[0][1]
+        self.assertEqual(sent_payload["amount"], "3500.00")
+        self.assertEqual(sent_payload["currency"], "NGN")
+
+        pricing = PremiumPricing.objects.get(currency="NGN")
+        self.assertEqual(pricing.updated_by, self.admin_user)
+        history = pricing.history.get()
+        self.assertIsNone(history.from_amount)
+        self.assertEqual(history.to_amount, 350000)
+        self.assertEqual(history.actor, self.admin_user)
+
+    def test_set_replaces_an_existing_pricing_row_with_a_new_plan_and_records_history(self):
+        existing = PremiumPricing.objects.create(
+            currency="NGN", amount=300000, provider_plan_id="plan_old_ngn"
+        )
+        self._login()
+        with (
+            patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_SECRET_KEY", "sk_test"),
+            patch("apps.common.services.flutterwave.FlutterwaveGateway._post") as post_mock,
+        ):
+            post_mock.return_value = {"data": {"id": "plan_new_ngn"}}
+            response = self.client.post(
+                reverse("admin-premium-pricing-set"),
+                {"currency": "NGN", "amount": 400000},
+                content_type="application/json",
+            )
+        self.assertEqual(response.status_code, 200)
+
+        # Same row updated in place (one row per currency), not a duplicate.
+        self.assertEqual(PremiumPricing.objects.filter(currency="NGN").count(), 1)
+        existing.refresh_from_db()
+        self.assertEqual(existing.amount, 400000)
+        self.assertEqual(existing.provider_plan_id, "plan_new_ngn")
+
+        history = existing.history.get()
+        self.assertEqual(history.from_amount, 300000)
+        self.assertEqual(history.to_amount, 400000)
+        self.assertEqual(history.from_provider_plan_id, "plan_old_ngn")
+        self.assertEqual(history.to_provider_plan_id, "plan_new_ngn")
+
+    def test_set_never_touches_an_existing_subscribers_own_price(self):
+        # The whole point of Slice 5's design: a subscriber who already
+        # subscribed keeps their own captured amount/plan forever, even
+        # after the admin changes the price for *new* subscribers.
+        PremiumPricing.objects.create(currency="NGN", amount=300000, provider_plan_id="plan_old_ngn")
+        subscription = Subscription.objects.create(
+            user=self.subscriber,
+            amount=300000,
+            currency="NGN",
+            provider_plan_id="plan_old_ngn",
+            payment_reference="SUB-PRICING0001",
+            status=SubscriptionStatus.ACTIVE,
+        )
+        self._login()
+        with (
+            patch("apps.subscriptions.services.commands.settings.FLUTTERWAVE_SECRET_KEY", "sk_test"),
+            patch("apps.common.services.flutterwave.FlutterwaveGateway._post") as post_mock,
+        ):
+            post_mock.return_value = {"data": {"id": "plan_new_ngn"}}
+            response = self.client.post(
+                reverse("admin-premium-pricing-set"),
+                {"currency": "NGN", "amount": 500000},
+                content_type="application/json",
+            )
+        self.assertEqual(response.status_code, 200)
+
+        subscription.refresh_from_db()
+        self.assertEqual(subscription.amount, 300000)
+        self.assertEqual(subscription.provider_plan_id, "plan_old_ngn")

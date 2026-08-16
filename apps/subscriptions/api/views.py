@@ -9,6 +9,8 @@ from django.db.models import Q
 from apps.authn.api.permissions import IsActiveAdmin
 from apps.common.services.flutterwave import FlutterwaveGatewayError
 from apps.subscriptions.exceptions import (
+    PremiumPricingInvalidAmountError,
+    PremiumPricingInvalidCurrencyError,
     SubscriptionAlreadyExistsError,
     SubscriptionGatewayNotConfiguredError,
     SubscriptionNotCancelableError,
@@ -16,10 +18,11 @@ from apps.subscriptions.exceptions import (
     SubscriptionUnsupportedCurrencyError,
 )
 from apps.subscriptions.models import Subscription, SubscriptionStatus
-from apps.subscriptions.selectors import get_current_subscription
+from apps.subscriptions.selectors import get_current_subscription, list_premium_pricing
 from apps.subscriptions.services.commands import (
     admin_cancel_subscription,
     cancel_subscription,
+    set_premium_price,
     subscribe,
     verify_subscription,
 )
@@ -28,6 +31,8 @@ from .serializers import (
     AdminSubscriptionCancelSerializer,
     AdminSubscriptionDetailSerializer,
     AdminSubscriptionListSerializer,
+    PremiumPricingSerializer,
+    SetPremiumPriceSerializer,
     SubscribeRequestSerializer,
     SubscriptionSerializer,
     SubscriptionVerifySerializer,
@@ -169,3 +174,43 @@ class AdminSubscriptionCancelView(APIView):
             return Response({"message": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
         return Response(AdminSubscriptionDetailSerializer(subscription).data, status=status.HTTP_200_OK)
+
+
+class AdminPremiumPricingListView(generics.ListAPIView):
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsAuthenticated, IsActiveAdmin]
+    serializer_class = PremiumPricingSerializer
+    pagination_class = None
+    queryset = list_premium_pricing()
+
+
+class AdminSetPremiumPriceView(APIView):
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsAuthenticated, IsActiveAdmin]
+
+    def post(self, request):
+        serializer = SetPremiumPriceSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            pricing = set_premium_price(
+                currency=serializer.validated_data["currency"],
+                amount=serializer.validated_data["amount"],
+                actor=request.user,
+            )
+        except PremiumPricingInvalidCurrencyError:
+            return Response(
+                {"message": "Currency must be a 3-letter code, e.g. NGN or USD."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except PremiumPricingInvalidAmountError:
+            return Response({"message": "Amount must be greater than zero."}, status=status.HTTP_400_BAD_REQUEST)
+        except SubscriptionGatewayNotConfiguredError:
+            return Response(
+                {"message": "Premium subscriptions are not configured yet."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        except FlutterwaveGatewayError as exc:
+            return Response({"message": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
+
+        return Response(PremiumPricingSerializer(pricing).data, status=status.HTTP_200_OK)

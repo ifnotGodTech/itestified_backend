@@ -1,7 +1,10 @@
-from django.conf import settings
+import re
+
 from rest_framework import serializers
 
-from apps.subscriptions.models import Subscription, SubscriptionStatusHistory
+from apps.subscriptions.models import PremiumPricing, Subscription, SubscriptionStatusHistory
+
+_CURRENCY_CODE_RE = re.compile(r"[A-Z]{3}")
 
 
 class SubscribeRequestSerializer(serializers.Serializer):
@@ -11,7 +14,7 @@ class SubscribeRequestSerializer(serializers.Serializer):
 
     def validate_currency(self, value: str) -> str:
         currency = value.strip().upper()
-        if currency not in settings.PREMIUM_PLAN_PRICING_MINOR_UNITS:
+        if not PremiumPricing.objects.filter(currency=currency).exists():
             raise serializers.ValidationError("Unsupported currency.")
         return currency
 
@@ -93,3 +96,22 @@ class AdminSubscriptionDetailSerializer(AdminSubscriptionListSerializer):
 
 class AdminSubscriptionCancelSerializer(serializers.Serializer):
     reason = serializers.CharField(min_length=3, max_length=500)
+
+
+class PremiumPricingSerializer(serializers.ModelSerializer):
+    updated_by_email = serializers.EmailField(source="updated_by.email", read_only=True, default="")
+
+    class Meta:
+        model = PremiumPricing
+        fields = ("id", "currency", "amount", "provider_plan_id", "updated_by_email", "updated_at")
+
+
+class SetPremiumPriceSerializer(serializers.Serializer):
+    currency = serializers.CharField(max_length=3)
+    amount = serializers.IntegerField(min_value=1)
+
+    def validate_currency(self, value: str) -> str:
+        currency = value.strip().upper()
+        if not _CURRENCY_CODE_RE.fullmatch(currency):
+            raise serializers.ValidationError("Currency must be a 3-letter code, e.g. NGN or USD.")
+        return currency

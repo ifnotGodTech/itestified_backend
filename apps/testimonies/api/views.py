@@ -1,7 +1,6 @@
 from rest_framework import generics
 from rest_framework.authentication import SessionAuthentication, TokenAuthentication
 from rest_framework.parsers import FormParser, MultiPartParser
-from django.utils import timezone
 from django.utils.dateparse import parse_date
 from django.db.models import F
 from django.db.models import Count
@@ -29,6 +28,7 @@ from apps.testimonies.models import (
 )
 from apps.authn.api.permissions import IsActiveAdmin
 from apps.testimonies.services.queries import home_feed_page
+from apps.testimonies.validators import parse_future_publish_at
 from apps.testimonies.services.commands import (
     approve_testimony,
     archive_testimony,
@@ -676,17 +676,10 @@ class AdminScheduleTestimonyView(APIView):
         testimony = Testimony.objects.filter(id=testimony_id).first()
         if testimony is None:
             return Response({"message": "Testimony not found."}, status=status.HTTP_404_NOT_FOUND)
-        raw_publish_at = str(request.data.get("publish_at", "")).strip()
-        if not raw_publish_at:
-            return Response({"message": "publish_at is required."}, status=status.HTTP_400_BAD_REQUEST)
         try:
-            publish_at = datetime.fromisoformat(raw_publish_at.replace("Z", "+00:00"))
-        except ValueError:
-            return Response({"message": "publish_at must be a valid ISO datetime."}, status=status.HTTP_400_BAD_REQUEST)
-        if timezone.is_naive(publish_at):
-            publish_at = timezone.make_aware(publish_at, timezone.get_current_timezone())
-        if publish_at <= timezone.now():
-            return Response({"message": "publish_at must be in the future."}, status=status.HTTP_400_BAD_REQUEST)
+            publish_at = parse_future_publish_at(request.data.get("publish_at", ""))
+        except ValueError as exc:
+            return Response({"message": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         try:
             schedule_testimony(testimony=testimony, actor=request.user, publish_at=publish_at)
         except TestimonyTransitionNotAllowedError as exc:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from calendar import monthrange
 from datetime import datetime
 
@@ -9,6 +10,8 @@ from django.utils import timezone
 
 from apps.common.services.flutterwave import FlutterwaveGateway, FlutterwaveGatewayError
 from apps.subscriptions.exceptions import (
+    PremiumPricingInvalidAmountError,
+    PremiumPricingInvalidCurrencyError,
     SubscriptionAlreadyExistsError,
     SubscriptionGatewayNotConfiguredError,
     SubscriptionNotCancelableError,
@@ -17,12 +20,16 @@ from apps.subscriptions.exceptions import (
 )
 from apps.subscriptions.models import (
     NON_TERMINAL_STATUSES,
+    PremiumPricing,
+    PremiumPricingHistory,
     Subscription,
     SubscriptionEventLog,
     SubscriptionStatus,
     SubscriptionStatusHistory,
 )
 from apps.subscriptions.selectors import current_subscription_queryset
+
+_CURRENCY_CODE_RE = re.compile(r"[A-Z]{3}")
 
 
 def _add_one_month(dt: datetime) -> datetime:
@@ -92,15 +99,20 @@ def subscribe(*, user, currency: str = "NGN") -> Subscription:
     Each supported currency has its own Flutterwave Payment Plan (a plan is
     tied to one currency at creation time on Flutterwave's side), so the
     caller picks which one to subscribe to -- mirrors Giving's existing
-    NGN/USD choice (Phase 5) rather than a single hardcoded currency."""
+    NGN/USD choice (Phase 5) rather than a single hardcoded currency.
+
+    Price/plan lookup is DB-backed (PremiumPricing, Phase 21 Slice 5) rather
+    than the old settings dicts, so an admin's price change takes effect for
+    new subscribers immediately without a redeploy -- existing subscribers
+    are never affected since their own Subscription row already captured its
+    own amount/provider_plan_id at the time they subscribed."""
     currency = currency.upper()
-    if currency not in settings.PREMIUM_PLAN_PRICING_MINOR_UNITS:
+    pricing = PremiumPricing.objects.filter(currency=currency).first()
+    if pricing is None or not pricing.provider_plan_id:
         raise SubscriptionUnsupportedCurrencyError(currency)
     if not settings.FLUTTERWAVE_SECRET_KEY:
         raise SubscriptionGatewayNotConfiguredError()
-    plan_id = settings.FLUTTERWAVE_PREMIUM_PLAN_IDS.get(currency, "")
-    if not plan_id:
-        raise SubscriptionGatewayNotConfiguredError()
+    plan_id = pricing.provider_plan_id
 
     with transaction.atomic():
         # Query the raw non-terminal row here (not current_subscription_queryset's
@@ -133,7 +145,7 @@ def subscribe(*, user, currency: str = "NGN") -> Subscription:
 
         subscription = Subscription.objects.create(
             user=user,
-            amount=settings.PREMIUM_PLAN_PRICING_MINOR_UNITS[currency],
+            amount=pricing.amount,
             currency=currency,
             payment_reference=Subscription.generate_reference(),
             provider_plan_id=plan_id,
@@ -467,6 +479,66 @@ def admin_cancel_subscription(*, subscription_id: int, actor, reason: str) -> Su
         actor=actor,
     )
     return subscription
+
+
+@transaction.atomic
+def set_premium_price(*, currency: str, amount: int, actor) -> PremiumPricing:
+    """Phase 21 Slice 5: admin sets the Premium price for one currency. Not
+    a simple field edit -- a Flutterwave Payment Plan's amount is fixed at
+    creation and can't change afterward, so "changing the price" means
+    creating a brand-new plan and switching which plan subscribe() reads
+    for *new* subscribers going forward (see subscribe()'s own note).
+    Existing subscribers are untouched: each Subscription already captured
+    its own amount and provider_plan_id at subscribe() time, so they keep
+    paying their original price until they'd naturally re-subscribe -- same
+    "never claw back/reprice what someone already agreed to" principle as
+    cancellation in Slice 3.
+
+    Unlike subscribe(), there's no partial-attempt record worth preserving
+    on a mid-operation failure here (no user is mid-checkout) -- either the
+    whole operation succeeds or nothing changes, so this can be one plain
+    atomic function rather than subscribe()'s split-atomic-blocks dance."""
+    currency = currency.strip().upper()
+    if not _CURRENCY_CODE_RE.fullmatch(currency):
+        raise PremiumPricingInvalidCurrencyError(currency)
+    if amount <= 0:
+        raise PremiumPricingInvalidAmountError()
+    if not settings.FLUTTERWAVE_SECRET_KEY:
+        raise SubscriptionGatewayNotConfiguredError()
+
+    plan_result = _gateway().create_payment_plan(
+        name=f"iTestified Premium ({currency})",
+        amount=amount,
+        currency=currency,
+        interval="monthly",
+    )
+
+    pricing = PremiumPricing.objects.select_for_update().filter(currency=currency).first()
+    from_amount = pricing.amount if pricing else None
+    from_provider_plan_id = pricing.provider_plan_id if pricing else ""
+
+    if pricing is None:
+        pricing = PremiumPricing.objects.create(
+            currency=currency,
+            amount=amount,
+            provider_plan_id=plan_result.provider_plan_id,
+            updated_by=actor,
+        )
+    else:
+        pricing.amount = amount
+        pricing.provider_plan_id = plan_result.provider_plan_id
+        pricing.updated_by = actor
+        pricing.save(update_fields=["amount", "provider_plan_id", "updated_by", "updated_at"])
+
+    PremiumPricingHistory.objects.create(
+        pricing=pricing,
+        from_amount=from_amount,
+        to_amount=amount,
+        from_provider_plan_id=from_provider_plan_id,
+        to_provider_plan_id=plan_result.provider_plan_id,
+        actor=actor,
+    )
+    return pricing
 
 
 def log_unrecognized_event(*, event: str, raw_payload: dict, note: str) -> None:

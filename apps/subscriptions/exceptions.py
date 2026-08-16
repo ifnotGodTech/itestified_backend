@@ -16,3 +16,11 @@ class SubscriptionNotCancelableError(Exception):
 
 class SubscriptionUnsupportedCurrencyError(Exception):
     pass
+
+
+class PremiumPricingInvalidCurrencyError(Exception):
+    pass
+
+
+class PremiumPricingInvalidAmountError(Exception):
+    pass
