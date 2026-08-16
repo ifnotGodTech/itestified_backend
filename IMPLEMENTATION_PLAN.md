@@ -17,7 +17,7 @@ Current state, updated 2026-07-31:
 - **In progress**: Phase 11 (Testimony Sharing — Slices 1-3 implemented 2026-08-03/04, see its own `Status:` line; Slice 4/iOS blocked on the Apple Developer account question).
 - **Completed 2026-08-16**: Phase 20 (Immersive Home Feed — all 7 slices done and confirmed on a real Android emulator, see its own `Status:` line).
 - **Completed 2026-08-15**: Phase 21 (Premium Subscriptions & Billing Foundation — all 5 slices done: 1-3 backend+mobile 2026-08-05, 4 admin dashboard 2026-08-07, 5 admin pricing 2026-08-15, see its own `Status:` line).
-- **Not started**: Phase 8 (Reviews, Analytics, And Operational Admin Features), Phase 9 (Integration Hardening And Client Wiring Support), Phase 22 (AI Transcription & Translation), Phase 23 (Creator & Ministry Profiles), Phase 24 (Referral Program — Attribution + Manual Month-End Payout), Phase 25 (Offline Download, Premium), Phase 26 (Multi-Currency & Multi-Region Expansion), Phase 27 (Live Testimony Broadcasts) — Phases 21-27 proposed 2026-08-04 from the Christian Testimony Platform Business Blueprint; see each phase's own `Background:` note for sequencing rationale and open product/legal questions.
+- **Not started**: Phase 8 (Reviews, Analytics, And Operational Admin Features), Phase 9 (Integration Hardening And Client Wiring Support), Phase 22 (AI Transcription & Translation — groundwork/decisions resolved 2026-08-16, ready to start), Phase 23 (Creator & Ministry Profiles), Phase 24 (Referral Program — Attribution + Manual Month-End Payout), Phase 25 (Offline Download, Premium), Phase 26 (Multi-Currency & Multi-Region Expansion), Phase 27 (Live Testimony Broadcasts), Phase 28 (Audio Testimonies), Phase 29 (Playlists & Testimony Collections), Phase 30 (Exclusive Testimonies & Interviews), Phase 31 (Priority Moderation & Publishing) — Phases 21-27 proposed 2026-08-04 from the Christian Testimony Platform Business Blueprint (now saved verbatim as `BUSINESS_BLUEPRINT.md`); Phases 28-31 added 2026-08-16/17 after a full alignment review found these blueprint features had no corresponding phase at all. See each phase's own `Background:` note for sequencing rationale and open product/legal questions.
 
 Known open items, tracked but not blocking any phase's completion (see the referenced phase for detail):
 - iOS push notifications need the Apple Developer account / APNs key resolved (Phase 6); Android push is confirmed working end-to-end on a real device.
@@ -1457,10 +1457,18 @@ Corrected 2026-08-15 (found in a plan/code consistency audit): `AdminPremiumPric
 
 Background: proposed 2026-08-04, same blueprint review as Phase 21.
 
+**Groundwork review 2026-08-16** (before any implementation started): checked this phase against the actual codebase and found it wasn't build-ready as written — no async task queue exists anywhere (no Celery/Redis/RQ, only plain synchronous management commands on a Render cron schedule), no AI vendor is integrated or provisioned, and no "upload completed" hook exists to trigger a job from (testimony video upload is direct-to-Cloudinary from the client; the backend never observes it finishing). Three open decisions resolved the same day:
+- **Gating: both transcription and translation are premium-gated**, matching `BUSINESS_BLUEPRINT.md`'s Premium Plan list literally (both bullets appear there, not just translation). Decided over the alternative of leaving transcription free for accessibility/SEO reasons because: (1) it's the explicit, already-reviewed-with-the-admin written product decision, not something to quietly deviate from without a strong reason; (2) transcription and translation share one technical pipeline, so gating them identically keeps the entitlement check to one place instead of per-sub-feature logic. Revisitable later as a deliberate exception if accessibility concerns become pressing, but not assumed now.
+- **Async approach: a new DB-backed `TranscriptionJob`/`TranslationJob` model** (status: pending/processing/done/failed, retry count) polled by a new Render cron job, same pattern as `publish_scheduled_testimonies` — not Celery+Redis. No new infrastructure to provision; the job-status model doubles as exactly what Slice 4's dashboard retry/failure view needs.
+- **Vendor: OpenAI** for both — Whisper API for transcription, a GPT-class model (prompted) for translation. One vendor, one API key, simplest billing/ops story over provisioning a second account with DeepL.
+- **Upload trigger**: since testimony creation already happens *after* the client's direct Cloudinary upload completes (the client already has `video_url`/`audio_url` in hand when it calls the backend to create the testimony record), no Cloudinary webhook is needed — the job can simply be created synchronously (via `transaction.on_commit`, matching the existing pattern in `apps/donations/services/commands.py` and `apps/notifications/services.py`) inside the testimony-creation service command whenever a video or audio testimony is submitted.
+- **Real blocking dependency found**: this phase's own Build note already assumed audio testimonies exist ("video/audio testimonies... triggered on upload") — they don't (see Phase 28). Transcription can ship for video testimonies alone first; the audio half of Slice 3 depends on Phase 28 shipping first.
+
 Build:
-- async transcription pipeline for video/audio testimonies (Whisper-class API), triggered on upload
-- on-demand translation of testimony text/transcripts into a configurable language set (DeepL/GPT-class API), cached per (testimony, language) rather than regenerated per request
-- gated behind Phase 21's entitlement check per the blueprint — confirm with the admin at build time whether transcription itself should stay free (accessibility/SEO value) with only translation premium-gated, since that split is a product decision, not an engineering one
+- new `TranscriptionJob`/`TranslationJob` models + a polling cron command (see groundwork review above) — no Celery/Redis
+- async transcription pipeline for video testimonies now, audio testimonies once Phase 28 ships (Whisper API), triggered via `transaction.on_commit` at testimony-creation time, not a webhook
+- on-demand translation of testimony text/transcripts into a configurable language set (GPT-class model, prompted), cached per (testimony, language) rather than regenerated per request
+- both transcription and translation gated behind Phase 21's entitlement check (resolved above)
 - dashboard: visibility into transcription/translation job status and failures, since this is an async pipeline where a silent failure would strand a testimony indefinitely
 
 Sub-slices:
@@ -1470,14 +1478,15 @@ Sub-slices:
 - **Slice 2 — Translate a testimony** — user selects a language and sees translated text, generated once and cached
 
 #### Backend/Admin Flows
-- **Slice 3 — Transcription job runs on upload** — a new video/audio testimony triggers an async transcription job automatically
+- **Slice 3 — Transcription job runs on upload** — a new video testimony triggers an async transcription job automatically at creation time; audio testimonies join once Phase 28 ships
 - **Slice 4 — Admin sees job failures** — a failed transcription/translation job is visible in the dashboard with a retry action, never silently stuck in "processing"
 
 Test:
 - a failed job produces a visible, retryable failed state, never an indefinite "processing" status
 - a repeated translation request for the same (testimony, language) pair reuses the cached result rather than re-calling the paid API
+- a non-premium user's testimony still gets queued (or not, tbd at build time) but never surfaces transcript/translation UI regardless of job outcome — the gate is presentation-layer and entitlement-layer both, not just one
 
-Status: not started
+Status: not started — groundwork/decisions resolved 2026-08-16, ready to start on video testimonies now; the audio half of Slice 3 blocks on Phase 28.
 
 ### Phase 23: Creator & Ministry Profiles
 
@@ -1581,6 +1590,107 @@ Test:
 - a dropped stream mid-broadcast is handled gracefully (real-time infra has different failure modes than anything else in this app) and viewers see a clear "broadcast ended" state rather than a stuck player
 
 Status: not started — recommend building this last of all seven new phases. Different technical domain, materially higher infra/operational cost (live streams need active health monitoring), and the blueprint itself treats it as one bullet among many rather than a headline feature.
+
+### Phase 28: Audio Testimonies
+
+Background: found during the 2026-08-16 `BUSINESS_BLUEPRINT.md` alignment review — the blueprint lists "Listen to public audio testimonies" under **Free Plan** (Core Product, not a perk) and "Upload unlimited audio testimonies" under **Premium Plan**, but `TestimonyType` has only ever supported `written`/`video` (`apps/testimonies/models.py:70-72`, Phase 3). Audio was never built, despite the blueprint treating it as a first-class content type alongside video from the start. This phase closes that gap; it's foundational (content model, moderation, browse/search all need to know about it) rather than a small add-on.
+
+Known inconsistency, deliberately not resolved here: the blueprint also lists "Upload unlimited video testimonies" under Premium, but video testimony submission has never been gated in this app (Phase 3/4 predate the subscription system entirely, and nothing since has revisited it) — free users can already upload video testimonies today. Whether to retroactively gate video upload is a separate, more sensitive decision (it would change behavior for existing free users) and is explicitly out of scope for this phase. Audio is being built gated from day one since there's no existing free-tier behavior to take away.
+
+Build:
+- extend `TestimonyType` with `AUDIO`; `Testimony` gains `audio_url` (mirrors the existing `video_url`/`thumbnail_url` pattern) and a duration field
+- upload flow reuses the existing Cloudinary direct-upload-signature pattern (`create_direct_upload_signature`), a new `resource_type="audio"` branch alongside the existing `video`/`image`/`avatar`/`inspirational_picture`/`home_promo_card` ones
+- submitting/uploading an audio testimony is premium-gated (Phase 21 entitlement check); listening to a published audio testimony is free for everyone, including guests — matches how video watching is already free
+- moderation: audio testimonies go through the exact same Phase 4 moderation workflow as video and written — no new moderation states or logic
+- mobile: new audio player UI (distinct from the video player — waveform/progress bar, play/pause), matching the existing testimony detail screen's card patterns
+
+Sub-slices:
+
+#### Backend Flows
+- **Slice 1 — Audio as a real testimony type** — `TestimonyType.AUDIO`, `audio_url`/`duration` fields, migration; audio testimonies flow through existing moderation/browse/search/favorites/reactions unchanged
+- **Slice 2 — Uploading audio requires Premium** — the audio upload/submission endpoint checks Phase 21's entitlement and rejects a non-premium attempt with a clear, upgrade-prompting message (never a generic 403)
+
+#### Mobile User Flows
+- **Slice 3 — Non-premium user is prompted to upgrade** — attempting to submit an audio testimony as a free user shows an upsell, not a dead end
+- **Slice 4 — Premium user records/uploads an audio testimony** — same submission flow shape as video (Phase 3), audio-specific fields only
+- **Slice 5 — Anyone plays a published audio testimony** — guest and free users included, matching free-plan listening
+
+Test:
+- a non-premium upload attempt is rejected with a clear premium-required message, not a generic error
+- audio testimonies appear correctly in browse/search/moderation alongside written/video, with no special-casing needed in those existing queries beyond the new type value
+- a non-premium (or guest) user can still fully listen to a published audio testimony submitted by someone else
+
+Status: not started
+
+### Phase 29: Playlists & Testimony Collections
+
+Background: blueprint Premium Plan bullet ("Create playlists and testimony collections") with no corresponding phase anywhere in this plan before the 2026-08-16 alignment review.
+
+Build:
+- new `Playlist` model (owner, title, visibility `public`/`private`) + an ordered through-model associating testimonies with a playlist and a position
+- creating/editing/reordering a playlist is premium-gated; viewing a *public* playlist someone else made, and playing through it, is free for everyone — same creation-gated/consumption-free split as Phase 28's audio upload vs. listen
+
+Sub-slices:
+
+#### Mobile User Flows
+- **Slice 1 — Premium user creates a playlist** — title, add/remove/reorder testimonies
+- **Slice 2 — Premium user sets a playlist public or private**
+- **Slice 3 — Anyone views a public playlist and plays through it** — guest and free users included
+- **Slice 4 — Premium user deletes a playlist** — deleting a playlist never deletes the underlying testimonies, only the association
+
+Test:
+- reordering persists correctly and survives a reload
+- a private playlist is invisible to other users, including via a direct link/id guess, not just hidden from a listing
+- deleting a playlist leaves every testimony in it fully intact and unaffected
+
+Status: not started — no dependency beyond Phase 21's entitlement check on creation; can run in parallel with Phase 22/28.
+
+### Phase 30: Exclusive Testimonies & Interviews (Premium Content Visibility)
+
+Background: blueprint Premium Plan bullet ("Access to exclusive testimonies and interviews") with no corresponding phase before the 2026-08-16 alignment review. Today every published testimony is visible to everyone, guests included — there is no content-visibility gating concept anywhere in the app yet, which makes this a genuinely new axis, not an extension of an existing one.
+
+Open question to resolve before Slice 1 starts, not assumed here: **who can mark a testimony exclusive** — admin-only (curated "interviews," closer to the blueprint's own wording), or any verified creator/ministry (Phase 23)? This changes the permission model of Slice 1 and should be confirmed with the admin at build time.
+
+Build:
+- `Testimony` gains an `is_premium_exclusive` flag
+- an exclusive testimony is excluded from guest/free-user browse, search, and full detail view — shown instead as a locked preview with an upgrade prompt; a premium subscriber sees it exactly like any other testimony (an optional badge is the only visible difference)
+- entitlement is re-checked live, not cached at first view, matching Phase 21's existing "never trust client-reported status" principle — a lapsed subscriber loses access to previously-viewable exclusive content immediately, not at next login
+
+Sub-slices:
+
+#### Admin/Creator Flows
+- **Slice 1 — Mark a testimony exclusive** — scope (admin-only vs. verified creators too) confirmed with the admin before this starts, per the open question above
+
+#### Mobile User Flows
+- **Slice 2 — Free/guest user sees a locked preview** — title/thumbnail visible, full content and playback gated behind an upgrade prompt
+- **Slice 3 — Premium user sees exclusive testimonies normally** — no friction, optional badge only
+
+Test:
+- an exclusive testimony never appears in playable/readable form in a guest's or free user's browse, search, or detail response — this must be enforced server-side, not just hidden client-side
+- a subscription lapsing mid-session immediately revokes access to previously-visible exclusive content on the next request, matching Phase 21's entitlement re-check pattern
+
+Status: not started — depends on Phase 21 (entitlement check) and touches Phase 23 (creator profiles) for the who-can-mark-exclusive question; that ownership decision blocks Slice 1.
+
+### Phase 31: Priority Moderation & Publishing (Premium)
+
+Background: blueprint Premium Plan bullet ("Priority moderation and publishing") with no corresponding phase before the 2026-08-16 alignment review. Phase 4's moderation queue (completed) is a plain FIFO admin queue today with no ordering or priority concept.
+
+Build:
+- moderation queue ordering considers the submitter's premium status at the time of listing — premium submissions surface first, non-premium submissions keep their existing recency ordering within their own tier
+- fairness-safe by construction: this re-orders the queue, it never hides, skips, or silently drops a non-premium submission — every pending testimony is still reachable and reviewed, just not first
+- dashboard: a visible "Priority" indicator on premium-submitted testimonies in the moderation queue, so an admin understands why ordering isn't pure chronological
+
+Sub-slices:
+
+#### Admin Flows
+- **Slice 1 — Premium submissions surface first in the moderation queue** — secondary sort remains existing `created_at` order within each tier
+- **Slice 2 — Dashboard shows a priority badge on premium submissions**
+
+Test:
+- a premium submission surfaces ahead of an older non-premium submission in the queue
+- re-ordering never causes a non-premium submission to be skipped, hidden, or lost — only deprioritized; a full queue scroll/page-through still reaches every pending item
+
+Status: not started — small, low-risk addition to the already-completed Phase 4; no dependency on Phase 22/28-30, can be built independently whenever convenient.
 
 ## Risks To Watch Early
 
