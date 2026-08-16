@@ -17,7 +17,7 @@ Current state, updated 2026-07-31:
 - **In progress**: Phase 11 (Testimony Sharing — Slices 1-3 implemented 2026-08-03/04, see its own `Status:` line; Slice 4/iOS blocked on the Apple Developer account question).
 - **Completed 2026-08-16**: Phase 20 (Immersive Home Feed — all 7 slices done and confirmed on a real Android emulator, see its own `Status:` line).
 - **Completed 2026-08-15**: Phase 21 (Premium Subscriptions & Billing Foundation — all 5 slices done: 1-3 backend+mobile 2026-08-05, 4 admin dashboard 2026-08-07, 5 admin pricing 2026-08-15, see its own `Status:` line).
-- **Not started**: Phase 8 (Reviews, Analytics, And Operational Admin Features), Phase 9 (Integration Hardening And Client Wiring Support), Phase 22 (AI Transcription & Translation — groundwork/decisions resolved 2026-08-16, ready to start), Phase 23 (Creator & Ministry Profiles), Phase 24 (Referral Program — Attribution + Manual Month-End Payout), Phase 25 (Offline Download, Premium), Phase 26 (Multi-Currency & Multi-Region Expansion), Phase 27 (Live Testimony Broadcasts), Phase 28 (Audio Testimonies), Phase 29 (Playlists & Testimony Collections), Phase 30 (Exclusive Testimonies & Interviews), Phase 31 (Priority Moderation & Publishing) — Phases 21-27 proposed 2026-08-04 from the Christian Testimony Platform Business Blueprint (now saved verbatim as `BUSINESS_BLUEPRINT.md`); Phases 28-31 added 2026-08-16/17 after a full alignment review found these blueprint features had no corresponding phase at all. See each phase's own `Background:` note for sequencing rationale and open product/legal questions.
+- **Not started**: Phase 8 (Reviews, Analytics, And Operational Admin Features), Phase 9 (Integration Hardening And Client Wiring Support), Phase 22 (AI Transcription & Translation — groundwork/decisions resolved 2026-08-16, ready to start), Phase 23 (Creator & Ministry Profiles), Phase 24 (Referral Program — Attribution + Manual Month-End Payout), Phase 25 (Offline Download, Premium), Phase 26 (Multi-Currency & Multi-Region Expansion), Phase 27 (Live Testimony Broadcasts), Phase 28 (Audio Testimonies), Phase 29 (Playlists & Testimony Collections), Phase 30 (Exclusive Testimonies & Interviews), Phase 31 (Priority Moderation & Publishing), Phase 32 (Self-Service Video Testimony Upload, Premium) — Phases 21-27 proposed 2026-08-04 from the Christian Testimony Platform Business Blueprint (now saved verbatim as `BUSINESS_BLUEPRINT.md`); Phases 28-31 added 2026-08-16/17 after a full alignment review found these blueprint features had no corresponding phase at all; Phase 32 added 2026-08-17 after confirming video upload has never had a user-facing (non-admin) path. See each phase's own `Background:` note for sequencing rationale and open product/legal questions.
 
 Known open items, tracked but not blocking any phase's completion (see the referenced phase for detail):
 - iOS push notifications need the Apple Developer account / APNs key resolved (Phase 6); Android push is confirmed working end-to-end on a real device.
@@ -1595,7 +1595,7 @@ Status: not started — recommend building this last of all seven new phases. Di
 
 Background: found during the 2026-08-16 `BUSINESS_BLUEPRINT.md` alignment review — the blueprint lists "Listen to public audio testimonies" under **Free Plan** (Core Product, not a perk) and "Upload unlimited audio testimonies" under **Premium Plan**, but `TestimonyType` has only ever supported `written`/`video` (`apps/testimonies/models.py:70-72`, Phase 3). Audio was never built, despite the blueprint treating it as a first-class content type alongside video from the start. This phase closes that gap; it's foundational (content model, moderation, browse/search all need to know about it) rather than a small add-on.
 
-Known inconsistency, deliberately not resolved here: the blueprint also lists "Upload unlimited video testimonies" under Premium, but video testimony submission has never been gated in this app (Phase 3/4 predate the subscription system entirely, and nothing since has revisited it) — free users can already upload video testimonies today. Whether to retroactively gate video upload is a separate, more sensitive decision (it would change behavior for existing free users) and is explicitly out of scope for this phase. Audio is being built gated from day one since there's no existing free-tier behavior to take away.
+Correction (2026-08-17): an earlier draft of this note incorrectly assumed video testimony submission was already open to free users and therefore out of scope to gate. That was wrong — confirmed by direct inspection of `apps/testimonies/api/urls.py` and `apps/testimonies/api/views.py` that there is currently no user-facing video upload path at all. Every video-creation endpoint (`admin/testimonies/upload-video/`, `upload-signature/`, `create-video-from-url/`, `<id>/upload-now/`) uses `IsActiveAdmin`; the only non-admin submission endpoint is `submit/written/` (`AuthenticatedWrittenTestimonyCreateView`, `IsAuthenticated`, written-only). All video testimonies today are admin-curated, not self-submitted. See Phase 32, which adds the missing self-service video upload path, premium-gated from day one — exactly like audio, with no existing free-tier behavior to take away either.
 
 Build:
 - extend `TestimonyType` with `AUDIO`; `Testimony` gains `audio_url` (mirrors the existing `video_url`/`thumbnail_url` pattern) and a duration field
@@ -1691,6 +1691,37 @@ Test:
 - re-ordering never causes a non-premium submission to be skipped, hidden, or lost — only deprioritized; a full queue scroll/page-through still reaches every pending item
 
 Status: not started — small, low-risk addition to the already-completed Phase 4; no dependency on Phase 22/28-30, can be built independently whenever convenient.
+
+### Phase 32: Self-Service Video Testimony Upload (Premium)
+
+Background: raised by the admin 2026-08-17: "currently, no video upload for users at all, its only by admins, please confirm. We need a phase for it. Everyone can watch videos but only premium users can upload and download for offline access." Confirmed by inspection: every video-creation endpoint in `apps/testimonies/api/urls.py` lives under `admin/testimonies/` with `Admin*`-prefixed views, all gated `IsActiveAdmin` (`apps/testimonies/api/views.py`). The only non-admin testimony-submission endpoint is `submit/written/`. There is no self-service video upload path today — every video testimony currently in the app was uploaded by an admin, not submitted by a user. This corrects an earlier, wrong assumption recorded in Phase 28's Background (see the 2026-08-17 correction there).
+
+Lighter-weight than Phase 28's audio work: the `video` content type, `Testimony.video_url`/`thumbnail_url` fields, and the Cloudinary signed-upload flow (`create_direct_upload_signature(resource_type="video")`) all already exist and are proven in daily admin use. This phase is purely a new premium-gated *access path* onto existing infrastructure — no new `TestimonyType`, no new model fields, no new moderation states.
+
+Watching a published video testimony is already free for everyone, guests included (Phase 3's existing browse/detail views) — untouched by this phase. Downloading a video for offline playback is separately premium-gated by the already-planned Phase 25 (Offline Download); this phase and Phase 25 are companion features for video specifically (upload it premium, take it offline premium) and need no changes to Phase 25 itself.
+
+Build:
+- new user-facing (non-admin) video submission endpoint, parallel to `submit/written/` but for video: signed direct-to-Cloudinary upload via the existing `create_direct_upload_signature(resource_type="video")` service, then a create-from-URL call to record the testimony — same two-step shape as the admin flow, just re-gated
+- entitlement check reuses Phase 21's premium check instead of `IsActiveAdmin`; a non-premium attempt gets a clear upgrade-prompting rejection, never a generic 403
+- submitted video testimonies enter the exact same Phase 4 moderation queue as any other testimony — no new moderation logic
+- mobile: a user-facing video recording/upload screen (the free-user-visible counterpart to the existing admin-only upload tooling), plus an upsell prompt when a non-premium user attempts it
+
+Sub-slices:
+
+#### Backend Flows
+- **Slice 1 — User-facing video upload requires Premium** — new non-admin submission endpoint reusing the existing signed-upload infrastructure, entitlement-checked via Phase 21
+
+#### Mobile User Flows
+- **Slice 2 — Non-premium user is prompted to upgrade** — attempting to submit a video testimony as a free user shows an upsell, not a dead end
+- **Slice 3 — Premium user records/uploads a video testimony themselves** — same submission shape as the existing admin upload screen, user-facing and entitlement-gated
+- **Slice 4 — Anyone watches a published video testimony** — guest and free users included; this already works today and this phase must not regress it
+
+Test:
+- a non-premium user's video-submission attempt is rejected with a clear premium-required message, never a generic error
+- a premium user's submitted video testimony enters moderation exactly like any other testimony and, once approved, is fully watchable by every user including guests — upload is gated, watching never is
+- offline download of that same video remains governed solely by Phase 25's own entitlement check, unaffected by this phase
+
+Status: not started — parallel to Phase 28 (same pattern, different media type, no code dependency beyond both reusing Phase 21's entitlement check); companion to Phase 25 for the "download offline" half of the video premium story.
 
 ## Risks To Watch Early
 
