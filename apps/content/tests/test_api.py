@@ -974,3 +974,59 @@ class HomePromoCardApiTests(TestCase):
         payload = response.json()["results"]
         self.assertEqual(len(payload), 1)
         self.assertEqual(payload[0]["title"], "Invite a friend")
+
+
+class MobileHomePromoCardsApiTests(TestCase):
+    """Phase 20 Slice 7: the public read endpoint mobile weaves into the
+    continuous feed at its own cadence."""
+
+    def test_is_public(self):
+        response = self.client.get(reverse("mobile-home-promo-cards"))
+        self.assertEqual(response.status_code, 200)
+
+    def test_returns_an_active_in_window_card(self):
+        now = timezone.now()
+        HomePromoCard.objects.create(
+            title="Give Today",
+            body="B",
+            starts_at=now - timedelta(days=1),
+            ends_at=now + timedelta(days=1),
+        )
+        response = self.client.get(reverse("mobile-home-promo-cards"))
+        payload = response.json()["results"]
+        self.assertEqual(len(payload), 1)
+        self.assertEqual(payload[0]["title"], "Give Today")
+        # Admin-only fields never leak to the public endpoint.
+        self.assertNotIn("is_active", payload[0])
+        self.assertNotIn("updated_by_email", payload[0])
+        self.assertNotIn("starts_at", payload[0])
+
+    def test_excludes_a_scheduled_card(self):
+        now = timezone.now()
+        HomePromoCard.objects.create(title="Not yet", body="B", starts_at=now + timedelta(days=1))
+        response = self.client.get(reverse("mobile-home-promo-cards"))
+        self.assertEqual(response.json()["results"], [])
+
+    def test_excludes_an_ended_card(self):
+        now = timezone.now()
+        HomePromoCard.objects.create(
+            title="Over", body="B", starts_at=now - timedelta(days=10), ends_at=now - timedelta(days=1)
+        )
+        response = self.client.get(reverse("mobile-home-promo-cards"))
+        self.assertEqual(response.json()["results"], [])
+
+    def test_excludes_an_inactive_card(self):
+        now = timezone.now()
+        HomePromoCard.objects.create(
+            title="Off", body="B", starts_at=now - timedelta(days=1), is_active=False
+        )
+        response = self.client.get(reverse("mobile-home-promo-cards"))
+        self.assertEqual(response.json()["results"], [])
+
+    def test_returns_a_card_with_no_end_date(self):
+        now = timezone.now()
+        HomePromoCard.objects.create(title="Always on", body="B", starts_at=now - timedelta(days=1))
+        response = self.client.get(reverse("mobile-home-promo-cards"))
+        payload = response.json()["results"]
+        self.assertEqual(len(payload), 1)
+        self.assertEqual(payload[0]["title"], "Always on")

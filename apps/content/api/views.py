@@ -38,6 +38,7 @@ from .serializers import (
     FeaturedHomePictureSerializer,
     FeaturedHomeTestimonySerializer,
     HomeCurationUpdateSerializer,
+    HomePromoCardPublicSerializer,
     HomePromoCardSerializer,
     HomeSectionOrderSerializer,
     InspirationalPictureCategorySerializer,
@@ -532,6 +533,26 @@ def mobile_inspirational_pictures_list_view(request):
         .order_by("-updated_at")
     )
     return Response({"results": InspirationalPictureSerializer(queryset, many=True).data})
+
+
+@api_view(["GET"])
+@authentication_classes([])
+@permission_classes([])
+def mobile_home_promo_cards_view(request):
+    """Phase 20 Slice 7: every currently-eligible "From iTestified" card,
+    for mobile to weave into the feed at its own cadence -- eligibility
+    (is_active + inside the starts_at/ends_at window) is a mechanical
+    check, not an admin curation step, so this is a plain filtered list
+    (mirrors mobile_inspirational_pictures_list_view's own shape) rather
+    than going through AdminHomeCurationView's featured-content model."""
+    now = timezone.now()
+    queryset = (
+        HomePromoCard.objects.filter(is_active=True)
+        .filter(starts_at__lte=now)
+        .filter(models.Q(ends_at__isnull=True) | models.Q(ends_at__gt=now))
+        .order_by("-created_at")
+    )
+    return Response({"results": HomePromoCardPublicSerializer(queryset, many=True).data})
 
 
 @api_view(["GET"])

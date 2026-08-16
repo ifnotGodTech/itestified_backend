@@ -269,3 +269,14 @@ class HomePromoCardSerializer(serializers.ModelSerializer):
             if not cta_url:
                 raise serializers.ValidationError({"cta_url": "Required when the CTA destination is an external URL."})
         return attrs
+
+
+class HomePromoCardPublicSerializer(serializers.ModelSerializer):
+    """Phase 20 Slice 7: what mobile actually needs to render a card woven
+    into the feed -- no admin-only fields (is_active, updated_by, raw
+    starts_at/ends_at). Eligibility is already applied by the view's
+    queryset, so every row returned here is meant to be shown."""
+
+    class Meta:
+        model = HomePromoCard
+        fields = ("id", "title", "body", "image_url", "cta_label", "cta_destination", "cta_url")
