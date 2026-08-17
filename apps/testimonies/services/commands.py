@@ -7,6 +7,7 @@ from django.db.models import F
 from django.utils import timezone
 
 from apps.testimonies.exceptions import (
+    AIJobNotRetryableError,
     TestimonyTransitionNotAllowedError,
     TestimonyTranslationNotReadyError,
 )
@@ -207,6 +208,40 @@ def request_testimony_translation(*, testimony: Testimony, language: str) -> Tra
         job.error_message = ""
         job.save(update_fields=["status", "error_message", "updated_at"])
         transaction.on_commit(lambda: run_translation_job.delay(job.id))
+    return job
+
+
+def retry_transcription_job(*, job_id: int) -> TranscriptionJob:
+    """Phase 22 Slice 5 -- admin-triggered retry for a FAILED
+    TranscriptionJob. Unlike request_testimony_translation, nothing else
+    re-enqueues a transcription job on its own (it's only ever created
+    once, at testimony-creation time), so without this a failed job is
+    stuck forever. Only a FAILED job may be retried -- pending/processing
+    is already in flight, and done is already correct."""
+    job = TranscriptionJob.objects.select_related("testimony").get(id=job_id)
+    if job.status != TranscriptionJobStatus.FAILED:
+        raise AIJobNotRetryableError(f"Job is '{job.status}', not 'failed' -- nothing to retry.")
+
+    job.status = TranscriptionJobStatus.PENDING
+    job.error_message = ""
+    job.save(update_fields=["status", "error_message", "updated_at"])
+    transaction.on_commit(lambda: run_transcription_job.delay(job.id))
+    return job
+
+
+def retry_translation_job(*, job_id: int) -> TranslationJob:
+    """Phase 22 Slice 5 -- admin-triggered retry for a FAILED
+    TranslationJob, for the case where the admin notices the failure
+    before the reader ever re-requests that language (which would also
+    retry it, per request_testimony_translation)."""
+    job = TranslationJob.objects.select_related("testimony").get(id=job_id)
+    if job.status != TranslationJobStatus.FAILED:
+        raise AIJobNotRetryableError(f"Job is '{job.status}', not 'failed' -- nothing to retry.")
+
+    job.status = TranslationJobStatus.PENDING
+    job.error_message = ""
+    job.save(update_fields=["status", "error_message", "updated_at"])
+    transaction.on_commit(lambda: run_translation_job.delay(job.id))
     return job
 
 

@@ -15,6 +15,7 @@ from rest_framework.views import APIView
 
 from apps.subscriptions.selectors import is_user_premium
 from apps.testimonies.exceptions import (
+    AIJobNotRetryableError,
     TestimonyTransitionNotAllowedError,
     TestimonyTranslationNotReadyError,
 )
@@ -28,6 +29,10 @@ from apps.testimonies.models import (
     TestimonyStatus,
     TestimonyType,
     TestimonyWatch,
+    TranscriptionJob,
+    TranscriptionJobStatus,
+    TranslationJob,
+    TranslationJobStatus,
     UserFollowedCategory,
 )
 from apps.authn.api.permissions import IsActiveAdmin
@@ -40,6 +45,8 @@ from apps.testimonies.services.commands import (
     reject_testimony,
     remove_testimony_reaction,
     request_testimony_translation,
+    retry_transcription_job,
+    retry_translation_job,
     schedule_testimony,
     set_testimony_reaction,
     upload_now_video_testimony,
@@ -54,6 +61,8 @@ from .serializers import (
     AdminTestimonyCategorySerializer,
     AdminTestimonyDetailSerializer,
     AdminTestimonyListSerializer,
+    AdminTranscriptionJobSerializer,
+    AdminTranslationJobSerializer,
     FavoriteSerializer,
     FavoriteTestimonySerializer,
     TestimonyCategorySerializer,
@@ -872,3 +881,70 @@ class AdminUploadNowVideoTestimonyView(APIView):
             return Response({"message": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         notify_new_video_testimony_published(testimony=testimony, actor=request.user)
         return Response(AdminTestimonyDetailSerializer(testimony).data, status=status.HTTP_200_OK)
+
+
+class AIJobPagination(PageNumberPagination):
+    page_size = 20
+    page_size_query_param = "page_size"
+    max_page_size = 100
+
+
+class AdminTranscriptionJobListView(generics.ListAPIView):
+    """Phase 22 Slice 5. Defaults to no status filter (admin sees the
+    whole queue) but supports ?status=failed so the dashboard can surface
+    "stuck" jobs specifically, per this slice's own requirement that a
+    failure is never silently stuck in processing."""
+
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsActiveAdmin]
+    serializer_class = AdminTranscriptionJobSerializer
+    pagination_class = AIJobPagination
+
+    def get_queryset(self):
+        queryset = TranscriptionJob.objects.select_related("testimony")
+        status_filter = (self.request.query_params.get("status") or "").strip().lower()
+        if status_filter in TranscriptionJobStatus.values:
+            queryset = queryset.filter(status=status_filter)
+        return queryset.order_by("-updated_at")
+
+
+class AdminTranscriptionJobRetryView(APIView):
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsActiveAdmin]
+
+    def post(self, request, job_id: int):
+        try:
+            job = retry_transcription_job(job_id=job_id)
+        except TranscriptionJob.DoesNotExist:
+            return Response({"message": "Transcription job not found."}, status=status.HTTP_404_NOT_FOUND)
+        except AIJobNotRetryableError as exc:
+            return Response({"message": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(AdminTranscriptionJobSerializer(job).data, status=status.HTTP_200_OK)
+
+
+class AdminTranslationJobListView(generics.ListAPIView):
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsActiveAdmin]
+    serializer_class = AdminTranslationJobSerializer
+    pagination_class = AIJobPagination
+
+    def get_queryset(self):
+        queryset = TranslationJob.objects.select_related("testimony")
+        status_filter = (self.request.query_params.get("status") or "").strip().lower()
+        if status_filter in TranslationJobStatus.values:
+            queryset = queryset.filter(status=status_filter)
+        return queryset.order_by("-updated_at")
+
+
+class AdminTranslationJobRetryView(APIView):
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsActiveAdmin]
+
+    def post(self, request, job_id: int):
+        try:
+            job = retry_translation_job(job_id=job_id)
+        except TranslationJob.DoesNotExist:
+            return Response({"message": "Translation job not found."}, status=status.HTTP_404_NOT_FOUND)
+        except AIJobNotRetryableError as exc:
+            return Response({"message": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(AdminTranslationJobSerializer(job).data, status=status.HTTP_200_OK)

@@ -16,6 +16,10 @@ from .views import (
     AdminTestimonyDetailView,
     AdminTestimonyListView,
     AdminTestimonyModerationHistoryView,
+    AdminTranscriptionJobListView,
+    AdminTranscriptionJobRetryView,
+    AdminTranslationJobListView,
+    AdminTranslationJobRetryView,
     AdminVideoTestimonyUploadSignatureView,
     AdminVideoTestimonyUploadView,
     AdminVideoTestimonyCreateFromUrlView,
@@ -93,5 +97,25 @@ urlpatterns = [
         "admin/testimonies/<int:testimony_id>/moderation-history/",
         AdminTestimonyModerationHistoryView.as_view(),
         name="admin-testimony-moderation-history",
+    ),
+    path(
+        "admin/transcription-jobs/",
+        AdminTranscriptionJobListView.as_view(),
+        name="admin-transcription-job-list",
+    ),
+    path(
+        "admin/transcription-jobs/<int:job_id>/retry/",
+        AdminTranscriptionJobRetryView.as_view(),
+        name="admin-transcription-job-retry",
+    ),
+    path(
+        "admin/translation-jobs/",
+        AdminTranslationJobListView.as_view(),
+        name="admin-translation-job-list",
+    ),
+    path(
+        "admin/translation-jobs/<int:job_id>/retry/",
+        AdminTranslationJobRetryView.as_view(),
+        name="admin-translation-job-retry",
     ),
 ]

@@ -677,6 +677,41 @@ Expected behavior:
 
 ---
 
+## Phase 22: AI Transcription & Translation
+
+### Slice 5 — Admin sees job failures (with retry)
+
+Prerequisites: an admin session cookie (log in via the dashboard, or `POST /api/v1/auth/admin/login/` with a CSRF token and reuse the returned `sessionid`/`csrftoken` cookies below). At least one video testimony with a `FAILED` `TranscriptionJob` or `TranslationJob` -- locally, with no `OPENAI_API_KEY` configured, any real video/translation request fails closed automatically (see Phase 22's own `Status:` note), so this is easy to reproduce without special setup.
+
+List transcription jobs, optionally filtered to just the stuck ones:
+
+```bash
+curl -s -b cookies.txt "http://127.0.0.1:8000/api/v1/testimonies/admin/transcription-jobs/?status=failed"
+```
+
+Expected: `200`, a paginated `{"count", "results": [...]}` where each result has `id`, `testimony_id`, `testimony_title`, `status`, `error_message`, `retry_count`, `created_at`, `updated_at`. Omit `?status=` to see every job regardless of state.
+
+Retry one:
+
+```bash
+curl -s -b cookies.txt -c cookies.txt -X POST \
+  -H "X-CSRFToken: $(grep csrftoken cookies.txt | awk '{print $7}')" \
+  "http://127.0.0.1:8000/api/v1/testimonies/admin/transcription-jobs/<job_id>/retry/"
+```
+
+Expected: `200`, the job serialized with `"status": "pending"` (it was just reset -- the retried task runs asynchronously via Celery, so a follow-up `GET` on the list a moment later is what shows the outcome, `done` or `failed` again).
+
+Translation jobs use the same shape at `admin/translation-jobs/` and `admin/translation-jobs/<job_id>/retry/`, with an extra `language` field (e.g. `"fr"`) on each result.
+
+Failure paths:
+- Retrying a job that is not currently `failed` (pending/processing/done) -> `400 {"message": "Job is '<status>', not 'failed' -- nothing to retry."}`
+- Retrying a job id that doesn't exist -> `404`
+- Either endpoint without an admin session -> `403`
+
+Dashboard: log in as an admin and open `/ai-jobs` -- the status-filter chips at the top (All/Failed/Processing/Pending/Done) mirror the `?status=` query param above, and each `Failed` row has a `Retry` button that posts to the same endpoints through a Next.js route proxy.
+
+---
+
 ## Ongoing Maintenance Rule
 
 Whenever a phase moves from Not started to implementation:

@@ -15,6 +15,7 @@ from apps.testimonies.models import (
     TestimonyReactionType,
     TestimonyStatus,
     TestimonyType,
+    TranscriptionJob,
     TranscriptionJobStatus,
     TranslationJob,
     normalize_testimony_category_name,
@@ -245,6 +246,43 @@ class TestimonyTranslationSerializer(serializers.ModelSerializer):
     class Meta:
         model = TranslationJob
         fields = ("language", "status", "translated_text")
+
+
+class AdminTranscriptionJobSerializer(serializers.ModelSerializer):
+    testimony_id = serializers.IntegerField(source="testimony.id", read_only=True)
+    testimony_title = serializers.CharField(source="testimony.title", read_only=True)
+
+    class Meta:
+        model = TranscriptionJob
+        fields = (
+            "id",
+            "testimony_id",
+            "testimony_title",
+            "status",
+            "error_message",
+            "retry_count",
+            "created_at",
+            "updated_at",
+        )
+
+
+class AdminTranslationJobSerializer(serializers.ModelSerializer):
+    testimony_id = serializers.IntegerField(source="testimony.id", read_only=True)
+    testimony_title = serializers.CharField(source="testimony.title", read_only=True)
+
+    class Meta:
+        model = TranslationJob
+        fields = (
+            "id",
+            "testimony_id",
+            "testimony_title",
+            "language",
+            "status",
+            "error_message",
+            "retry_count",
+            "created_at",
+            "updated_at",
+        )
 
 
 class PublicTestimonyShareSerializer(serializers.ModelSerializer):
