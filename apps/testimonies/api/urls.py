@@ -37,6 +37,7 @@ from .views import (
     TestimonyCommentDeleteView,
     TestimonyCommentListCreateView,
     TestimonyReactionView,
+    TestimonyTranslationView,
 )
 
 urlpatterns = [
@@ -64,6 +65,7 @@ urlpatterns = [
     path("<int:testimony_id>/favorite/", FavoriteToggleView.as_view(), name="testimony-favorite-toggle"),
     path("<int:testimony_id>/react/", TestimonyReactionView.as_view(), name="testimony-react"),
     path("<int:testimony_id>/comments/", TestimonyCommentListCreateView.as_view(), name="testimony-comment-list-create"),
+    path("<int:testimony_id>/translations/", TestimonyTranslationView.as_view(), name="testimony-translations"),
     path("comments/<int:comment_id>/", TestimonyCommentDeleteView.as_view(), name="testimony-comment-delete"),
     path("submit/written/", AuthenticatedWrittenTestimonyCreateView.as_view(), name="testimony-submit-written"),
     path("admin/categories/", AdminCategoryListCreateView.as_view(), name="admin-testimony-category-list-create"),

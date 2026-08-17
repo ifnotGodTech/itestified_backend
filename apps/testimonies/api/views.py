@@ -13,7 +13,11 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.views import APIView
 
-from apps.testimonies.exceptions import TestimonyTransitionNotAllowedError
+from apps.subscriptions.selectors import is_user_premium
+from apps.testimonies.exceptions import (
+    TestimonyTransitionNotAllowedError,
+    TestimonyTranslationNotReadyError,
+)
 from apps.testimonies.models import (
     Testimony,
     TestimonyCategory,
@@ -32,8 +36,10 @@ from apps.testimonies.validators import parse_future_publish_at
 from apps.testimonies.services.commands import (
     approve_testimony,
     archive_testimony,
+    enqueue_transcription_job,
     reject_testimony,
     remove_testimony_reaction,
+    request_testimony_translation,
     schedule_testimony,
     set_testimony_reaction,
     upload_now_video_testimony,
@@ -64,6 +70,8 @@ from .serializers import (
     AdminVideoTestimonyCreateFromUrlSerializer,
     AdminTestimonyPullQuoteSerializer,
     PublicTestimonyShareSerializer,
+    TestimonyTranslationRequestSerializer,
+    TestimonyTranslationSerializer,
     normalize_video_source,
 )
 from apps.testimonies.services.media_uploads import CloudinaryUploadError, create_direct_upload_signature
@@ -226,7 +234,9 @@ class PublicTestimonyDetailView(generics.RetrieveAPIView):
     serializer_class = TestimonyDetailSerializer
 
     def get_queryset(self):
-        return Testimony.objects.select_related("author", "author__profile", "category").filter(
+        return Testimony.objects.select_related(
+            "author", "author__profile", "category", "transcription_job"
+        ).filter(
             status=TestimonyStatus.APPROVED,
             category__is_active=True,
         )
@@ -272,6 +282,37 @@ class PublicTestimonyViewIncrementView(APIView):
         return Response(row, status=status.HTTP_200_OK)
 
 
+class TestimonyTranslationView(APIView):
+    """Phase 22 Slice 2. POST is deliberately idempotent and safe to call
+    repeatedly for the same (testimony, language) -- mobile uses this both
+    to *request* a translation the first time and to *poll* for its result
+    afterward, rather than needing a separate GET endpoint."""
+
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, testimony_id: int):
+        testimony = Testimony.objects.select_related("transcription_job").filter(
+            id=testimony_id,
+            status=TestimonyStatus.APPROVED,
+        ).first()
+        if testimony is None:
+            return Response({"message": "Testimony not found."}, status=status.HTTP_404_NOT_FOUND)
+        if not is_user_premium(request.user):
+            return Response(
+                {"message": "Translations are a Premium feature."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        request_serializer = TestimonyTranslationRequestSerializer(data=request.data)
+        request_serializer.is_valid(raise_exception=True)
+        language = request_serializer.validated_data["language"].strip().lower()
+        try:
+            job = request_testimony_translation(testimony=testimony, language=language)
+        except TestimonyTranslationNotReadyError as exc:
+            return Response({"message": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(TestimonyTranslationSerializer(job).data, status=status.HTTP_200_OK)
+
+
 class AuthenticatedWrittenTestimonyCreateView(generics.CreateAPIView):
     authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
@@ -285,9 +326,9 @@ class AuthenticatedMyTestimonyListView(generics.ListAPIView):
     pagination_class = TestimonyPagination
 
     def get_queryset(self):
-        return Testimony.objects.select_related("author", "author__profile", "category").filter(
-            author=self.request.user
-        ).order_by("-created_at", "-id")
+        return Testimony.objects.select_related(
+            "author", "author__profile", "category", "transcription_job"
+        ).filter(author=self.request.user).order_by("-created_at", "-id")
 
 
 class AuthenticatedRejectedTestimonyResubmitView(APIView):
@@ -725,6 +766,7 @@ class AdminVideoTestimonyUploadView(generics.CreateAPIView):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         testimony = serializer.save()
+        enqueue_transcription_job(testimony=testimony)
         if testimony.status == TestimonyStatus.APPROVED:
             notify_new_video_testimony_published(testimony=testimony, actor=request.user)
         return Response(AdminTestimonyDetailSerializer(testimony).data, status=status.HTTP_201_CREATED)
@@ -763,6 +805,7 @@ class AdminVideoTestimonyCreateFromUrlView(generics.CreateAPIView):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         testimony = serializer.save()
+        enqueue_transcription_job(testimony=testimony)
         if testimony.status == TestimonyStatus.APPROVED:
             notify_new_video_testimony_published(testimony=testimony, actor=request.user)
         return Response(AdminTestimonyDetailSerializer(testimony).data, status=status.HTTP_201_CREATED)

@@ -164,6 +164,8 @@ services:
           type: redis
           name: itestified-redis
           property: connectionString
+      - key: OPENAI_API_KEY
+        sync: false
 
   - type: cron
     name: itestified-scheduled-publisher

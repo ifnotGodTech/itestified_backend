@@ -4,6 +4,7 @@ from rest_framework import serializers
 from django.utils import timezone
 
 from apps.notifications.services import notify_testimony_submitted_to_admins
+from apps.subscriptions.selectors import is_user_premium
 from apps.testimonies.models import (
     Testimony,
     TestimonyCategory,
@@ -14,6 +15,8 @@ from apps.testimonies.models import (
     TestimonyReactionType,
     TestimonyStatus,
     TestimonyType,
+    TranscriptionJobStatus,
+    TranslationJob,
     normalize_testimony_category_name,
 )
 from apps.testimonies.services.media_uploads import (
@@ -183,6 +186,8 @@ class TestimonyListSerializer(serializers.ModelSerializer):
 
 class TestimonyDetailSerializer(TestimonyListSerializer):
     my_reaction = serializers.SerializerMethodField()
+    transcript_status = serializers.SerializerMethodField()
+    transcript = serializers.SerializerMethodField()
 
     class Meta(TestimonyListSerializer.Meta):
         fields = TestimonyListSerializer.Meta.fields + (
@@ -193,6 +198,8 @@ class TestimonyDetailSerializer(TestimonyListSerializer):
             "rejection_reason",
             "my_reaction",
             "pull_quote",
+            "transcript_status",
+            "transcript",
         )
 
     def get_my_reaction(self, obj: Testimony):
@@ -207,6 +214,37 @@ class TestimonyDetailSerializer(TestimonyListSerializer):
             .values_list("reaction_type", flat=True)
             .first()
         )
+
+    def get_transcript_status(self, obj: Testimony) -> str:
+        # Metadata, not content -- safe to return regardless of the
+        # viewer's premium status, same "gate the content, not its
+        # existence" split the mockup's locked state relies on.
+        job = getattr(obj, "transcription_job", None)
+        if job is None:
+            return "not_available"
+        return job.status
+
+    def get_transcript(self, obj: Testimony):
+        # Phase 22 Slice 1: gated at both the entitlement layer (here) and
+        # the presentation layer (mobile never renders it for a non-premium
+        # viewer either) -- see the phase's own Test note.
+        job = getattr(obj, "transcription_job", None)
+        if job is None or job.status != TranscriptionJobStatus.DONE:
+            return None
+        request = self.context.get("request")
+        if request is None or not is_user_premium(request.user):
+            return None
+        return job.transcript
+
+
+class TestimonyTranslationRequestSerializer(serializers.Serializer):
+    language = serializers.CharField(max_length=10)
+
+
+class TestimonyTranslationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TranslationJob
+        fields = ("language", "status", "translated_text")
 
 
 class PublicTestimonyShareSerializer(serializers.ModelSerializer):

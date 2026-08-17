@@ -130,6 +130,90 @@ class Testimony(models.Model):
         return f"{self.title} ({self.status})"
 
 
+class TranscriptionJobStatus(models.TextChoices):
+    PENDING = "pending", "Pending"
+    PROCESSING = "processing", "Processing"
+    DONE = "done", "Done"
+    FAILED = "failed", "Failed"
+
+
+class TranscriptionJob(models.Model):
+    """Phase 22 Slice 1 -- one row per testimony, created via
+    transaction.on_commit at video-testimony-creation time
+    (services/commands.py's enqueue_transcription_job) and driven by a
+    Celery task (apps.testimonies.tasks.run_transcription_job). This row is
+    a durable status/result record, not a work queue -- Celery/Redis decides
+    when the work runs; this is just what it produced. OneToOne since a
+    testimony only ever needs one transcript, unlike TranslationJob, which
+    is one row per language."""
+
+    testimony = models.OneToOneField(
+        "testimonies.Testimony",
+        on_delete=models.CASCADE,
+        related_name="transcription_job",
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=TranscriptionJobStatus.choices,
+        default=TranscriptionJobStatus.PENDING,
+    )
+    transcript = models.TextField(blank=True)
+    error_message = models.TextField(blank=True)
+    retry_count = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self) -> str:
+        return f"TranscriptionJob<{self.testimony_id}:{self.status}>"
+
+
+class TranslationJobStatus(models.TextChoices):
+    PENDING = "pending", "Pending"
+    PROCESSING = "processing", "Processing"
+    DONE = "done", "Done"
+    FAILED = "failed", "Failed"
+
+
+class TranslationJob(models.Model):
+    """Phase 22 Slice 2 -- one row per (testimony, language), created
+    on-demand the first time a premium user requests that language
+    (services/commands.py's request_testimony_translation), never upfront
+    for every language. A second request for an already-DONE pair reuses
+    this row instead of calling the paid API again -- the caching behavior
+    Phase 22's own Build note requires."""
+
+    testimony = models.ForeignKey(
+        "testimonies.Testimony",
+        on_delete=models.CASCADE,
+        related_name="translation_jobs",
+    )
+    # ISO 639-1 code (e.g. "fr", "yo", "ig", "ha", "sw") -- short and
+    # unambiguous, matches what the translation prompt and mobile's
+    # language-chip row both key off of.
+    language = models.CharField(max_length=10)
+    status = models.CharField(
+        max_length=20,
+        choices=TranslationJobStatus.choices,
+        default=TranslationJobStatus.PENDING,
+    )
+    translated_text = models.TextField(blank=True)
+    error_message = models.TextField(blank=True)
+    retry_count = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["testimony", "language"],
+                name="uniq_translation_job_per_language",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"TranslationJob<{self.testimony_id}:{self.language}:{self.status}>"
+
+
 class TestimonyFavorite(models.Model):
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,

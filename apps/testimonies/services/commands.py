@@ -6,7 +6,10 @@ from django.db import transaction
 from django.db.models import F
 from django.utils import timezone
 
-from apps.testimonies.exceptions import TestimonyTransitionNotAllowedError
+from apps.testimonies.exceptions import (
+    TestimonyTransitionNotAllowedError,
+    TestimonyTranslationNotReadyError,
+)
 from apps.testimonies.models import (
     ModerationAction,
     Testimony,
@@ -15,12 +18,17 @@ from apps.testimonies.models import (
     TestimonyReactionType,
     TestimonyStatus,
     TestimonyType,
+    TranscriptionJob,
+    TranscriptionJobStatus,
+    TranslationJob,
+    TranslationJobStatus,
 )
 from apps.notifications.services import (
     notify_new_video_testimony_published,
     notify_testimony_approved,
     notify_testimony_rejected,
 )
+from apps.testimonies.tasks import run_transcription_job, run_translation_job
 
 
 def _record_history(
@@ -155,6 +163,51 @@ def upload_now_video_testimony(*, testimony: Testimony, actor) -> Testimony:
         reason="Uploaded now from draft/scheduled via admin modal.",
     )
     return testimony
+
+
+def enqueue_transcription_job(*, testimony: Testimony) -> TranscriptionJob | None:
+    """Phase 22 Slice 1 -- creates a TranscriptionJob for a newly-created
+    video testimony and enqueues the Celery task that runs it, deferred to
+    transaction.on_commit (safe to call unconditionally regardless of
+    caller context -- runs immediately outside an atomic block, or once the
+    enclosing transaction actually commits, same pattern as
+    apps/notifications/services.py). Audio isn't supported yet (Phase 28);
+    a written testimony returns None. A repeat call for a testimony that
+    already has a job is a no-op (returns the existing job, doesn't
+    re-enqueue) so this is safe to call more than once."""
+    if testimony.testimony_type != TestimonyType.VIDEO:
+        return None
+    job, created = TranscriptionJob.objects.get_or_create(testimony=testimony)
+    if not created:
+        return job
+    transaction.on_commit(lambda: run_transcription_job.delay(job.id))
+    return job
+
+
+def request_testimony_translation(*, testimony: Testimony, language: str) -> TranslationJob:
+    """Phase 22 Slice 2 -- get-or-creates a TranslationJob for (testimony,
+    language). A previously DONE job is returned as-is with no new work
+    enqueued -- the caching behavior Phase 22's own Build note requires,
+    and what makes this endpoint safe for mobile to call repeatedly both to
+    request a language and to poll for its result. A previously FAILED job
+    is retried by resetting it to pending and re-enqueuing, so a transient
+    failure doesn't permanently strand a language behind a dead job.
+
+    Raises TestimonyTranslationNotReadyError if the testimony has no
+    completed transcript yet -- translation source text is always the
+    transcript (Slice 1), never the raw video, so there's nothing to
+    translate until that finishes."""
+    transcription_job = getattr(testimony, "transcription_job", None)
+    if transcription_job is None or transcription_job.status != TranscriptionJobStatus.DONE:
+        raise TestimonyTranslationNotReadyError("Transcript isn't ready yet.")
+
+    job, created = TranslationJob.objects.get_or_create(testimony=testimony, language=language)
+    if created or job.status == TranslationJobStatus.FAILED:
+        job.status = TranslationJobStatus.PENDING
+        job.error_message = ""
+        job.save(update_fields=["status", "error_message", "updated_at"])
+        transaction.on_commit(lambda: run_translation_job.delay(job.id))
+    return job
 
 
 @transaction.atomic
