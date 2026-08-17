@@ -188,3 +188,23 @@ PREMIUM_PLAN_PRICING_MINOR_UNITS = {
     "NGN": 300000,
     "USD": 499,
 }
+
+# Phase 22 groundwork: shared Celery/Redis task queue for async work (AI
+# transcription/translation now; any future off-request-path job routes
+# through the same broker rather than a bespoke polling command per feature).
+# REDIS_URL is the single source of truth so Render's managed Redis
+# connection string (broker + result backend) only needs setting once;
+# CELERY_BROKER_URL/CELERY_RESULT_BACKEND can still override independently
+# if a deployment ever needs to split them.
+REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", REDIS_URL)
+CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", REDIS_URL)
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
+CELERY_TIMEZONE = TIME_ZONE
+CELERY_TASK_TRACK_STARTED = True
+# Belt-and-suspenders alongside each task's own retry policy: a worker that
+# dies mid-task (deploy, OOM) shouldn't silently drop a transcription job.
+CELERY_TASK_ACKS_LATE = True
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
