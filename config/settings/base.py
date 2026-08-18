@@ -28,6 +28,7 @@ INSTALLED_APPS = [
     "apps.testimonies",
     "apps.donations",
     "apps.subscriptions",
+    "apps.creators",
     "apps.notifications",
     "apps.content",
     "apps.app_versions",

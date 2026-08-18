@@ -7,6 +7,7 @@ from apps.notifications.services import (
     notify_admins_of_new_donation,
     notify_all_users_of_app_update,
     notify_all_users_of_scripture_published,
+    notify_creator_digest,
     notify_new_video_testimony_published,
     notify_testimony_approved,
     notify_testimony_comment,
@@ -325,3 +326,54 @@ class NotifyAllUsersOfScripturePublishedTests(TestCase):
 
         self.assertEqual(notified_count, 0)
         send_mock.assert_not_called()
+
+
+class NotifyCreatorDigestTests(TestCase):
+    """Phase 23 Slice 2 -- one notification per follower per creator per
+    run, never one per testimony."""
+
+    def _with_device(self, email: str):
+        user = UserFactory(email=email)
+        DeviceToken.objects.create(user=user, token=f"tok-{email}", platform="android")
+        return user
+
+    def test_creates_one_notification_per_follower_and_pushes(self):
+        follower_a = self._with_device("digest-follower-a@example.com")
+        follower_b = self._with_device("digest-follower-b@example.com")
+
+        with patch("apps.notifications.services.send_push_to_tokens", return_value=[]) as send_mock:
+            with self.captureOnCommitCallbacks(execute=True):
+                notify_creator_digest(
+                    follower_ids=[follower_a.id, follower_b.id],
+                    creator_display_name="Grace Restoration Ministries",
+                    new_testimony_count=3,
+                )
+
+        send_mock.assert_called_once()
+        self.assertEqual(UserNotification.objects.filter(notification_type=NotificationType.CREATOR_DIGEST).count(), 2)
+        notification = UserNotification.objects.get(recipient=follower_a)
+        self.assertIn("Grace Restoration Ministries", notification.title)
+        self.assertIn("3 new testimonies", notification.message)
+        self.assertIsNone(notification.actor)
+
+    def test_singular_wording_for_exactly_one_new_testimony(self):
+        follower = self._with_device("digest-singular@example.com")
+
+        with patch("apps.notifications.services.send_push_to_tokens", return_value=[]):
+            with self.captureOnCommitCallbacks(execute=True):
+                notify_creator_digest(
+                    follower_ids=[follower.id],
+                    creator_display_name="Grace Restoration Ministries",
+                    new_testimony_count=1,
+                )
+
+        notification = UserNotification.objects.get(recipient=follower)
+        self.assertIn("1 new testimony.", notification.message)
+
+    def test_does_nothing_for_an_empty_follower_list(self):
+        with patch("apps.notifications.services.send_push_to_tokens") as send_mock:
+            with self.captureOnCommitCallbacks(execute=True):
+                notify_creator_digest(follower_ids=[], creator_display_name="Grace Restoration Ministries", new_testimony_count=2)
+
+        send_mock.assert_not_called()
+        self.assertEqual(UserNotification.objects.filter(notification_type=NotificationType.CREATOR_DIGEST).count(), 0)

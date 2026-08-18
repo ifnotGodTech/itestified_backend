@@ -302,6 +302,55 @@ def notify_all_users_of_scripture_published(*, scripture, actor=None) -> int:
     return len(rows)
 
 
+def notify_creator_digest(*, follower_ids: Iterable[int], creator_display_name: str, new_testimony_count: int) -> None:
+    """Phase 23 Slice 2 -- one notification per follower per creator per
+    run, never one per testimony (see Phase 23's Background note on why
+    follower notifications must batch). Called from
+    apps.creators.tasks.send_creator_follower_digests, a daily Celery
+    beat task -- actor is None since this isn't triggered by any single
+    user's action."""
+    follower_id_list = list(dict.fromkeys(follower_ids))
+    if not follower_id_list:
+        return
+
+    count_label = "testimony" if new_testimony_count == 1 else "testimonies"
+    title = f"New from {creator_display_name}"
+    message = f"{creator_display_name} shared {new_testimony_count} new {count_label}."
+    rows = [
+        UserNotification(
+            recipient_id=follower_id,
+            actor=None,
+            notification_type=NotificationType.CREATOR_DIGEST,
+            title=title,
+            message=message,
+        )
+        for follower_id in follower_id_list
+    ]
+    UserNotification.objects.bulk_create(rows)
+    send_push_to_users(user_ids=follower_id_list, title=title, body=message)
+
+
+def notify_prayer_response(
+    *, recipient, actor, creator_display_name: str, testimony_title: str, response_text: str
+) -> UserNotification:
+    """Phase 23 Slice 4 -- reaches the original reactor as a real
+    notification, not just a dashboard-visible log row (Phase 23's own
+    test requirement). `actor` is the creator who responded; their
+    Ministry display name (not email) is what the reactor actually
+    recognizes, same reasoning as notify_creator_digest."""
+    title = f"{creator_display_name} responded to your prayer"
+    message = f'On "{testimony_title}": {response_text}'
+    notification = UserNotification.objects.create(
+        recipient=recipient,
+        actor=actor,
+        notification_type=NotificationType.PRAYER_RESPONSE,
+        title=title,
+        message=message,
+    )
+    send_push_to_users(user_ids=[recipient.id], title=title, body=message)
+    return notification
+
+
 def notify_testimony_comment(*, recipient, actor, testimony_title: str) -> UserNotification:
     actor_name = getattr(actor, "full_name", "") or actor.email
     title = "New comment on your testimony"

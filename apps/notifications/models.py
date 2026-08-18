@@ -11,6 +11,8 @@ class NotificationType(models.TextChoices):
     DONATION_RECEIVED = "donation_received", "Donation Received"
     APP_UPDATE_AVAILABLE = "app_update_available", "App Update Available"
     SCRIPTURE_PUBLISHED = "scripture_published", "Scripture Published"
+    CREATOR_DIGEST = "creator_digest", "Creator Digest"
+    PRAYER_RESPONSE = "prayer_response", "Prayer Response"
 
 
 class UserNotification(models.Model):
