@@ -39,6 +39,12 @@ class BrandedExportServiceTests(TestCase):
         with self.assertRaises(MediaExportError):
             request_branded_video_export(testimony_id=self.testimony.id)
 
+    @patch("apps.media_exports.tasks.run_branded_video_export.delay", side_effect=RuntimeError("redis unavailable"))
+    def test_broker_failure_returns_a_retryable_domain_error(self, _delay):
+        with self.assertRaisesMessage(MediaExportError, "export queue is temporarily unavailable"):
+            with self.captureOnCommitCallbacks(execute=True):
+                request_branded_video_export(testimony_id=self.testimony.id)
+
     def test_branding_update_increments_version(self):
         config = MediaExportBrandingConfig.objects.create()
         original_version = config.version

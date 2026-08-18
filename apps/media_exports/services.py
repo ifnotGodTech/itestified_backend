@@ -40,9 +40,22 @@ def build_share_caption(*, title: str, testimony_id: int) -> str:
     return f"{title}\n\nWatch more inspiring testimonies on iTestified: {testimony_share_url(testimony_id)}"
 
 
-def request_branded_video_export(*, testimony_id: int, requested_by=None) -> BrandedVideoExport:
+def enqueue_branded_video_export(export_id: int) -> None:
+    """Queue an export without allowing a broker outage to become HTTP 500."""
     from .tasks import run_branded_video_export
 
+    try:
+        run_branded_video_export.delay(export_id)
+    except Exception as exc:  # noqa: BLE001 - broker exceptions vary by transport.
+        logger.exception("Unable to enqueue branded video export %s", export_id)
+        BrandedVideoExport.objects.filter(id=export_id).update(
+            status=BrandedVideoExportStatus.FAILED,
+            error_message="The export queue is unavailable. Please try again shortly.",
+        )
+        raise MediaExportError("The export queue is temporarily unavailable. Please try again shortly.") from exc
+
+
+def request_branded_video_export(*, testimony_id: int, requested_by=None) -> BrandedVideoExport:
     testimony = Testimony.objects.filter(
         id=testimony_id,
         status=TestimonyStatus.APPROVED,
@@ -64,7 +77,7 @@ def request_branded_video_export(*, testimony_id: int, requested_by=None) -> Bra
         },
     )
     if created:
-        transaction.on_commit(lambda: run_branded_video_export.delay(export.id))
+        transaction.on_commit(lambda: enqueue_branded_video_export(export.id))
         return export
     if not created and export.status == BrandedVideoExportStatus.DONE:
         return export
@@ -76,7 +89,7 @@ def request_branded_video_export(*, testimony_id: int, requested_by=None) -> Bra
     export.source_video_url = testimony.video_url
     export.requested_by = requested_by or export.requested_by
     export.save(update_fields=["status", "error_message", "source_video_url", "requested_by", "updated_at"])
-    transaction.on_commit(lambda: run_branded_video_export.delay(export.id))
+    transaction.on_commit(lambda: enqueue_branded_video_export(export.id))
     return export
 
 

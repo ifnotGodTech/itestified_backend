@@ -1,3 +1,5 @@
+import logging
+
 from rest_framework import generics, status
 from rest_framework.authentication import SessionAuthentication, TokenAuthentication
 from rest_framework.pagination import PageNumberPagination
@@ -12,6 +14,8 @@ from ..models import BrandedVideoExport, BrandedVideoExportStatus
 from ..services import MediaExportError, get_branding_config, request_branded_video_export
 from .serializers import BrandedVideoExportSerializer, MediaExportBrandingConfigSerializer
 
+logger = logging.getLogger(__name__)
+
 
 class MobileBrandedVideoExportView(APIView):
     authentication_classes = [TokenAuthentication]
@@ -22,6 +26,12 @@ class MobileBrandedVideoExportView(APIView):
             export = request_branded_video_export(testimony_id=testimony_id, requested_by=request.user)
         except MediaExportError as exc:
             return Response({"message": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception:  # noqa: BLE001 - keep infrastructure failures JSON and observable.
+            logger.exception("Unexpected branded export request failure for testimony %s", testimony_id)
+            return Response(
+                {"message": "Branded video export is temporarily unavailable. Please try again shortly."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
         return Response(BrandedVideoExportSerializer(export).data, status=status.HTTP_202_ACCEPTED)
 
     def get(self, request, testimony_id: int):

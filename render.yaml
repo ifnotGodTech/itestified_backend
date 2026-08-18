@@ -105,6 +105,12 @@ services:
           type: redis
           name: itestified-redis
           property: connectionString
+      - key: PUBLIC_SHARE_BASE_URL
+        value: https://itestifieddashboard.ifnotgod.com/share
+      - key: CLOUDINARY_URL
+        sync: false
+      - key: CLOUDINARY_BRANDED_EXPORT_FOLDER
+        value: itestified/exports
 
   # Phase 22 groundwork: dedicated worker process draining the shared
   # Celery/Redis queue. Separate from the web service so a slow AI API call
@@ -164,6 +170,12 @@ services:
           type: redis
           name: itestified-redis
           property: connectionString
+      - key: PUBLIC_SHARE_BASE_URL
+        value: https://itestifieddashboard.ifnotgod.com/share
+      - key: CLOUDINARY_URL
+        sync: false
+      - key: CLOUDINARY_BRANDED_EXPORT_FOLDER
+        value: itestified/exports
       - key: OPENAI_API_KEY
         sync: false
 
