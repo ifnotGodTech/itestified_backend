@@ -780,6 +780,19 @@ class TestimonyApiTests(TestCase):
         self.assertEqual(item["reaction_counts"]["praying_for_you"], 3)
         self.assertNotIn("my_reaction", item)
 
+    def test_testimony_detail_exposes_author_id_but_the_list_does_not(self) -> None:
+        """Phase 23 Slice 7 -- mobile links "Follow" from a testimony's
+        author to apps.creators using this field. List payloads stay
+        author_name/author_avatar-only, unchanged."""
+        testimony = Testimony.objects.get(title="God healed me")
+
+        detail_response = self.client.get(reverse("testimony-detail", kwargs={"pk": testimony.id}))
+        self.assertEqual(detail_response.json()["author_id"], testimony.author_id)
+
+        list_response = self.client.get(reverse("testimony-list"))
+        item = next(row for row in list_response.json()["results"] if row["id"] == testimony.id)
+        self.assertNotIn("author_id", item)
+
     def test_testimony_detail_exposes_pull_quote_but_the_list_does_not(self) -> None:
         testimony = Testimony.objects.get(title="God healed me")
         Testimony.objects.filter(id=testimony.id).update(pull_quote="He is still able.")

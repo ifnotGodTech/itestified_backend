@@ -4,6 +4,7 @@ from .views import (
     AdminCreatorProfileListView,
     AdminCreatorProfileVerifyView,
     CreatorAnalyticsView,
+    CreatorAvatarUploadSignatureView,
     CreatorFollowToggleView,
     CreatorProfileMeView,
     PrayerInboxView,
@@ -13,6 +14,7 @@ from .views import (
 
 urlpatterns = [
     path("me/", CreatorProfileMeView.as_view(), name="creator-profile-me"),
+    path("me/avatar-upload-signature/", CreatorAvatarUploadSignatureView.as_view(), name="creator-avatar-upload-signature"),
     path("me/analytics/", CreatorAnalyticsView.as_view(), name="creator-analytics"),
     path("me/prayer-inbox/", PrayerInboxView.as_view(), name="creator-prayer-inbox"),
     path("prayer-reactions/<int:reaction_id>/respond/", PrayerReactionRespondView.as_view(), name="creator-prayer-reaction-respond"),

@@ -71,6 +71,12 @@ def create_direct_upload_signature(*, resource_type: str) -> CloudinaryUploadSig
             or common_upload_folder
             or "itestified/profile/avatars"
         )
+    elif resource_type == "creator_avatar":
+        folder = (
+            os.environ.get("CLOUDINARY_CREATOR_AVATAR_FOLDER", "").strip()
+            or common_upload_folder
+            or "itestified/creators/avatars"
+        )
     elif resource_type == "inspirational_picture":
         folder = (
             os.environ.get("CLOUDINARY_INSPIRATIONAL_PICTURE_FOLDER", "").strip()

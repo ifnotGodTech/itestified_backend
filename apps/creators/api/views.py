@@ -6,6 +6,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.authn.api.permissions import IsActiveAdmin
+from apps.common.services.media_uploads import CloudinaryUploadError, create_direct_upload_signature
 from apps.creators.exceptions import (
     CannotFollowSelfError,
     CreatorProfileAlreadyExistsError,
@@ -32,6 +33,7 @@ from apps.creators.services.commands import (
     update_creator_profile,
     verify_creator_profile,
 )
+from apps.subscriptions.selectors import is_user_premium
 
 from .serializers import (
     AdminCreatorProfileSerializer,
@@ -62,6 +64,7 @@ class CreatorProfileMeView(APIView):
                 user=request.user,
                 display_name=serializer.validated_data["display_name"],
                 bio=serializer.validated_data.get("bio", ""),
+                avatar_url=serializer.validated_data.get("avatar_url", ""),
             )
         except CreatorProfileNotEligibleError as exc:
             return Response({"message": str(exc)}, status=status.HTTP_403_FORBIDDEN)
@@ -77,12 +80,48 @@ class CreatorProfileMeView(APIView):
                 user=request.user,
                 display_name=serializer.validated_data.get("display_name"),
                 bio=serializer.validated_data.get("bio"),
+                avatar_url=serializer.validated_data.get("avatar_url"),
             )
         except CreatorProfileNotEligibleError as exc:
             return Response({"message": str(exc)}, status=status.HTTP_403_FORBIDDEN)
         except CreatorProfileNotFoundError as exc:
             return Response({"message": str(exc)}, status=status.HTTP_404_NOT_FOUND)
         return Response(CreatorProfileSerializer(profile).data, status=status.HTTP_200_OK)
+
+
+class CreatorAvatarUploadSignatureView(APIView):
+    """Signed direct-to-Cloudinary upload, same pattern as
+    ProfileAvatarUploadSignatureView (apps.users.api.views) for the
+    personal account photo -- this is the Ministry's own, separate photo.
+    Premium-gated like the rest of Ministry profile management, not
+    dependent on a CreatorProfile already existing (a user picks a photo
+    as part of the same create form, before the profile row exists)."""
+
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        if not is_user_premium(request.user):
+            return Response(
+                {"message": "A Premium subscription is required to upload a Ministry photo."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        try:
+            upload_signature = create_direct_upload_signature(resource_type="creator_avatar")
+        except CloudinaryUploadError as exc:
+            return Response({"message": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(
+            {
+                "cloud_name": upload_signature.cloud_name,
+                "api_key": upload_signature.api_key,
+                "timestamp": upload_signature.timestamp,
+                "folder": upload_signature.folder,
+                "signature": upload_signature.signature,
+                "resource_type": "image",
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class PublicCreatorProfileDetailView(APIView):

@@ -18,7 +18,7 @@ from apps.subscriptions.selectors import is_user_premium
 from apps.testimonies.models import TestimonyReaction, TestimonyReactionType
 
 
-def create_creator_profile(*, user, display_name: str, bio: str = "") -> CreatorProfile:
+def create_creator_profile(*, user, display_name: str, bio: str = "", avatar_url: str = "") -> CreatorProfile:
     """Phase 23 Slice 1. Premium-gated regardless of content type (see
     Phase 23's Background note) -- not a DB constraint, since premium
     status changes over time and a schema constraint can't reference
@@ -28,10 +28,12 @@ def create_creator_profile(*, user, display_name: str, bio: str = "") -> Creator
     if CreatorProfile.objects.filter(user=user).exists():
         raise CreatorProfileAlreadyExistsError("This account already has a Ministry profile.")
 
-    return CreatorProfile.objects.create(user=user, display_name=display_name, bio=bio)
+    return CreatorProfile.objects.create(user=user, display_name=display_name, bio=bio, avatar_url=avatar_url)
 
 
-def update_creator_profile(*, user, display_name: str | None = None, bio: str | None = None) -> CreatorProfile:
+def update_creator_profile(
+    *, user, display_name: str | None = None, bio: str | None = None, avatar_url: str | None = None
+) -> CreatorProfile:
     """A lapsed-Premium creator keeps their existing profile fully intact
     (never clawed back) but can't edit it until resubscribed -- same rule
     Phase 21 applies to cancellation and Phase 32 applies to upload."""
@@ -46,6 +48,9 @@ def update_creator_profile(*, user, display_name: str | None = None, bio: str | 
     if display_name is not None:
         profile.display_name = display_name
         update_fields.append("display_name")
+    if avatar_url is not None:
+        profile.avatar_url = avatar_url
+        update_fields.append("avatar_url")
     if bio is not None:
         profile.bio = bio
         update_fields.append("bio")

@@ -1594,17 +1594,34 @@ Background: proposed 2026-08-04, same blueprint review as Phase 21.
 Build:
 - local caching of video/audio testimonies for offline playback, gated behind Phase 21's entitlement check
 - scoped explicitly as convenience caching, not DRM-protected download — redistribution protection is a separate, much larger problem intentionally kept out of scope here
+- server-generated branded export copies for videos shared to social media or saved to the device gallery
+- every branded export carries iTestified attribution and a call to action to install/open iTestified for more inspiring testimonies
+- branded exports retain the existing testimony deep link in the share caption/metadata contract
 
 Sub-slices:
 
 #### Mobile User Flows
-- **Slice 1 — Download a testimony for offline playback**
-- **Slice 2 — Manage downloaded content** — storage limits, remove downloads
+- **Slice 1 — Download a testimony for offline playback** — ✅ **Completed 2026-08-18** — Premium-gated local video caching, persisted metadata, progress state, local-file playback, and a 500 MB per-device limit.
+- **Slice 2 — Manage downloaded content** — ✅ **Completed 2026-08-18** — Profile-accessible downloads list, individual removal, remove-all flow, refresh, storage usage indicator, and reopening saved testimonies.
+- **Slice 5 — Share or save a branded video export** — ✅ **Completed 2026-08-18** — request and poll the branded derivative, share it through the native share sheet, or save it to the device gallery; the existing link-sharing flow remains unchanged and is included in the caption
+
+#### Backend Flows
+- **Slice 3 — Generate a branded export derivative** — ✅ **Completed 2026-08-18** — for approved public video testimonies, create or reuse a server-side Cloudinary-branded asset with iTestified watermark/logo/end-card overlays; expose an authenticated, idempotent request/status contract for mobile; never replace the original playback asset
+- **Slice 4 — Export policy and branding configuration** — ✅ **Completed 2026-08-18** — persist the active logo/watermark/end-card configuration, provide authenticated admin read/update endpoints and export status visibility, version branding changes so new derivatives are regenerated without mutating old ones, and keep the public deep-link URL stable
+
+#### Dashboard/Admin User Flows
+- **Slice 6 — Manage export branding** — ✅ **Completed 2026-08-18** — dashboard surface for branding assets, CTA copy, enable/disable state, export-generation status/error visibility, branding preview, and confirmation before changes affect future externally shared media
 
 Test:
 - an explicit product decision, then a matching test, for whether downloaded content stays playable after a subscription lapses
+- branded exports are generated from the approved testimony asset, never from an unmoderated/pending asset
+- repeated export requests reuse an existing matching derivative rather than creating duplicate media jobs
+- an export includes the iTestified attribution/end card and the stable testimony deep link is available to the mobile share contract
+- admin branding changes affect newly generated exports without mutating existing offline files or the original testimony video
 
-Status: not started
+Product decision (2026-08-18): downloads are convenience caching, not DRM. Premium is required when creating a download, but an already-downloaded file remains playable after the subscription lapses because offline playback cannot reliably re-check entitlement and the product explicitly excludes redistribution protection. Users can remove individual downloads or clear the full cache. The mobile implementation uses a 500 MB per-device cache limit and persists only local metadata plus files; no media bytes pass through the backend. Social/gallery sharing is a separate branded-export path: the original offline file stays private, while any exported file receives server-side iTestified attribution and a CTA.
+
+Status: In progress — Mobile Slices 1-2 and 5, Backend Slices 3-4, and Dashboard Slice 6 implemented 2026-08-18. Video is wired first; the export contract remains media-type agnostic so Phase 28 audio can reuse it.
 
 ### Phase 26: Multi-Currency & Multi-Region Expansion
 

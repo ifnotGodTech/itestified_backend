@@ -186,12 +186,21 @@ class TestimonyListSerializer(serializers.ModelSerializer):
 
 
 class TestimonyDetailSerializer(TestimonyListSerializer):
+    # Phase 23 Slice 7 -- the only place a testimony exposes its author's
+    # real user id (list payloads stay author_name/author_avatar-only,
+    # unchanged, to avoid widening an already-widely-consumed shape).
+    # Mobile uses this to link "Follow" from a testimony's author row to
+    # apps.creators' public profile endpoint -- a 404 there just means
+    # this particular author isn't a Ministry account, handled gracefully
+    # client-side, not something this field needs to pre-filter.
+    author_id = serializers.IntegerField(source="author.id", read_only=True)
     my_reaction = serializers.SerializerMethodField()
     transcript_status = serializers.SerializerMethodField()
     transcript = serializers.SerializerMethodField()
 
     class Meta(TestimonyListSerializer.Meta):
         fields = TestimonyListSerializer.Meta.fields + (
+            "author_id",
             "body",
             "video_url",
             "thumbnail_url",

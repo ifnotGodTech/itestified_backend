@@ -34,6 +34,7 @@ INSTALLED_APPS = [
     "apps.app_versions",
     "apps.social_links",
     "apps.profile_content",
+    "apps.media_exports",
 ]
 
 MIDDLEWARE = [

@@ -21,6 +21,12 @@ class CreatorProfile(models.Model):
     )
     display_name = models.CharField(max_length=255)
     bio = models.TextField(blank=True)
+    # Deliberately separate from Profile.avatar (the personal account
+    # photo) -- a Ministry can have a distinct public-facing photo from
+    # whoever operates it. Same signed-direct-to-Cloudinary pattern as
+    # the personal avatar (apps.common.services.media_uploads), its own
+    # "creator_avatar" resource_type/folder.
+    avatar_url = models.URLField(blank=True)
     # Admin-granted trust signal, layered on top of the Premium gate above
     # rather than replacing it -- see Phase 23's Background note. Never
     # gates followability, analytics, or the prayer inbox; only whether the
