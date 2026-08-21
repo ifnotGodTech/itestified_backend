@@ -1,3 +1,4 @@
+from django.db.models import F
 from rest_framework import generics, status
 from rest_framework.authentication import SessionAuthentication, TokenAuthentication
 from rest_framework.pagination import PageNumberPagination
@@ -28,6 +29,7 @@ from apps.creators.selectors import (
 from apps.creators.services.commands import (
     create_creator_profile,
     follow_creator,
+    request_creator_verification,
     respond_to_prayer_reaction,
     unfollow_creator,
     update_creator_profile,
@@ -84,6 +86,20 @@ class CreatorProfileMeView(APIView):
             )
         except CreatorProfileNotEligibleError as exc:
             return Response({"message": str(exc)}, status=status.HTTP_403_FORBIDDEN)
+        except CreatorProfileNotFoundError as exc:
+            return Response({"message": str(exc)}, status=status.HTTP_404_NOT_FOUND)
+        return Response(CreatorProfileSerializer(profile).data, status=status.HTTP_200_OK)
+
+
+class CreatorRequestVerificationView(APIView):
+    """Phase 23 Slice 14 -- owner-initiated, idempotent."""
+
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        try:
+            profile = request_creator_verification(user=request.user)
         except CreatorProfileNotFoundError as exc:
             return Response({"message": str(exc)}, status=status.HTTP_404_NOT_FOUND)
         return Response(CreatorProfileSerializer(profile).data, status=status.HTTP_200_OK)
@@ -219,7 +235,13 @@ class PrayerReactionRespondView(APIView):
 
 
 class AdminCreatorProfileListView(generics.ListAPIView):
-    """Phase 23 Slice 5 (admin)."""
+    """Phase 23 Slice 5 (admin). Ordered so a real verification-request
+    queue (Slice 14) falls out of the same list rather than needing a
+    separate endpoint: requested-and-not-yet-verified profiles surface
+    first, oldest request first (mirrors Phase 4 Slice 1's moderation
+    queue), with profiles that never requested trailing at the bottom --
+    still visible via the `is_verified` filter below, just not competing
+    for the admin's attention at the top."""
 
     authentication_classes = [SessionAuthentication]
     permission_classes = [IsActiveAdmin]
@@ -227,7 +249,10 @@ class AdminCreatorProfileListView(generics.ListAPIView):
     pagination_class = CreatorPagination
 
     def get_queryset(self):
-        queryset = CreatorProfile.objects.select_related("user", "verified_by").order_by("-created_at")
+        queryset = (
+            CreatorProfile.objects.select_related("user", "verified_by")
+            .order_by(F("verification_requested_at").asc(nulls_last=True), "-created_at")
+        )
         is_verified_param = self.request.query_params.get("is_verified")
         if is_verified_param in {"true", "false"}:
             queryset = queryset.filter(is_verified=(is_verified_param == "true"))

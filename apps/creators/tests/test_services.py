@@ -15,6 +15,7 @@ from apps.creators.selectors import get_creator_analytics
 from apps.creators.services.commands import (
     create_creator_profile,
     follow_creator,
+    respond_to_prayer_reaction,
     unfollow_creator,
     update_creator_profile,
 )
@@ -200,6 +201,9 @@ class CreatorAnalyticsTests(TestCase):
             analytics["reaction_counts"],
             {"praying_for_you": 2, "amen": 1, "gives_me_hope": 0},
         )
+        # Both praying_for_you reactions are unresponded -- Slice 13's hub
+        # stat tile needs this count.
+        self.assertEqual(analytics["pending_response_count"], 2)
 
     def test_a_creator_with_no_approved_testimonies_gets_zeroed_analytics_not_an_error(self):
         creator = _premium_user(email="creator@example.com")
@@ -211,3 +215,22 @@ class CreatorAnalyticsTests(TestCase):
         self.assertEqual(analytics["testimony_count"], 0)
         self.assertEqual(analytics["total_views"], 0)
         self.assertEqual(analytics["total_reactions"], 0)
+        self.assertEqual(analytics["pending_response_count"], 0)
+
+    def test_pending_response_count_excludes_already_responded_reactions(self):
+        creator = _premium_user(email="creator@example.com")
+        create_creator_profile(user=creator, display_name="Grace Restoration Ministries")
+        category = TestimonyCategory.objects.create(name="Healing", slug="healing")
+        approved = self._approved_testimony(creator, category, "Testimony One")
+
+        reactor_a = _free_user(email="reactor-a@example.com")
+        reactor_b = _free_user(email="reactor-b@example.com")
+        answered = TestimonyReaction.objects.create(
+            user=reactor_a, testimony=approved, reaction_type=TestimonyReactionType.PRAYING_FOR_YOU
+        )
+        TestimonyReaction.objects.create(user=reactor_b, testimony=approved, reaction_type=TestimonyReactionType.PRAYING_FOR_YOU)
+        respond_to_prayer_reaction(creator=creator, reaction_id=answered.id, response_text="Praying with you too.")
+
+        analytics = get_creator_analytics(creator_user_id=creator.id)
+
+        self.assertEqual(analytics["pending_response_count"], 1)

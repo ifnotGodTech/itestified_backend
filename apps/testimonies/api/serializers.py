@@ -161,12 +161,26 @@ class TestimonyListSerializer(serializers.ModelSerializer):
         )
 
     def get_author_name(self, obj: Testimony) -> str:
+        # Phase 23 Slice 10 -- a Ministry's own display name takes over
+        # everywhere its content is shown publicly, since the whole point
+        # of setting one up is to be recognized by it, not by whoever
+        # personally operates the account. Callers must select_related
+        # "author__creator_profile" (see services/queries.py and the
+        # public/favorites/for-you querysets in views.py) for this to stay
+        # free of extra queries -- getattr returns None safely either way
+        # if a caller forgets, just at N+1 cost instead of a crash.
+        creator_profile = getattr(obj.author, "creator_profile", None)
+        if creator_profile and creator_profile.display_name.strip():
+            return creator_profile.display_name
         profile = getattr(obj.author, "profile", None)
         if profile and profile.full_name.strip():
             return profile.full_name
         return obj.author.email
 
     def get_author_avatar(self, obj: Testimony) -> str:
+        creator_profile = getattr(obj.author, "creator_profile", None)
+        if creator_profile and creator_profile.avatar_url:
+            return creator_profile.avatar_url
         profile = getattr(obj.author, "profile", None)
         return profile.avatar if profile else ""
 

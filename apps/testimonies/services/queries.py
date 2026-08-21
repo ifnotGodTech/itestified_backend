@@ -102,7 +102,7 @@ def _rotated_window_ids(
 
 def _testimonies_for_ids(window_ids: list[int]) -> list[Testimony]:
     testimonies_by_id = Testimony.objects.select_related(
-        "author", "author__profile", "category"
+        "author", "author__profile", "author__creator_profile", "category"
     ).in_bulk(window_ids)
     return [
         testimonies_by_id[testimony_id]
@@ -188,7 +188,7 @@ def home_feed_page(
         return {"results": _testimonies_for_ids(window_ids), "next_page": page + 1}
 
     base_queryset = _home_feed_base_queryset(user).select_related(
-        "author", "author__profile", "category"
+        "author", "author__profile", "author__creator_profile", "category"
     )
     total = base_queryset.count()
     if total == 0:

@@ -43,12 +43,19 @@ def get_creator_analytics(*, creator_user_id: int) -> dict:
         reaction_counts[row["reaction_type"]] = row["count"]
         total_reactions += row["count"]
 
+    pending_response_count = TestimonyReaction.objects.filter(
+        testimony__author_id=creator_user_id,
+        reaction_type=TestimonyReactionType.PRAYING_FOR_YOU,
+        prayer_response__isnull=True,
+    ).count()
+
     return {
         "follower_count": follower_count(creator_user_id=creator_user_id),
         "testimony_count": testimony_count,
         "total_views": total_views,
         "total_reactions": total_reactions,
         "reaction_counts": reaction_counts,
+        "pending_response_count": pending_response_count,
     }
 
 

@@ -40,6 +40,16 @@ class CreatorProfile(models.Model):
         blank=True,
         related_name="verified_creator_profiles",
     )
+    # Phase 23 Slice 14 -- owner-initiated, never set automatically at
+    # profile creation. Unlike a testimony, an unverified profile is
+    # already fully functional (followable, has stats, receives prayer
+    # reactions), so auto-queuing every new profile the way testimony
+    # submission does would flood the admin queue with accounts that
+    # never asked to be reviewed. Left set after verification (not
+    # cleared) -- it's a historical "when did they ask" marker, not a
+    # live queue-membership flag; `is_verified` is what actually gates
+    # the admin queue view.
+    verification_requested_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

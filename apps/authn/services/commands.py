@@ -18,6 +18,7 @@ from rest_framework.authtoken.models import Token
 
 from apps.common.exceptions import EmailProviderNotConfiguredError
 from apps.common.services.email import send_email as _shared_send_email
+from apps.creators.models import CreatorFollow, CreatorProfile
 from apps.notifications.services import deregister_all_devices_for_user
 from apps.users.choices import AdminAssignmentStatus, AdminRoleCode, UserAccountStatus
 from apps.users.models import AdminAssignment, AdminRole, Profile, User
@@ -618,7 +619,21 @@ def delete_own_account(*, user: User, current_password: str, reason: str, detail
     deleted user's past contributions show as "Deleted User" everywhere,
     with no other code changes required. Device tokens ARE removed (unlike
     testimonies/donations) -- there's no legitimate reason to keep pushing
-    notifications to a deleted account's device."""
+    notifications to a deleted account's device.
+
+    Phase 23 Slice 12 -- a Ministry identity is hard-deleted, not scrubbed
+    in place like Profile.full_name is above: it isn't shared content other
+    users depend on the way testimonies/donations are, and its whole point
+    is to be a recognizable public identity, so leaving a "Deleted Ministry"
+    label behind would be a strange middle ground. An old testimony's
+    author-row tap then falls back to the same "not a Ministry account"
+    state already handled gracefully for any non-Ministry author (Phase 23
+    Slice 7). CreatorFollow rows are deleted explicitly -- they FK to User,
+    not CreatorProfile, so they wouldn't be cleaned up by CreatorProfile's
+    own on_delete=CASCADE. PrayerResponse rows already sent are left
+    untouched, same reasoning as comments: the content stays, only the
+    identity behind it changes (via the personal-name scrub above,
+    since PrayerResponse.responded_by is the User, not the CreatorProfile)."""
     if not check_password(current_password, user.password):
         raise AuthnError("Current password is incorrect.")
 
@@ -648,6 +663,9 @@ def delete_own_account(*, user: User, current_password: str, reason: str, detail
         Token.objects.filter(user=user).delete()
         _invalidate_user_sessions(user)
         deregister_all_devices_for_user(user=user)
+
+        CreatorFollow.objects.filter(creator=user).delete()
+        CreatorProfile.objects.filter(user=user).delete()
 
 
 def login_admin_user(*, email: str, password: str) -> tuple[User, AdminAssignment]:

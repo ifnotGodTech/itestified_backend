@@ -451,6 +451,50 @@ class AuthnApiTests(TestCase):
         self.assertEqual(detail_response.status_code, 200)
         self.assertEqual(detail_response.json()["author_name"], "Deleted User")
 
+    def test_delete_account_removes_the_users_ministry_identity(self) -> None:
+        from apps.creators.models import CreatorFollow, CreatorProfile
+
+        ministry_user = UserFactory(email="delete-ministry@example.com")
+        ProfileFactory(user=ministry_user, full_name="Daniel Okafor")
+        token = Token.objects.create(user=ministry_user)
+        CreatorProfile.objects.create(user=ministry_user, display_name="Grace Community Ministry")
+        category = TestimonyCategory.objects.create(name="Healing", slug="healing")
+        testimony = Testimony.objects.create(
+            author=ministry_user,
+            category=category,
+            title="God's faithfulness",
+            body="Body.",
+            testimony_type=TestimonyType.WRITTEN,
+            status=TestimonyStatus.APPROVED,
+        )
+        follower = UserFactory(email="follower-of-deleted-ministry@example.com")
+        ProfileFactory(user=follower, full_name="Follower")
+        CreatorFollow.objects.create(follower=follower, creator=ministry_user)
+
+        response = self.client.post(
+            reverse("auth-mobile-delete-account"),
+            {"current_password": "StrongPass!1", "reason": "not_using"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+        self.assertEqual(response.status_code, 200)
+
+        self.assertFalse(CreatorProfile.objects.filter(user=ministry_user).exists())
+        self.assertFalse(CreatorFollow.objects.filter(creator=ministry_user).exists())
+
+        # The old testimony's author-row falls back to the same "not a
+        # Ministry account" state as any non-Ministry author, and shows the
+        # scrubbed personal name -- never a lingering Ministry name.
+        detail_response = self.client.get(reverse("testimony-detail", kwargs={"pk": testimony.id}))
+        self.assertEqual(detail_response.json()["author_name"], "Deleted User")
+
+        follower_token = Token.objects.create(user=follower)
+        public_profile_response = self.client.get(
+            reverse("creator-profile-detail", kwargs={"user_id": ministry_user.id}),
+            HTTP_AUTHORIZATION=f"Token {follower_token.key}",
+        )
+        self.assertEqual(public_profile_response.status_code, 404)
+
     @override_settings(OTP_HINT_IN_RESPONSE=True)
     def test_super_admin_can_invite_admin_role(self) -> None:
         inviter, temporary_password = bootstrap_super_admin(email="super@example.com", full_name="Super One")

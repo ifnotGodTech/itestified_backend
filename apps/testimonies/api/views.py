@@ -167,7 +167,7 @@ class ForYouTestimonyListView(generics.ListAPIView):
         if not category_ids:
             return Testimony.objects.none()
         return (
-            Testimony.objects.select_related("author", "author__profile", "category")
+            Testimony.objects.select_related("author", "author__profile", "author__creator_profile", "category")
             .filter(
                 status=TestimonyStatus.APPROVED,
                 category__is_active=True,
@@ -183,16 +183,26 @@ class PublicTestimonyListView(generics.ListAPIView):
     pagination_class = TestimonyPagination
 
     def get_queryset(self):
-        queryset = Testimony.objects.select_related("author", "author__profile", "category").filter(
+        queryset = Testimony.objects.select_related(
+            "author", "author__profile", "author__creator_profile", "category"
+        ).filter(
             status=TestimonyStatus.APPROVED,
             category__is_active=True,
         )
         category_slug = (self.request.query_params.get("category") or "").strip()
         search_text = (self.request.query_params.get("search") or "").strip()
+        ministry_only = (self.request.query_params.get("ministry_only") or "").strip().lower() == "true"
         if category_slug:
             queryset = queryset.filter(category__slug=category_slug)
         if search_text:
             queryset = queryset.filter(title__icontains=search_text)
+        if ministry_only:
+            # Phase 23 Slice 11 -- lets a user discover Ministries through
+            # their content directly, rather than only stumbling into one
+            # via a random testimony. Not gated on is_verified: per this
+            # phase's own Background note, verification only decides
+            # whether the badge renders, never who's discoverable.
+            queryset = queryset.filter(author__creator_profile__isnull=False)
         return queryset
 
 
@@ -244,7 +254,7 @@ class PublicTestimonyDetailView(generics.RetrieveAPIView):
 
     def get_queryset(self):
         return Testimony.objects.select_related(
-            "author", "author__profile", "category", "transcription_job"
+            "author", "author__profile", "author__creator_profile", "category", "transcription_job"
         ).filter(
             status=TestimonyStatus.APPROVED,
             category__is_active=True,
@@ -336,7 +346,7 @@ class AuthenticatedMyTestimonyListView(generics.ListAPIView):
 
     def get_queryset(self):
         return Testimony.objects.select_related(
-            "author", "author__profile", "category", "transcription_job"
+            "author", "author__profile", "author__creator_profile", "category", "transcription_job"
         ).filter(author=self.request.user).order_by("-created_at", "-id")
 
 
@@ -408,7 +418,9 @@ class FavoriteTestimonyListView(generics.ListAPIView):
     pagination_class = TestimonyPagination
 
     def get_queryset(self):
-        return Testimony.objects.select_related("author", "author__profile", "category").filter(
+        return Testimony.objects.select_related(
+            "author", "author__profile", "author__creator_profile", "category"
+        ).filter(
             favorited_by__user=self.request.user,
             status=TestimonyStatus.APPROVED,
             category__is_active=True,

@@ -114,6 +114,22 @@ def respond_to_prayer_reaction(*, creator, reaction_id: int, response_text: str)
     return response
 
 
+def request_creator_verification(*, user) -> CreatorProfile:
+    """Phase 23 Slice 14 -- owner-initiated, idempotent: a repeat call once
+    already requested or already verified is a no-op, not an error,
+    matching this app's established follow/unfollow idempotency
+    convention rather than raising on a harmless double-tap."""
+    try:
+        profile = CreatorProfile.objects.get(user=user)
+    except CreatorProfile.DoesNotExist as exc:
+        raise CreatorProfileNotFoundError("No Ministry profile exists for this account.") from exc
+
+    if profile.verification_requested_at is None and not profile.is_verified:
+        profile.verification_requested_at = timezone.now()
+        profile.save(update_fields=["verification_requested_at", "updated_at"])
+    return profile
+
+
 def verify_creator_profile(*, creator_profile: CreatorProfile, admin_user, is_verified: bool) -> CreatorProfile:
     """Phase 23 Slice 5 (admin). Never touches moderation status or
     visibility of the creator's testimonies -- verification and moderation

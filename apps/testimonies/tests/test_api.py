@@ -1204,6 +1204,163 @@ class TestimonyApiTests(TestCase):
         self.assertEqual(testimony.comment_count, 0)
 
 
+class TestimonyAuthorDisplayMinistryNameTests(TestCase):
+    """Phase 23 Slice 10 -- once an author has a CreatorProfile, their
+    Ministry name/photo takes over from their personal name/photo
+    everywhere a testimony is shown, on every surface this touches."""
+
+    def setUp(self) -> None:
+        cache.clear()
+        self.category = TestimonyCategory.objects.create(name="Healing", slug="healing")
+        self.ministry_user = UserFactory(email="ministry@example.com")
+        ProfileFactory(user=self.ministry_user, full_name="Daniel Okafor")
+        from apps.creators.models import CreatorProfile
+
+        CreatorProfile.objects.create(
+            user=self.ministry_user,
+            display_name="Grace Community Ministry",
+            bio="Bio.",
+            avatar_url="https://res.cloudinary.com/itestified/image/upload/ministry.jpg",
+        )
+        self.testimony = Testimony.objects.create(
+            author=self.ministry_user,
+            category=self.category,
+            title="God's faithfulness",
+            body="Body.",
+            testimony_type=TestimonyType.WRITTEN,
+            status=TestimonyStatus.APPROVED,
+        )
+
+    def test_public_list_shows_the_ministry_name_and_photo_not_the_personal_ones(self) -> None:
+        response = self.client.get(reverse("testimony-list"))
+
+        self.assertEqual(response.status_code, 200)
+        row = next(item for item in response.json()["results"] if item["id"] == self.testimony.id)
+        self.assertEqual(row["author_name"], "Grace Community Ministry")
+        self.assertEqual(row["author_avatar"], "https://res.cloudinary.com/itestified/image/upload/ministry.jpg")
+
+    def test_public_detail_shows_the_ministry_name_and_photo(self) -> None:
+        response = self.client.get(reverse("testimony-detail", kwargs={"pk": self.testimony.pk}))
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["author_name"], "Grace Community Ministry")
+        self.assertEqual(body["author_avatar"], "https://res.cloudinary.com/itestified/image/upload/ministry.jpg")
+
+    def test_a_testimony_predating_the_ministry_profile_also_shows_it_retroactively(self) -> None:
+        # No special backfill needed -- this is the same testimony created
+        # in setUp after the CreatorProfile already existed, but the point
+        # being tested is that the lookup is by author_id at read time, not
+        # a value copied onto the testimony at submission time, so a
+        # pre-Ministry testimony gets exactly the same treatment.
+        older_testimony = Testimony.objects.create(
+            author=self.ministry_user,
+            category=self.category,
+            title="An earlier story",
+            body="Body.",
+            testimony_type=TestimonyType.WRITTEN,
+            status=TestimonyStatus.APPROVED,
+        )
+
+        response = self.client.get(reverse("testimony-detail", kwargs={"pk": older_testimony.pk}))
+
+        self.assertEqual(response.json()["author_name"], "Grace Community Ministry")
+
+    def test_an_author_without_a_ministry_profile_still_shows_their_personal_name(self) -> None:
+        ordinary_author = UserFactory(email="ordinary@example.com")
+        ProfileFactory(user=ordinary_author, full_name="Ordinary Author")
+        ordinary_testimony = Testimony.objects.create(
+            author=ordinary_author,
+            category=self.category,
+            title="An ordinary testimony",
+            body="Body.",
+            testimony_type=TestimonyType.WRITTEN,
+            status=TestimonyStatus.APPROVED,
+        )
+
+        response = self.client.get(reverse("testimony-detail", kwargs={"pk": ordinary_testimony.pk}))
+
+        self.assertEqual(response.json()["author_name"], "Ordinary Author")
+
+    def test_favorites_list_shows_the_ministry_name(self) -> None:
+        user = UserFactory(email="fan@example.com")
+        ProfileFactory(user=user, full_name="Fan")
+        token = Token.objects.create(user=user)
+        TestimonyFavorite.objects.create(user=user, testimony=self.testimony)
+
+        response = self.client.get(reverse("testimony-favorite-feed"), HTTP_AUTHORIZATION=f"Token {token.key}")
+
+        self.assertEqual(response.status_code, 200)
+        row = next(item for item in response.json()["results"] if item["id"] == self.testimony.id)
+        self.assertEqual(row["author_name"], "Grace Community Ministry")
+
+    def test_my_testimonies_list_shows_the_ministry_name_for_the_ministrys_own_submissions(self) -> None:
+        token = Token.objects.create(user=self.ministry_user)
+
+        response = self.client.get(reverse("testimony-mine-list"), HTTP_AUTHORIZATION=f"Token {token.key}")
+
+        self.assertEqual(response.status_code, 200)
+        row = next(item for item in response.json()["results"] if item["id"] == self.testimony.id)
+        self.assertEqual(row["author_name"], "Grace Community Ministry")
+
+
+class BrowseMinistryTestimoniesFilterTests(TestCase):
+    """Phase 23 Slice 11 -- ?ministry_only=true on the public browse
+    endpoint, so a user can discover Ministries through their content."""
+
+    def setUp(self) -> None:
+        cache.clear()
+        from apps.creators.models import CreatorProfile
+
+        self.category = TestimonyCategory.objects.create(name="Healing", slug="healing")
+
+        ministry_user = UserFactory(email="ministry@example.com")
+        ProfileFactory(user=ministry_user, full_name="Daniel Okafor")
+        CreatorProfile.objects.create(user=ministry_user, display_name="Grace Community Ministry")
+        self.ministry_testimony = Testimony.objects.create(
+            author=ministry_user,
+            category=self.category,
+            title="Ministry testimony",
+            body="Body.",
+            testimony_type=TestimonyType.WRITTEN,
+            status=TestimonyStatus.APPROVED,
+        )
+
+        ordinary_user = UserFactory(email="ordinary@example.com")
+        ProfileFactory(user=ordinary_user, full_name="Ordinary Author")
+        self.ordinary_testimony = Testimony.objects.create(
+            author=ordinary_user,
+            category=self.category,
+            title="Ordinary testimony",
+            body="Body.",
+            testimony_type=TestimonyType.WRITTEN,
+            status=TestimonyStatus.APPROVED,
+        )
+
+    def test_default_browse_includes_both(self) -> None:
+        response = self.client.get(reverse("testimony-list"))
+
+        ids = {row["id"] for row in response.json()["results"]}
+        self.assertIn(self.ministry_testimony.id, ids)
+        self.assertIn(self.ordinary_testimony.id, ids)
+
+    def test_ministry_only_excludes_non_ministry_authors(self) -> None:
+        response = self.client.get(f'{reverse("testimony-list")}?ministry_only=true')
+
+        ids = {row["id"] for row in response.json()["results"]}
+        self.assertIn(self.ministry_testimony.id, ids)
+        self.assertNotIn(self.ordinary_testimony.id, ids)
+
+    def test_ministry_only_includes_unverified_ministries_too(self) -> None:
+        # Verification is a badge, never a discoverability gate (Phase 23's
+        # own Background note) -- the CreatorProfile in setUp is deliberately
+        # left unverified, and its testimony must still appear here.
+        response = self.client.get(f'{reverse("testimony-list")}?ministry_only=true')
+
+        ids = {row["id"] for row in response.json()["results"]}
+        self.assertIn(self.ministry_testimony.id, ids)
+
+
 class AdminTestimonyApiTests(TestCase):
     def setUp(self) -> None:
         self.category = TestimonyCategory.objects.create(

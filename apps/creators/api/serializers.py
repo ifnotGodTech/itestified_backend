@@ -7,21 +7,35 @@ from apps.testimonies.models import TestimonyReaction
 
 
 class CreatorProfileSerializer(serializers.ModelSerializer):
-    """Own-profile create/update/read shape (Slice 1)."""
+    """Own-profile create/update/read shape (Slice 1). `user_id` lets
+    mobile open this same account's public profile in preview (Slice 13's
+    "View public profile" action) without a second lookup."""
+
+    user_id = serializers.IntegerField(source="user.id", read_only=True)
 
     class Meta:
         model = CreatorProfile
         fields = (
             "id",
+            "user_id",
             "display_name",
             "bio",
             "avatar_url",
             "is_verified",
             "verified_at",
+            "verification_requested_at",
             "created_at",
             "updated_at",
         )
-        read_only_fields = ("id", "is_verified", "verified_at", "created_at", "updated_at")
+        read_only_fields = (
+            "id",
+            "user_id",
+            "is_verified",
+            "verified_at",
+            "verification_requested_at",
+            "created_at",
+            "updated_at",
+        )
 
     def validate_display_name(self, value: str) -> str:
         stripped = value.strip()
@@ -109,6 +123,7 @@ class AdminCreatorProfileSerializer(serializers.ModelSerializer):
             "avatar_url",
             "is_verified",
             "verified_at",
+            "verification_requested_at",
             "verified_by_email",
             "created_at",
         )
