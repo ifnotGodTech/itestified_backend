@@ -89,6 +89,52 @@ class AdminCreatorProfileListApiTests(AdminCreatorProfileApiTestsBase):
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["display_name"], "Ministry B")
 
+    def test_filters_by_search_on_display_name_or_email(self):
+        creator_a = _premium_user(email="grace@example.com")
+        create_creator_profile(user=creator_a, display_name="Grace Restoration Ministries")
+        creator_b = _premium_user(email="rivers@example.com")
+        create_creator_profile(user=creator_b, display_name="Rivers of Mercy")
+
+        self.client.force_login(self.admin)
+
+        by_name = self.client.get(reverse("admin-creator-profile-list"), {"search": "grace"})
+        self.assertEqual([row["display_name"] for row in by_name.json()["results"]], ["Grace Restoration Ministries"])
+
+        by_email = self.client.get(reverse("admin-creator-profile-list"), {"search": "rivers@example.com"})
+        self.assertEqual([row["display_name"] for row in by_email.json()["results"]], ["Rivers of Mercy"])
+
+    def test_filters_by_verification_requested(self):
+        from apps.creators.services.commands import request_creator_verification
+
+        requested_creator = _premium_user(email="requested@example.com")
+        create_creator_profile(user=requested_creator, display_name="Requested Ministry")
+        request_creator_verification(user=requested_creator)
+        never_requested_creator = _premium_user(email="never@example.com")
+        create_creator_profile(user=never_requested_creator, display_name="Never Requested Ministry")
+
+        self.client.force_login(self.admin)
+
+        response = self.client.get(reverse("admin-creator-profile-list"), {"verification_requested": "true"})
+        self.assertEqual([row["display_name"] for row in response.json()["results"]], ["Requested Ministry"])
+
+    def test_includes_follower_count(self):
+        from apps.creators.services.commands import follow_creator
+
+        creator = _premium_user(email="followed@example.com")
+        create_creator_profile(user=creator, display_name="Followed Ministry")
+        follower_one = UserFactory(email="fan-one@example.com")
+        ProfileFactory(user=follower_one, full_name="Fan One")
+        follower_two = UserFactory(email="fan-two@example.com")
+        ProfileFactory(user=follower_two, full_name="Fan Two")
+        follow_creator(follower=follower_one, creator_user_id=creator.id)
+        follow_creator(follower=follower_two, creator_user_id=creator.id)
+
+        self.client.force_login(self.admin)
+        response = self.client.get(reverse("admin-creator-profile-list"))
+
+        row = next(r for r in response.json()["results"] if r["display_name"] == "Followed Ministry")
+        self.assertEqual(row["follower_count"], 2)
+
 
 class AdminCreatorProfileVerifyApiTests(AdminCreatorProfileApiTestsBase):
     def test_requires_admin_session(self):

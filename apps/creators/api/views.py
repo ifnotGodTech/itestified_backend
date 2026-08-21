@@ -1,4 +1,4 @@
-from django.db.models import F
+from django.db.models import Count, F, Q
 from rest_framework import generics, status
 from rest_framework.authentication import SessionAuthentication, TokenAuthentication
 from rest_framework.pagination import PageNumberPagination
@@ -251,11 +251,18 @@ class AdminCreatorProfileListView(generics.ListAPIView):
     def get_queryset(self):
         queryset = (
             CreatorProfile.objects.select_related("user", "verified_by")
+            .annotate(follower_count=Count("user__followers", distinct=True))
             .order_by(F("verification_requested_at").asc(nulls_last=True), "-created_at")
         )
         is_verified_param = self.request.query_params.get("is_verified")
         if is_verified_param in {"true", "false"}:
             queryset = queryset.filter(is_verified=(is_verified_param == "true"))
+        requested_param = self.request.query_params.get("verification_requested")
+        if requested_param in {"true", "false"}:
+            queryset = queryset.filter(verification_requested_at__isnull=(requested_param == "false"))
+        search_text = (self.request.query_params.get("search") or "").strip()
+        if search_text:
+            queryset = queryset.filter(Q(display_name__icontains=search_text) | Q(user__email__icontains=search_text))
         return queryset
 
 

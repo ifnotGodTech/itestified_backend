@@ -111,6 +111,10 @@ class AdminCreatorProfileSerializer(serializers.ModelSerializer):
     user_id = serializers.IntegerField(source="user.id", read_only=True)
     user_email = serializers.CharField(source="user.email", read_only=True)
     verified_by_email = serializers.CharField(source="verified_by.email", read_only=True, default=None)
+    # Annotated onto the queryset (AdminCreatorProfileListView), not a model
+    # field -- the one piece of engagement context worth a review decision
+    # without the cost of a full get_creator_analytics() call per row.
+    follower_count = serializers.IntegerField(read_only=True, default=0)
 
     class Meta:
         model = CreatorProfile
@@ -125,5 +129,6 @@ class AdminCreatorProfileSerializer(serializers.ModelSerializer):
             "verified_at",
             "verification_requested_at",
             "verified_by_email",
+            "follower_count",
             "created_at",
         )
