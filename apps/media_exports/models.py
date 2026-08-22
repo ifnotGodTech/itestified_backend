@@ -60,8 +60,8 @@ class BrandedVideoExport(models.Model):
         related_name="branded_exports",
     )
     branding_version = models.PositiveIntegerField()
-    source_video_url = models.URLField()
-    branded_video_url = models.URLField(blank=True)
+    source_video_url = models.URLField(max_length=2048)
+    branded_video_url = models.URLField(max_length=2048, blank=True)
     status = models.CharField(
         max_length=20,
         choices=BrandedVideoExportStatus.choices,

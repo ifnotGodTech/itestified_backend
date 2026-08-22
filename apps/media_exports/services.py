@@ -146,7 +146,6 @@ def generate_branded_video_export(*, source_video_url: str, export_id: int, bran
         result = uploader.upload(
             source_video_url,
             resource_type="video",
-            type="fetch",
             public_id=public_id,
             overwrite=True,
             eager=[{"transformation": transformations}],
