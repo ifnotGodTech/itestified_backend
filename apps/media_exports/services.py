@@ -21,6 +21,26 @@ class MediaExportError(Exception):
     pass
 
 
+# Fixed, permanent Cloudinary public_ids -- both are always overwritten in
+# place (never given a fresh id) so re-uploading a logo never grows storage.
+# DEFAULT_LOGO_PUBLIC_ID is seeded once via `manage.py upload_default_export_logo`
+# and never changes; CUSTOM_LOGO_PUBLIC_ID is whatever an admin has uploaded
+# through the dashboard, if anything.
+DEFAULT_LOGO_PUBLIC_ID = "itestified/branding/default-logo"
+CUSTOM_LOGO_PUBLIC_ID = "itestified/branding/custom-logo"
+
+
+def default_logo_url() -> str:
+    """The permanent iTestified mark used whenever an admin hasn't uploaded
+    a custom logo -- every export gets a logo one way or the other, never
+    neither."""
+    configure_cloudinary()
+    import cloudinary
+
+    cloud_name = str(cloudinary.config().cloud_name or "").strip()
+    return f"https://res.cloudinary.com/{cloud_name}/image/upload/{DEFAULT_LOGO_PUBLIC_ID}.png"
+
+
 @dataclass(frozen=True)
 class GeneratedMediaExport:
     branded_video_url: str
@@ -119,15 +139,21 @@ def generate_branded_video_export(*, source_video_url: str, export_id: int, bran
         "fetch_format": "auto",
     }
     transformations = [base_transformation]
-    if branding.logo_url.strip():
-        transformations.append({
-            "overlay": {"url": f"fetch:{branding.logo_url.strip()}"},
-            "width": 220,
-            "crop": "scale",
-            "gravity": "north_west",
-            "x": 32,
-            "y": 32,
-        })
+    # A logo always renders -- the admin's own upload if they've set one,
+    # otherwise the permanent default -- never neither.
+    logo_overlay = (
+        {"url": f"fetch:{branding.logo_url.strip()}"}
+        if branding.logo_url.strip()
+        else {"public_id": DEFAULT_LOGO_PUBLIC_ID}
+    )
+    transformations.append({
+        "overlay": logo_overlay,
+        "width": 220,
+        "crop": "scale",
+        "gravity": "north_west",
+        "x": 32,
+        "y": 32,
+    })
     if branding.end_card_url.strip():
         transformations.append({
             "overlay": {"url": f"fetch:{branding.end_card_url.strip()}"},

@@ -1,3 +1,4 @@
+import os
 from unittest.mock import patch
 
 from django.test import TestCase
@@ -6,7 +7,7 @@ from apps.testimonies.models import Testimony, TestimonyCategory, TestimonyStatu
 from apps.users.tests.factories import UserFactory
 
 from ..models import BrandedVideoExportStatus, MediaExportBrandingConfig
-from ..services import MediaExportError, request_branded_video_export
+from ..services import DEFAULT_LOGO_PUBLIC_ID, MediaExportError, default_logo_url, request_branded_video_export
 
 
 class BrandedExportServiceTests(TestCase):
@@ -53,3 +54,18 @@ class BrandedExportServiceTests(TestCase):
 
         config.refresh_from_db()
         self.assertEqual(config.version, original_version + 1)
+
+
+class DefaultLogoUrlTests(TestCase):
+    def test_builds_a_stable_url_from_the_configured_cloud_name(self):
+        env = {
+            "CLOUDINARY_CLOUD_NAME": "demo-cloud",
+            "CLOUDINARY_API_KEY": "demo-key",
+            "CLOUDINARY_API_SECRET": "demo-secret",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            url = default_logo_url()
+        self.assertEqual(
+            url,
+            f"https://res.cloudinary.com/demo-cloud/image/upload/{DEFAULT_LOGO_PUBLIC_ID}.png",
+        )

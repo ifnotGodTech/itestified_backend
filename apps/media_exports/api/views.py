@@ -8,10 +8,11 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.authn.api.permissions import IsActiveAdmin
+from apps.common.services.media_uploads import CloudinaryUploadError, create_direct_upload_signature
 from apps.testimonies.models import TestimonyStatus
 
 from ..models import BrandedVideoExport, BrandedVideoExportStatus
-from ..services import MediaExportError, get_branding_config, request_branded_video_export
+from ..services import CUSTOM_LOGO_PUBLIC_ID, MediaExportError, get_branding_config, request_branded_video_export
 from .serializers import BrandedVideoExportSerializer, MediaExportBrandingConfigSerializer
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,39 @@ class AdminMediaExportBrandingView(APIView):
         serializer.is_valid(raise_exception=True)
         config = serializer.save(updated_by=request.user)
         return Response(MediaExportBrandingConfigSerializer(config).data)
+
+
+class AdminMediaExportLogoUploadSignatureView(APIView):
+    """Same direct-to-Cloudinary signing pattern as the other admin upload
+    signature views, except this one always targets the same fixed
+    public_id with overwrite=True -- an admin re-uploading a custom logo
+    replaces the previous one in place instead of accumulating new assets."""
+
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsAuthenticated, IsActiveAdmin]
+
+    def post(self, request):
+        try:
+            upload_signature = create_direct_upload_signature(
+                resource_type="media_export_logo",
+                public_id=CUSTOM_LOGO_PUBLIC_ID,
+                overwrite=True,
+            )
+        except CloudinaryUploadError as exc:
+            return Response({"message": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(
+            {
+                "cloud_name": upload_signature.cloud_name,
+                "api_key": upload_signature.api_key,
+                "timestamp": upload_signature.timestamp,
+                "public_id": upload_signature.public_id,
+                "overwrite": upload_signature.overwrite,
+                "signature": upload_signature.signature,
+                "resource_type": "image",
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class AdminBrandedVideoExportListView(generics.ListAPIView):

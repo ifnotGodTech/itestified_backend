@@ -1,7 +1,7 @@
 from rest_framework import serializers
 
 from ..models import BrandedVideoExport, MediaExportBrandingConfig
-from ..services import build_share_caption, testimony_share_url
+from ..services import build_share_caption, default_logo_url, testimony_share_url
 
 
 class BrandedVideoExportSerializer(serializers.ModelSerializer):
@@ -26,13 +26,21 @@ class BrandedVideoExportSerializer(serializers.ModelSerializer):
 
 
 class MediaExportBrandingConfigSerializer(serializers.ModelSerializer):
+    # The permanent fallback mark, always present regardless of whether an
+    # admin has uploaded a custom one -- lets the dashboard show it as a
+    # real option instead of hardcoding the Cloudinary cloud name itself.
+    default_logo_url = serializers.SerializerMethodField()
+
     class Meta:
         model = MediaExportBrandingConfig
         fields = (
-            "id", "logo_url", "watermark_text", "call_to_action", "end_card_url",
+            "id", "logo_url", "default_logo_url", "watermark_text", "call_to_action", "end_card_url",
             "is_enabled", "version", "updated_by", "created_at", "updated_at",
         )
         read_only_fields = ("id", "version", "updated_by", "created_at", "updated_at")
+
+    def get_default_logo_url(self, obj):
+        return default_logo_url()
 
     def validate_watermark_text(self, value):
         return value.strip()

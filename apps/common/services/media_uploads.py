@@ -14,6 +14,8 @@ class CloudinaryUploadSignature:
     timestamp: int
     folder: str
     signature: str
+    public_id: str = ""
+    overwrite: bool = False
 
 
 def require_env(name: str) -> str:
@@ -43,7 +45,9 @@ def configure_cloudinary() -> None:
     )
 
 
-def create_direct_upload_signature(*, resource_type: str) -> CloudinaryUploadSignature:
+def create_direct_upload_signature(
+    *, resource_type: str, public_id: str = "", overwrite: bool = False
+) -> CloudinaryUploadSignature:
     configure_cloudinary()
 
     try:
@@ -53,7 +57,13 @@ def create_direct_upload_signature(*, resource_type: str) -> CloudinaryUploadSig
         raise CloudinaryUploadError("cloudinary package is not installed.") from exc
 
     common_upload_folder = os.environ.get("CLOUDINARY_UPLOAD_FOLDER", "").strip()
-    if resource_type == "video":
+    folder = ""
+    if resource_type == "media_export_logo":
+        # public_id fully determines the destination path for this one --
+        # no separate folder, since it's always overwritten in place rather
+        # than filed alongside other uploads of the same kind.
+        pass
+    elif resource_type == "video":
         folder = (
             os.environ.get("CLOUDINARY_TESTIMONY_VIDEO_FOLDER", "").strip()
             or common_upload_folder
@@ -100,10 +110,13 @@ def create_direct_upload_signature(*, resource_type: str) -> CloudinaryUploadSig
         raise CloudinaryUploadError("Cloudinary direct upload credentials are incomplete.")
 
     timestamp = int(time.time())
-    params_to_sign = {
-        "folder": folder,
-        "timestamp": timestamp,
-    }
+    params_to_sign: dict[str, object] = {"timestamp": timestamp}
+    if folder:
+        params_to_sign["folder"] = folder
+    if public_id:
+        params_to_sign["public_id"] = public_id
+    if overwrite:
+        params_to_sign["overwrite"] = "true"
     signature = api_sign_request(params_to_sign, api_secret)
     return CloudinaryUploadSignature(
         cloud_name=cloud_name,
@@ -111,4 +124,6 @@ def create_direct_upload_signature(*, resource_type: str) -> CloudinaryUploadSig
         timestamp=timestamp,
         folder=folder,
         signature=signature,
+        public_id=public_id,
+        overwrite=overwrite,
     )
