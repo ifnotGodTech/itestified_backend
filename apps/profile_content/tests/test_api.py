@@ -188,6 +188,9 @@ class MobileProfileContentBlocksApiTests(TestCase):
         # info is served through this same endpoint.
         self.assertEqual(result["support_email"], "ifnotgodtech@gmail.com")
         self.assertEqual(result["support_phone"], "+2348061464092")
+        # Phase 24 Slice 5 -- seeded by 0008, served the same way, no
+        # separate endpoint needed for the referral terms screen.
+        self.assertIn("referral program", result["referral_program_terms"].lower())
 
 
 class HelpFaqAdminApiTests(TestCase):

@@ -16,6 +16,7 @@ class VerifyCodeSerializer(serializers.Serializer):
 class CompleteRegistrationSerializer(serializers.Serializer):
     email = serializers.EmailField()
     password = serializers.CharField()
+    referral_code = serializers.CharField(required=False, allow_blank=True, default="", max_length=8)
 
 
 class LoginSerializer(serializers.Serializer):

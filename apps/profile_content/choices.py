@@ -7,6 +7,7 @@ class ProfileContentKey(models.TextChoices):
     PRIVACY_POLICY = "privacy_policy", "Privacy Policy"
     SUPPORT_EMAIL = "support_email", "Support Email"
     SUPPORT_PHONE = "support_phone", "Support Phone"
+    REFERRAL_PROGRAM_TERMS = "referral_program_terms", "Referral Program Terms"
 
 
 # Keys whose body is a single-line value (validated below) rather than

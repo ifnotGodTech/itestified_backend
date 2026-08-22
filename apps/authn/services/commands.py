@@ -20,6 +20,7 @@ from apps.common.exceptions import EmailProviderNotConfiguredError
 from apps.common.services.email import send_email as _shared_send_email
 from apps.creators.models import CreatorFollow, CreatorProfile
 from apps.notifications.services import deregister_all_devices_for_user
+from apps.referrals.services.commands import attribute_referral_signup
 from apps.users.choices import AdminAssignmentStatus, AdminRoleCode, UserAccountStatus
 from apps.users.models import AdminAssignment, AdminRole, Profile, User
 from apps.users.selectors import get_active_admin_assignment
@@ -245,7 +246,7 @@ def verify_registration(*, email: str, otp: str) -> EmailChallenge:
 
 
 @transaction.atomic
-def complete_registration(*, email: str, password: str) -> tuple[User, Token]:
+def complete_registration(*, email: str, password: str, referral_code: str = "") -> tuple[User, Token]:
     challenge = _get_latest_challenge(email, ChallengePurpose.REGISTRATION, for_update=True)
     if challenge is None or challenge.verified_at is None:
         raise AuthnError("Registration must be verified before completion.")
@@ -262,6 +263,12 @@ def complete_registration(*, email: str, password: str) -> tuple[User, Token]:
     challenge.consumed_at = timezone.now()
     challenge.save(update_fields=["consumed_at", "updated_at"])
     update_last_login(sender=User, user=user)
+    # Phase 24 Slice 6 -- the one and only moment attribution can ever be
+    # decided, inside this same transaction as the User row's own
+    # creation. An unrecognized/blank code is silently ignored, never
+    # blocking registration.
+    if referral_code:
+        attribute_referral_signup(referred_user=user, code=referral_code)
     return user, token
 
 

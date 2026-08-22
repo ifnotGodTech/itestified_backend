@@ -42,6 +42,46 @@ class AuthnServiceTests(TestCase):
         self.assertEqual(user.profile.full_name, "Grace User")
         self.assertTrue(bool(token.key))
 
+    def test_registration_with_a_valid_referral_code_creates_an_attribution(self) -> None:
+        from apps.referrals.models import ReferralAttribution
+        from apps.referrals.services.commands import get_or_create_referral_code
+
+        referrer_challenge = start_registration(full_name="Referrer User", email="referrer@example.com")
+        verify_registration(email=referrer_challenge.email, otp=referrer_challenge.code)
+        referrer, _ = complete_registration(email=referrer_challenge.email, password="StrongPass!1")
+        referral_code = get_or_create_referral_code(user=referrer)
+
+        challenge = start_registration(full_name="Referred User", email="referred@example.com")
+        verify_registration(email=challenge.email, otp=challenge.code)
+        referred_user, _ = complete_registration(
+            email=challenge.email, password="StrongPass!1", referral_code=referral_code.code
+        )
+
+        attribution = ReferralAttribution.objects.get(referred_user=referred_user)
+        self.assertEqual(attribution.referrer, referrer)
+
+    def test_registration_with_an_unrecognized_referral_code_still_succeeds(self) -> None:
+        from apps.referrals.models import ReferralAttribution
+
+        challenge = start_registration(full_name="Referred User", email="referred-bad-code@example.com")
+        verify_registration(email=challenge.email, otp=challenge.code)
+        user, token = complete_registration(
+            email=challenge.email, password="StrongPass!1", referral_code="NOTREAL1"
+        )
+
+        self.assertEqual(user.email, "referred-bad-code@example.com")
+        self.assertTrue(bool(token.key))
+        self.assertFalse(ReferralAttribution.objects.filter(referred_user=user).exists())
+
+    def test_registration_without_a_referral_code_creates_no_attribution(self) -> None:
+        from apps.referrals.models import ReferralAttribution
+
+        challenge = start_registration(full_name="Organic User", email="organic@example.com")
+        verify_registration(email=challenge.email, otp=challenge.code)
+        user, _ = complete_registration(email=challenge.email, password="StrongPass!1")
+
+        self.assertFalse(ReferralAttribution.objects.filter(referred_user=user).exists())
+
     def test_mobile_login_returns_existing_token(self) -> None:
         challenge = start_registration(full_name="Grace User", email="grace@example.com")
         verify_registration(email=challenge.email, otp=challenge.code)

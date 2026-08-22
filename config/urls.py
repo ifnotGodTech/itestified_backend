@@ -17,4 +17,5 @@ urlpatterns = [
     path("api/v1/social-links/", include("apps.social_links.api.urls")),
     path("api/v1/profile-content/", include("apps.profile_content.api.urls")),
     path("api/v1/media-exports/", include("apps.media_exports.api.urls")),
+    path("api/v1/referrals/", include("apps.referrals.api.urls")),
 ]

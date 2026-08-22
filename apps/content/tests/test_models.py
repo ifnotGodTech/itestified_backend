@@ -49,6 +49,15 @@ class HomePromoCardCleanTests(TestCase):
         with self.assertRaises(ValidationError):
             card.clean()
 
+    def test_referral_link_destination_needs_no_cta_url(self):
+        card = HomePromoCard(
+            title="T",
+            body="B",
+            cta_label="Refer & Earn",
+            cta_destination=HomePromoCtaDestination.REFERRAL_LINK,
+        )
+        card.clean()  # must not raise
+
     def test_external_url_destination_with_cta_url_is_valid(self):
         card = HomePromoCard(
             title="T",

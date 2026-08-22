@@ -51,6 +51,39 @@ class AuthnApiTests(TestCase):
         self.assertIn("token", login_response.json())
 
     @override_settings(OTP_HINT_IN_RESPONSE=True)
+    def test_mobile_registration_accepts_an_optional_referral_code(self) -> None:
+        from apps.referrals.models import ReferralAttribution
+        from apps.referrals.services.commands import get_or_create_referral_code
+
+        referrer = UserFactory(email="api-referrer@example.com")
+        referral_code = get_or_create_referral_code(user=referrer)
+
+        start_response = self.client.post(
+            reverse("auth-mobile-register-start"),
+            {"full_name": "Referred User", "email": "api-referred@example.com"},
+            content_type="application/json",
+        )
+        otp = start_response.json()["otp_hint"]
+        self.client.post(
+            reverse("auth-mobile-register-verify"),
+            {"email": "api-referred@example.com", "otp": otp},
+            content_type="application/json",
+        )
+        complete_response = self.client.post(
+            reverse("auth-mobile-register-complete"),
+            {
+                "email": "api-referred@example.com",
+                "password": "StrongPass!1",
+                "referral_code": referral_code.code,
+            },
+            content_type="application/json",
+        )
+
+        self.assertEqual(complete_response.status_code, 201)
+        attribution = ReferralAttribution.objects.get(referred_user__email="api-referred@example.com")
+        self.assertEqual(attribution.referrer, referrer)
+
+    @override_settings(OTP_HINT_IN_RESPONSE=True)
     def test_mobile_registration_normalizes_full_name_casing(self) -> None:
         start_response = self.client.post(
             reverse("auth-mobile-register-start"),

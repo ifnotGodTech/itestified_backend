@@ -283,6 +283,11 @@ class HomePromoCtaDestination(models.TextChoices):
     GIVING = "giving", "Giving screen"
     SUBMIT_TESTIMONY = "submit_testimony", "Submit a testimony"
     EXTERNAL_URL = "external_url", "External URL"
+    # Phase 24 Slice 4 follow-up: the "invite-a-friend" use case this enum's
+    # own docstring already named as a target -- routes to the mobile
+    # Referral Link screen, which itself handles the not-Premium upsell and
+    # terms gating, so this destination is safe to show to every user.
+    REFERRAL_LINK = "referral_link", "Referral link screen"
 
 
 class HomePromoCard(models.Model):

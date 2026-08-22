@@ -21,6 +21,7 @@ from apps.donations.services.commands import (
     reverse_donation,
     verify_donation,
 )
+from apps.referrals.services.commands import record_commission_for_successful_charge
 from apps.subscriptions.api.serializers import SubscriptionSerializer
 from apps.subscriptions.services.commands import (
     apply_cancellation_callback,
@@ -116,9 +117,10 @@ class DonationMineDetailView(generics.RetrieveAPIView):
 class DonationProviderCallbackView(APIView):
     """Flutterwave sends webhook events to exactly one URL per account
     (there is no per-feature webhook registration), so this single
-    endpoint is the real, shared entry point for BOTH donation charges
-    (Phase 5) and Phase 21's subscription charges/cancellations -- hence
-    the otherwise-unusual cross-app import of apps.subscriptions here.
+    endpoint is the real, shared entry point for donation charges
+    (Phase 5), Phase 21's subscription charges/cancellations, and Phase 24's
+    referral commission computation -- hence the otherwise-unusual
+    cross-app imports of apps.subscriptions and apps.referrals here.
     Moving this to a neutral URL would require the admin to reconfigure
     Flutterwave's dashboard webhook setting; keeping the existing,
     already-configured URL and routing internally avoids that entirely."""
@@ -177,6 +179,8 @@ class DonationProviderCallbackView(APIView):
             status_reason=status_reason,
         )
         if subscription is not None:
+            if status_value == "successful":
+                record_commission_for_successful_charge(subscription=subscription)
             return Response(SubscriptionSerializer(subscription).data, status=status.HTTP_200_OK)
 
         log_unrecognized_event(

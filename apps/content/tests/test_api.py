@@ -848,6 +848,22 @@ class HomePromoCardApiTests(TestCase):
         self.assertEqual(card.cta_label, "Give Today")
         self.assertEqual(card.cta_destination, "giving")
 
+    def test_create_a_promo_card_with_a_referral_link_cta(self):
+        response = self.client.post(
+            reverse("admin-home-promo-list-create"),
+            {
+                "title": "Refer a friend, earn together",
+                "body": "Invite someone to iTestified and earn commission while you're both Premium.",
+                "cta_label": "Refer & Earn",
+                "cta_destination": "referral_link",
+            },
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 201)
+        card = HomePromoCard.objects.get()
+        self.assertEqual(card.cta_label, "Refer & Earn")
+        self.assertEqual(card.cta_destination, "referral_link")
+
     def test_rejects_a_cta_label_without_a_destination(self):
         response = self.client.post(
             reverse("admin-home-promo-list-create"),

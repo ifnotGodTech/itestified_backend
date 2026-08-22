@@ -35,6 +35,7 @@ INSTALLED_APPS = [
     "apps.social_links",
     "apps.profile_content",
     "apps.media_exports",
+    "apps.referrals",
 ]
 
 MIDDLEWARE = [
