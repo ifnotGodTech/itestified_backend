@@ -137,8 +137,21 @@ def generate_branded_video_export(*, source_video_url: str, export_id: int, bran
             "y": 96,
         })
     if overlays:
+        # logo_url/end_card_url are both optional and empty by default, which
+        # makes this text layer the *only* branding on most exports -- it
+        # needs to read against any footage on its own, not just footage
+        # light enough for Cloudinary's default black text. An explicit
+        # white-on-black backing box guarantees that regardless of what's
+        # playing behind it.
         transformations.append({
-            "overlay": {"text": " • ".join(overlays), "font_family": "Arial", "font_size": 28},
+            "overlay": {
+                "text": " • ".join(overlays),
+                "font_family": "Arial",
+                "font_size": 28,
+                "font_weight": "bold",
+            },
+            "color": "white",
+            "background": "black",
             "gravity": "south",
             "y": 40,
         })
