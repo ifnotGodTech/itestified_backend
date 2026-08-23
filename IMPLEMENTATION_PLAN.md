@@ -1704,6 +1704,9 @@ Build:
 - submitting/uploading an audio testimony is premium-gated (Phase 21 entitlement check); listening to a published audio testimony is free for everyone, including guests — matches how video watching is already free
 - moderation: audio testimonies go through the exact same Phase 4 moderation workflow as video and written — no new moderation states or logic
 - mobile: new audio player UI (distinct from the video player — waveform/progress bar, play/pause), matching the existing testimony detail screen's card patterns
+- upload policy is admin-configurable through the dashboard: accepted formats, maximum file size, and maximum duration
+- default upload policy is AAC/M4A and MP3, 50 MB maximum file size, and 15 minutes maximum duration
+- audio playback supports background listening after the user locks the phone or leaves the app
 
 Sub-slices:
 
@@ -1716,10 +1719,17 @@ Sub-slices:
 - **Slice 4 — Premium user records/uploads an audio testimony** — Goal: A Premium user can actually submit an audio testimony. same submission flow shape as video (Phase 3), audio-specific fields only
 - **Slice 5 — Anyone plays a published audio testimony** — Goal: Anyone, including guests, can listen to a published audio testimony. guest and free users included, matching free-plan listening
 
+#### Dashboard/Admin User Flows
+- **Slice 6 — Configure audio upload policy** — Goal: Admin controls the limits applied to future audio uploads without a mobile release. Admin can view and update accepted formats, maximum file size, and maximum duration; the backend owns and enforces the active values. Changes require confirmation and do not alter existing testimonies.
+
 Test:
 - a non-premium upload attempt is rejected with a clear premium-required message, not a generic error
 - audio testimonies appear correctly in browse/search/moderation alongside written/video, with no special-casing needed in those existing queries beyond the new type value
 - a non-premium (or guest) user can still fully listen to a published audio testimony submitted by someone else
+- an admin can change the audio upload policy, and the new limits are enforced by the backend and reflected in the mobile submission UI
+- an approved audio testimony continues playing when the phone is locked or the app is backgrounded
+
+Product decisions (2026-08-23): audio is a third first-class testimony type; `audio_url` and `duration_ms` are stored on `Testimony`; Premium is required for both the upload-signature request and final submission; guests and free users can play approved audio; Premium users can record or import audio; default limits are 15 minutes and 50 MB with AAC/M4A and MP3 accepted; admins can change those limits; audio playback supports background listening. Backend, mobile, and dashboard/admin work remain separate slices.
 
 Status: not started
 
