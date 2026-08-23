@@ -147,7 +147,7 @@ def archive_testimony(*, testimony: Testimony, actor, reason: str = "") -> Testi
 
 @transaction.atomic
 def upload_now_video_testimony(*, testimony: Testimony, actor) -> Testimony:
-    if testimony.testimony_type != TestimonyType.VIDEO:
+    if testimony.testimony_type not in (TestimonyType.VIDEO, TestimonyType.AUDIO):
         raise TestimonyTransitionNotAllowedError("Only video testimonies can be uploaded now.")
     if testimony.status not in (TestimonyStatus.DRAFT, TestimonyStatus.SCHEDULED):
         raise TestimonyTransitionNotAllowedError("Only draft or scheduled video testimonies can be uploaded now.")

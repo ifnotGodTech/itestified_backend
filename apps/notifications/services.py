@@ -149,7 +149,7 @@ def notify_testimony_submitted_to_admins(*, testimony_title: str, testimony_type
     if not admin_user_ids:
         return
 
-    label = "Video" if testimony_type == "video" else "Text"
+    label = {"video": "Video", "audio": "Audio"}.get(testimony_type, "Text")
     title = f"New {label} Testimony Submitted"
     message = f'{actor.email} submitted "{testimony_title}" for moderation review.'
     rows = [

@@ -7,6 +7,8 @@ from apps.notifications.services import notify_testimony_submitted_to_admins
 from apps.subscriptions.selectors import is_user_premium
 from apps.testimonies.models import (
     Testimony,
+    AudioUploadPolicy,
+    default_audio_content_types,
     TestimonyCategory,
     TestimonyComment,
     TestimonyFavorite,
@@ -25,6 +27,7 @@ from apps.testimonies.services.media_uploads import (
     build_cloudinary_video_thumbnail_url,
     upload_testimony_media,
 )
+from apps.testimonies.services.commands import enqueue_transcription_job
 
 SOURCE_PREFIX = "source:"
 SOURCE_CANONICAL_NAMES = {
@@ -152,6 +155,8 @@ class TestimonyListSerializer(serializers.ModelSerializer):
             "category_slug",
             "body",
             "video_url",
+            "audio_url",
+            "duration_ms",
             "thumbnail_url",
             "view_count",
             "comment_count",
@@ -217,6 +222,8 @@ class TestimonyDetailSerializer(TestimonyListSerializer):
             "author_id",
             "body",
             "video_url",
+            "audio_url",
+            "duration_ms",
             "thumbnail_url",
             "status",
             "rejection_reason",
@@ -334,6 +341,8 @@ class PublicTestimonyShareSerializer(serializers.ModelSerializer):
             "body",
             "pull_quote",
             "video_url",
+            "audio_url",
+            "duration_ms",
             "thumbnail_url",
         )
 
@@ -367,6 +376,8 @@ class AdminTestimonyListSerializer(serializers.ModelSerializer):
             "thumbnail_url",
             "view_count",
             "comment_count",
+            "audio_url",
+            "duration_ms",
             "created_at",
             "updated_at",
         )
@@ -396,6 +407,8 @@ class AdminTestimonyDetailSerializer(AdminTestimonyListSerializer):
         fields = AdminTestimonyListSerializer.Meta.fields + (
             "body",
             "video_url",
+            "audio_url",
+            "duration_ms",
             "thumbnail_url",
             "rejection_reason",
             "publish_at",
@@ -493,6 +506,86 @@ class TestimonyCreateSerializer(serializers.ModelSerializer):
             testimony_title=testimony.title,
             testimony_type=testimony.testimony_type,
             actor=user,
+        )
+        return testimony
+
+
+class AudioUploadPolicySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AudioUploadPolicy
+        fields = ("max_file_size_bytes", "max_duration_ms", "allowed_content_types", "updated_at")
+        read_only_fields = ("updated_at",)
+
+    def validate_max_file_size_bytes(self, value):
+        if value <= 0:
+            raise serializers.ValidationError("Maximum file size must be positive.")
+        return value
+
+    def validate_max_duration_ms(self, value):
+        if value <= 0:
+            raise serializers.ValidationError("Maximum duration must be positive.")
+        return value
+
+    def validate_allowed_content_types(self, value):
+        if not isinstance(value, list) or not value or any(not isinstance(item, str) or not item.strip() for item in value):
+            raise serializers.ValidationError("At least one audio content type is required.")
+        return sorted({item.strip().lower() for item in value})
+
+
+class AudioTestimonyCreateSerializer(serializers.Serializer):
+    title = serializers.CharField(max_length=255)
+    category_id = serializers.PrimaryKeyRelatedField(
+        source="category", queryset=TestimonyCategory.objects.filter(is_active=True)
+    )
+    audio_url = serializers.URLField()
+    duration_ms = serializers.IntegerField(min_value=1)
+    file_size_bytes = serializers.IntegerField(min_value=1)
+    content_type = serializers.CharField(max_length=100)
+    body = serializers.CharField(required=False, allow_blank=True, default="")
+
+    def validate_title(self, value):
+        if not value.strip():
+            raise serializers.ValidationError("Title is required.")
+        return value.strip()
+
+    def validate_audio_url(self, value):
+        if not value.lower().startswith(("http://", "https://")):
+            raise serializers.ValidationError("Audio URL must be an HTTP(S) URL.")
+        return value.strip()
+
+    def validate_duration_ms(self, value):
+        policy = AudioUploadPolicy.objects.filter(pk=1).first()
+        max_duration = policy.max_duration_ms if policy else 15 * 60 * 1000
+        if value > max_duration:
+            raise serializers.ValidationError(f"Audio exceeds the {max_duration // 60000}-minute limit.")
+        return value
+
+    def validate_file_size_bytes(self, value):
+        policy = AudioUploadPolicy.objects.filter(pk=1).first()
+        max_size = policy.max_file_size_bytes if policy else 50 * 1024 * 1024
+        if value > max_size:
+            raise serializers.ValidationError("Audio exceeds the configured file-size limit.")
+        return value
+
+    def validate_content_type(self, value):
+        policy = AudioUploadPolicy.objects.filter(pk=1).first()
+        allowed = policy.allowed_content_types if policy else default_audio_content_types()
+        normalized = value.strip().lower()
+        if normalized not in allowed:
+            raise serializers.ValidationError("This audio format is not accepted.")
+        return normalized
+
+    def create(self, validated_data):
+        user = self.context["request"].user
+        validated_data.pop("file_size_bytes", None)
+        validated_data.pop("content_type", None)
+        testimony = Testimony.objects.create(
+            author=user, testimony_type=TestimonyType.AUDIO,
+            status=TestimonyStatus.PENDING_REVIEW, **validated_data,
+        )
+        enqueue_transcription_job(testimony=testimony)
+        notify_testimony_submitted_to_admins(
+            testimony_title=testimony.title, testimony_type=testimony.testimony_type, actor=user
         )
         return testimony
 

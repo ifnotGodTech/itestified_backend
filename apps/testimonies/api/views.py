@@ -21,6 +21,7 @@ from apps.testimonies.exceptions import (
 )
 from apps.testimonies.models import (
     Testimony,
+    AudioUploadPolicy,
     TestimonyCategory,
     TestimonyComment,
     TestimonyFavorite,
@@ -81,6 +82,8 @@ from .serializers import (
     PublicTestimonyShareSerializer,
     TestimonyTranslationRequestSerializer,
     TestimonyTranslationSerializer,
+    AudioTestimonyCreateSerializer,
+    AudioUploadPolicySerializer,
     normalize_video_source,
 )
 from apps.testimonies.services.media_uploads import CloudinaryUploadError, create_direct_upload_signature
@@ -336,6 +339,65 @@ class AuthenticatedWrittenTestimonyCreateView(generics.CreateAPIView):
     authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
     serializer_class = TestimonyCreateSerializer
+
+
+def _premium_required_response():
+    return Response(
+        {"code": "premium_required", "message": "Premium is required to submit an audio testimony."},
+        status=status.HTTP_403_FORBIDDEN,
+    )
+
+
+class AudioUploadPolicyView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        policy, _ = AudioUploadPolicy.objects.get_or_create(pk=1)
+        return Response(AudioUploadPolicySerializer(policy).data)
+
+
+class AuthenticatedAudioUploadSignatureView(APIView):
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        if not is_user_premium(request.user):
+            return _premium_required_response()
+        policy, _ = AudioUploadPolicy.objects.get_or_create(pk=1)
+        try:
+            signature = create_direct_upload_signature(resource_type="audio")
+        except CloudinaryUploadError as exc:
+            return Response({"message": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({
+            "cloud_name": signature.cloud_name, "api_key": signature.api_key,
+            "timestamp": signature.timestamp, "folder": signature.folder,
+            "signature": signature.signature, "resource_type": "audio",
+            "policy": AudioUploadPolicySerializer(policy).data,
+        })
+
+
+class AuthenticatedAudioTestimonyCreateView(generics.CreateAPIView):
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+    serializer_class = AudioTestimonyCreateSerializer
+
+    def create(self, request, *args, **kwargs):
+        if not is_user_premium(request.user):
+            return _premium_required_response()
+        return super().create(request, *args, **kwargs)
+
+
+class AdminAudioUploadPolicyView(generics.RetrieveUpdateAPIView):
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsActiveAdmin]
+    serializer_class = AudioUploadPolicySerializer
+
+    def get_object(self):
+        policy, _ = AudioUploadPolicy.objects.get_or_create(pk=1)
+        return policy
+
+    def perform_update(self, serializer):
+        serializer.save(updated_by=self.request.user)
 
 
 class AuthenticatedMyTestimonyListView(generics.ListAPIView):

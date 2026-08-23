@@ -917,7 +917,7 @@ Test:
 - replace review, admin-management, and analytics mocks in dashboard scope
 - verify the connected dashboard flows end-to-end
 
-Status: not started
+Status: Backend Slices 1–2 implemented; Mobile Slices 3–5 and Dashboard/Admin Slice 6 pending
 
 Confirmed still accurate by the 2026-08-15 audit: `dashboard/frontend/src/features/admin/data/services/get-admin-management-view-model.ts`, `get-analytics-view-model.ts`, and `get-reviews-view-model.ts` all still return fully hardcoded mock data with no backend calls, and no `reviews` or `analytics` app exists under `backend/apps/` — this phase's scope has not started, matching the status above.
 
@@ -1711,27 +1711,27 @@ Build:
 Sub-slices:
 
 #### Backend Flows
-- **Slice 1 — Audio as a real testimony type** — Goal: Audio testimonies work everywhere a video testimony already does. `TestimonyType.AUDIO`, `audio_url`/`duration` fields, migration; audio testimonies flow through existing moderation/browse/search/favorites/reactions unchanged
-- **Slice 2 — Uploading audio requires Premium** — Goal: Only Premium users can submit audio testimonies. the audio upload/submission endpoint checks Phase 21's entitlement and rejects a non-premium attempt with a clear, upgrade-prompting message (never a generic 403)
+- **Slice 1 — Audio as a real testimony type** — Goal: Audio testimonies work everywhere a video testimony already does. `TestimonyType.AUDIO`, `audio_url`/`duration_ms` fields, migration; all type-aware moderation/browse/search/favorites/reactions surfaces explicitly handle audio
+- **Slice 2 — Uploading audio requires Premium** — Goal: Only Premium users can submit audio testimonies. both the audio upload-signature and final-submission endpoints check Phase 21's entitlement and reject non-premium attempts with the stable `premium_required` upgrade response (never a generic 403); the active upload-policy contract is exposed by the backend
 
 #### Mobile User Flows
 - **Slice 3 — Non-premium user is prompted to upgrade** — Goal: A free user trying to submit audio sees a clear upgrade prompt, not a dead end. attempting to submit an audio testimony as a free user shows an upsell, not a dead end
-- **Slice 4 — Premium user records/uploads an audio testimony** — Goal: A Premium user can actually submit an audio testimony. same submission flow shape as video (Phase 3), audio-specific fields only
-- **Slice 5 — Anyone plays a published audio testimony** — Goal: Anyone, including guests, can listen to a published audio testimony. guest and free users included, matching free-plan listening
+- **Slice 4 — Premium user records/uploads an audio testimony** — Goal: A Premium user can actually submit an audio testimony by recording or importing it. same submission flow shape as video (Phase 3), audio-specific fields only
+- **Slice 5 — Anyone plays a published audio testimony** — Goal: Anyone, including guests, can listen to a published audio testimony with background playback. guest and free users included, matching free-plan listening
 
 #### Dashboard/Admin User Flows
 - **Slice 6 — Configure audio upload policy** — Goal: Admin controls the limits applied to future audio uploads without a mobile release. Admin can view and update accepted formats, maximum file size, and maximum duration; the backend owns and enforces the active values. Changes require confirmation and do not alter existing testimonies.
 
 Test:
 - a non-premium upload attempt is rejected with a clear premium-required message, not a generic error
-- audio testimonies appear correctly in browse/search/moderation alongside written/video, with no special-casing needed in those existing queries beyond the new type value
+- audio testimonies appear correctly in browse/search/moderation alongside written/video, with existing type-aware surfaces explicitly updated for the new type
 - a non-premium (or guest) user can still fully listen to a published audio testimony submitted by someone else
 - an admin can change the audio upload policy, and the new limits are enforced by the backend and reflected in the mobile submission UI
 - an approved audio testimony continues playing when the phone is locked or the app is backgrounded
 
 Product decisions (2026-08-23): audio is a third first-class testimony type; `audio_url` and `duration_ms` are stored on `Testimony`; Premium is required for both the upload-signature request and final submission; guests and free users can play approved audio; Premium users can record or import audio; default limits are 15 minutes and 50 MB with AAC/M4A and MP3 accepted; admins can change those limits; audio playback supports background listening. Backend, mobile, and dashboard/admin work remain separate slices.
 
-Status: not started
+Status: Backend Slices 1–2 implemented; Mobile Slices 3–5 and Dashboard/Admin Slice 6 pending
 
 ### Phase 29: Playlists & Testimony Collections
 

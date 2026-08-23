@@ -69,6 +69,12 @@ def create_direct_upload_signature(
             or common_upload_folder
             or "itestified/testimonies/videos"
         )
+    elif resource_type == "audio":
+        folder = (
+            os.environ.get("CLOUDINARY_TESTIMONY_AUDIO_FOLDER", "").strip()
+            or common_upload_folder
+            or "itestified/testimonies/audio"
+        )
     elif resource_type == "image":
         folder = (
             os.environ.get("CLOUDINARY_TESTIMONY_THUMBNAIL_FOLDER", "").strip()

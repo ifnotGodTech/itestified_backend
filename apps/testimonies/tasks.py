@@ -10,6 +10,7 @@ from apps.testimonies.models import (
     TranscriptionJobStatus,
     TranslationJob,
     TranslationJobStatus,
+    TestimonyType,
 )
 
 logger = logging.getLogger(__name__)
@@ -27,7 +28,8 @@ def run_transcription_job(job_id: int) -> None:
     job.save(update_fields=["status", "updated_at"])
 
     try:
-        transcript = transcribe_video(video_url=job.testimony.video_url)
+        source_url = job.testimony.audio_url if job.testimony.testimony_type == TestimonyType.AUDIO else job.testimony.video_url
+        transcript = transcribe_video(video_url=source_url)
     except AITextServiceError as exc:
         job.status = TranscriptionJobStatus.FAILED
         job.error_message = str(exc)

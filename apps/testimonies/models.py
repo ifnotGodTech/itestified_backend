@@ -70,6 +70,32 @@ class TestimonyStatus(models.TextChoices):
 class TestimonyType(models.TextChoices):
     WRITTEN = "written", "Written"
     VIDEO = "video", "Video"
+    AUDIO = "audio", "Audio"
+
+
+def default_audio_content_types():
+    return ["audio/aac", "audio/mp4", "audio/x-m4a", "audio/mpeg", "audio/mp3"]
+
+
+class AudioUploadPolicy(models.Model):
+    """Admin-managed limits shared by mobile audio submission clients."""
+
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+    max_file_size_bytes = models.PositiveBigIntegerField(default=50 * 1024 * 1024)
+    max_duration_ms = models.PositiveIntegerField(default=15 * 60 * 1000)
+    allowed_content_types = models.JSONField(default=default_audio_content_types)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="updated_audio_policies",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self) -> str:
+        return "Audio upload policy"
 
 
 class Testimony(models.Model):
@@ -96,6 +122,8 @@ class Testimony(models.Model):
         default=TestimonyStatus.PENDING_REVIEW,
     )
     video_url = models.URLField(blank=True)
+    audio_url = models.URLField(blank=True)
+    duration_ms = models.PositiveIntegerField(null=True, blank=True)
     thumbnail_url = models.URLField(blank=True)
     rejection_reason = models.TextField(blank=True)
     # Moderator-curated only (Phase 19) -- deliberately no automatic
