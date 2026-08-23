@@ -1,11 +1,15 @@
 from django.test import TestCase
 from django.urls import reverse
+from rest_framework.test import APIClient
 from rest_framework.authtoken.models import Token
 
 from apps.users.tests.factories import UserFactory
 
 
 class AudioTestimonyApiTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+
     def test_audio_policy_exposes_phase_28_defaults(self):
         response = self.client.get(reverse("audio-upload-policy"))
 
