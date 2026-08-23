@@ -917,7 +917,7 @@ Test:
 - replace review, admin-management, and analytics mocks in dashboard scope
 - verify the connected dashboard flows end-to-end
 
-Status: Backend Slices 1–2 implemented; Mobile Slices 3–5 and Dashboard/Admin Slice 6 pending
+Status: Backend Slices 1–2 implemented; Mobile Slice 4 UI implemented with mock record/import interactions; Mobile backend wiring, Slices 3 and 5, and Dashboard/Admin Slice 6 pending
 
 Confirmed still accurate by the 2026-08-15 audit: `dashboard/frontend/src/features/admin/data/services/get-admin-management-view-model.ts`, `get-analytics-view-model.ts`, and `get-reviews-view-model.ts` all still return fully hardcoded mock data with no backend calls, and no `reviews` or `analytics` app exists under `backend/apps/` — this phase's scope has not started, matching the status above.
 
