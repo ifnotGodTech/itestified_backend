@@ -148,7 +148,14 @@ def generate_branded_video_export(*, source_video_url: str, export_id: int, bran
     )
     transformations.append({
         "overlay": logo_overlay,
-        "width": 220,
+        # Relative to the base frame's own width, not a fixed pixel count --
+        # 220px read as a small corner badge on an HD-wide export but
+        # ballooned to ~1/3 of the frame height on a narrower source video
+        # (live-verified: a 1080x608 export made the logo circle span over
+        # a third of the visible frame). 0.12 keeps it a consistent, modest
+        # watermark size regardless of the source video's resolution.
+        "width": 0.12,
+        "flags": "relative",
         "crop": "scale",
         "gravity": "north_west",
         "x": 32,
