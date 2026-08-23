@@ -1248,3 +1248,48 @@ class AdminPremiumPricingApiTests(TestCase):
         subscription.refresh_from_db()
         self.assertEqual(subscription.amount, 300000)
         self.assertEqual(subscription.provider_plan_id, "plan_old_ngn")
+
+
+class PremiumPricingApiTests(TestCase):
+    """The Plans screen used to show a hardcoded price with nothing keeping
+    it in sync with an admin's change via admin/pricing/set/ -- this is the
+    mobile-facing read of the same PremiumPricing table subscribe() already
+    charges from."""
+
+    def setUp(self):
+        PremiumPricing.objects.all().delete()
+        self.user = UserFactory(email="pricing-reader@example.com")
+        self.token = Token.objects.create(user=self.user)
+
+    def test_requires_authentication(self):
+        response = self.client.get(reverse("subscription-pricing"))
+        self.assertEqual(response.status_code, 401)
+
+    def test_returns_a_currency_to_minor_units_mapping(self):
+        PremiumPricing.objects.create(currency="NGN", amount=300000)
+        PremiumPricing.objects.create(currency="USD", amount=499)
+
+        response = self.client.get(
+            reverse("subscription-pricing"), HTTP_AUTHORIZATION=f"Token {self.token.key}"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"NGN": 300000, "USD": 499})
+
+    def test_reflects_an_admin_price_change_immediately(self):
+        pricing = PremiumPricing.objects.create(currency="NGN", amount=300000)
+        pricing.amount = 100000
+        pricing.save()
+
+        response = self.client.get(
+            reverse("subscription-pricing"), HTTP_AUTHORIZATION=f"Token {self.token.key}"
+        )
+
+        self.assertEqual(response.json(), {"NGN": 100000})
+
+    def test_empty_when_no_pricing_configured(self):
+        response = self.client.get(
+            reverse("subscription-pricing"), HTTP_AUTHORIZATION=f"Token {self.token.key}"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {})

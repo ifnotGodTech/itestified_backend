@@ -73,6 +73,23 @@ class SubscribeView(APIView):
         return Response(SubscriptionSerializer(subscription).data, status=status.HTTP_201_CREATED)
 
 
+class PremiumPricingView(APIView):
+    """The live price the Plans screen should display, per currency --
+    subscribe() already reads PremiumPricing at charge time (see
+    services/commands.py), but the Plans screen previously showed a
+    hardcoded string with nothing keeping it in sync with an admin's price
+    change. `{"NGN": 300000, "USD": 499}` in minor units, matching every
+    other amount field in this app -- no pagination/list wrapper needed
+    for a handful of currencies."""
+
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        pricing = {p.currency: p.amount for p in list_premium_pricing()}
+        return Response(pricing, status=status.HTTP_200_OK)
+
+
 class VerifySubscriptionView(APIView):
     authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]

@@ -8,12 +8,14 @@ from .views import (
     AdminSubscriptionListView,
     CancelSubscriptionView,
     MySubscriptionView,
+    PremiumPricingView,
     SubscribeView,
     VerifySubscriptionView,
 )
 
 urlpatterns = [
     path("", SubscribeView.as_view(), name="subscription-subscribe"),
+    path("pricing/", PremiumPricingView.as_view(), name="subscription-pricing"),
     path("verify/", VerifySubscriptionView.as_view(), name="subscription-verify"),
     path("mine/", MySubscriptionView.as_view(), name="subscription-mine"),
     path("mine/cancel/", CancelSubscriptionView.as_view(), name="subscription-cancel"),
