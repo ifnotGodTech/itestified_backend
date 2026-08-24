@@ -16,6 +16,8 @@ from apps.testimonies.models import (
     TestimonyReaction,
     TestimonyStatus,
     TestimonyType,
+    TranscriptionJob,
+    TranscriptionJobStatus,
     TestimonyWatch,
     UserFollowedCategory,
 )
@@ -1517,6 +1519,87 @@ class AdminTestimonyApiTests(TestCase):
         self.assertEqual(detail_response.status_code, 200)
         self.assertEqual(detail_response.json()["title"], self.approved.title)
         self.assertEqual(detail_response.json()["status"], TestimonyStatus.APPROVED)
+
+    def test_phase28_audio_queue_and_detail_expose_media_and_transcript(self) -> None:
+        pending_audio = Testimony.objects.create(
+            author=self.author, category=self.category, title="Pending audio testimony",
+            body="A short note from the speaker.", testimony_type=TestimonyType.AUDIO,
+            status=TestimonyStatus.PENDING_REVIEW,
+            audio_url="https://example.com/testimony.m4a", duration_ms=125000,
+        )
+        TranscriptionJob.objects.create(
+            testimony=pending_audio, status=TranscriptionJobStatus.DONE,
+            transcript="God gave me peace while I waited.",
+        )
+        response = self.client.get(
+            f'{reverse("admin-testimony-list")}?testimony_type=audio&status=pending_review'
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["count"], 1)
+        row = response.json()["results"][0]
+        self.assertEqual(row["id"], pending_audio.id)
+        self.assertEqual(row["audio_url"], pending_audio.audio_url)
+        self.assertEqual(row["duration_ms"], 125000)
+        self.assertEqual(row["transcript_status"], TranscriptionJobStatus.DONE)
+
+        detail = self.client.get(
+            reverse("admin-testimony-detail", kwargs={"pk": pending_audio.id})
+        )
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(detail.json()["transcript"], "God gave me peace while I waited.")
+
+    def test_phase28_audio_uses_complete_moderation_workflow(self) -> None:
+        pending_audio = Testimony.objects.create(
+            author=self.author, category=self.category, title="Approve audio",
+            testimony_type=TestimonyType.AUDIO, status=TestimonyStatus.PENDING_REVIEW,
+            audio_url="https://example.com/approve.m4a", duration_ms=60000,
+        )
+        approve = self.client.post(
+            reverse("admin-testimony-approve", kwargs={"testimony_id": pending_audio.id})
+        )
+        self.assertEqual(approve.status_code, 200)
+        pending_audio.refresh_from_db()
+        self.assertEqual(pending_audio.status, TestimonyStatus.APPROVED)
+
+        archive = self.client.post(
+            reverse("admin-testimony-archive", kwargs={"testimony_id": pending_audio.id}),
+            {"reason": "Audio curation update."},
+            content_type="application/json",
+        )
+        self.assertEqual(archive.status_code, 200)
+
+        rejected_audio = Testimony.objects.create(
+            author=self.author, category=self.category, title="Reject audio",
+            testimony_type=TestimonyType.AUDIO, status=TestimonyStatus.PENDING_REVIEW,
+            audio_url="https://example.com/reject.m4a", duration_ms=30000,
+        )
+        reject = self.client.post(
+            reverse("admin-testimony-reject", kwargs={"testimony_id": rejected_audio.id}),
+            {"reason": "The recording is inaudible."},
+            content_type="application/json",
+        )
+        self.assertEqual(reject.status_code, 200)
+
+        scheduled_audio = Testimony.objects.create(
+            author=self.author, category=self.category, title="Schedule audio",
+            testimony_type=TestimonyType.AUDIO, status=TestimonyStatus.PENDING_REVIEW,
+            audio_url="https://example.com/schedule.m4a", duration_ms=45000,
+        )
+        schedule = self.client.post(
+            reverse("admin-testimony-schedule", kwargs={"testimony_id": scheduled_audio.id}),
+            {"publish_at": (timezone.now() + timezone.timedelta(hours=2)).isoformat()},
+            content_type="application/json",
+        )
+        self.assertEqual(schedule.status_code, 200)
+
+        history = self.client.get(
+            reverse("admin-testimony-moderation-history", kwargs={"testimony_id": pending_audio.id})
+        )
+        self.assertEqual(history.status_code, 200)
+        self.assertEqual(
+            {item["action"] for item in history.json()},
+            {"approved", "archived"},
+        )
 
     @patch("apps.testimonies.api.serializers.upload_testimony_media")
     def test_slice13_admin_upload_video_testimony_uses_cloudinary_urls(self, upload_mock) -> None:

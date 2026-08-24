@@ -141,8 +141,13 @@ def generate_branded_video_export(*, source_video_url: str, export_id: int, bran
     transformations = [base_transformation]
     # A logo always renders -- the admin's own upload if they've set one,
     # otherwise the permanent default -- never neither.
+    # The overlay url dict already fetch-wraps and base64-encodes a plain
+    # URL on its own -- prefixing "fetch:" here ourselves double-wraps it
+    # (the resulting reference decodes to "fetch:fetch:https://...", which
+    # Cloudinary rejects outright). Live-verified this exact failure via
+    # the end-card overlay below before fixing both call sites.
     logo_overlay = (
-        {"url": f"fetch:{branding.logo_url.strip()}"}
+        {"url": branding.logo_url.strip()}
         if branding.logo_url.strip()
         else {"public_id": DEFAULT_LOGO_PUBLIC_ID}
     )
@@ -163,7 +168,7 @@ def generate_branded_video_export(*, source_video_url: str, export_id: int, bran
     })
     if branding.end_card_url.strip():
         transformations.append({
-            "overlay": {"url": f"fetch:{branding.end_card_url.strip()}"},
+            "overlay": {"url": branding.end_card_url.strip()},
             "width": 900,
             "crop": "limit",
             "gravity": "south",

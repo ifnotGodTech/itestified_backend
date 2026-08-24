@@ -31,6 +31,7 @@ class UserNotification(models.Model):
     notification_type = models.CharField(max_length=40, choices=NotificationType.choices)
     title = models.CharField(max_length=255)
     message = models.TextField()
+    metadata = models.JSONField(default=dict, blank=True)
     is_read = models.BooleanField(default=False)
     read_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)

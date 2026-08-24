@@ -1,3 +1,5 @@
+import uuid
+
 from django.conf import settings
 from django.db import models
 from django.db.models.signals import pre_save
@@ -98,6 +100,47 @@ class AudioUploadPolicy(models.Model):
         return "Audio upload policy"
 
 
+class AudioUploadIntent(models.Model):
+    """A short-lived, single-use authorization for one direct audio upload."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="audio_upload_intents",
+    )
+    folder = models.CharField(max_length=255)
+    public_id = models.CharField(max_length=255, unique=True)
+    max_file_size_bytes = models.PositiveBigIntegerField()
+    max_duration_ms = models.PositiveIntegerField()
+    allowed_content_types = models.JSONField()
+    expires_at = models.DateTimeField(db_index=True)
+    consumed_at = models.DateTimeField(null=True, blank=True)
+    testimony = models.OneToOneField(
+        "testimonies.Testimony",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="audio_upload_intent",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(
+                fields=("user", "consumed_at", "expires_at"),
+                name="audio_intent_user_state_idx",
+            ),
+        ]
+
+    @property
+    def asset_public_id(self) -> str:
+        return f"{self.folder.rstrip('/')}/{self.public_id}" if self.folder else self.public_id
+
+    def __str__(self) -> str:
+        return f"AudioUploadIntent<{self.id}:{self.user_id}>"
+
+
 class Testimony(models.Model):
     author = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -166,14 +209,12 @@ class TranscriptionJobStatus(models.TextChoices):
 
 
 class TranscriptionJob(models.Model):
-    """Phase 22 Slice 1 -- one row per testimony, created via
-    transaction.on_commit at video-testimony-creation time
-    (services/commands.py's enqueue_transcription_job) and driven by a
-    Celery task (apps.testimonies.tasks.run_transcription_job). This row is
-    a durable status/result record, not a work queue -- Celery/Redis decides
-    when the work runs; this is just what it produced. OneToOne since a
-    testimony only ever needs one transcript, unlike TranslationJob, which
-    is one row per language."""
+    """One durable transcription record per video or audio testimony.
+
+    The row is created transactionally with the testimony and dispatched to
+    Celery only after commit. It remains PENDING if broker publication fails,
+    allowing the operator redispatch command to recover it safely.
+    """
 
     testimony = models.OneToOneField(
         "testimonies.Testimony",

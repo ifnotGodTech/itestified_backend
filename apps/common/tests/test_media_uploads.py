@@ -6,6 +6,7 @@ from django.test import TestCase
 from apps.common.services.media_uploads import (
     CloudinaryUploadError,
     create_direct_upload_signature,
+    get_cloudinary_audio_asset,
 )
 
 
@@ -35,6 +36,15 @@ class CreateDirectUploadSignatureTests(TestCase):
         with mock.patch.dict(os.environ, _cloudinary_env(), clear=True):
             result = create_direct_upload_signature(resource_type="image")
         self.assertEqual(result.folder, "itestified/testimonies/thumbnails")
+
+    def test_audio_domain_type_uses_audio_folder_and_signs_fixed_public_id(self) -> None:
+        with mock.patch.dict(os.environ, _cloudinary_env(), clear=True):
+            result = create_direct_upload_signature(
+                resource_type="audio",
+                public_id="audio_fixed_id",
+            )
+        self.assertEqual(result.folder, "itestified/testimonies/audio")
+        self.assertEqual(result.public_id, "audio_fixed_id")
 
     def test_avatar_resource_type_uses_profile_avatar_folder_default(self) -> None:
         with mock.patch.dict(os.environ, _cloudinary_env(), clear=True):
@@ -73,3 +83,48 @@ class CreateDirectUploadSignatureTests(TestCase):
         with mock.patch.dict(os.environ, {}, clear=True):
             with self.assertRaises(CloudinaryUploadError):
                 create_direct_upload_signature(resource_type="avatar")
+
+
+class GetCloudinaryAudioAssetTests(TestCase):
+    @mock.patch("apps.common.services.media_uploads.configure_cloudinary")
+    @mock.patch("cloudinary.api.resource")
+    def test_reads_audio_from_cloudinary_video_resource_type(
+        self, resource_mock, configure_mock
+    ) -> None:
+        resource_mock.return_value = {
+            "public_id": "itestified/testimonies/audio/audio_123",
+            "secure_url": "https://res.cloudinary.com/demo/video/upload/audio_123.m4a",
+            "resource_type": "video",
+            "format": "m4a",
+            "bytes": 2048,
+            "duration": 12.345,
+        }
+
+        result = get_cloudinary_audio_asset(
+            public_id="itestified/testimonies/audio/audio_123"
+        )
+
+        configure_mock.assert_called_once_with()
+        resource_mock.assert_called_once_with(
+            "itestified/testimonies/audio/audio_123",
+            resource_type="video",
+            type="upload",
+            media_metadata=True,
+        )
+        self.assertEqual(result.file_size_bytes, 2048)
+        self.assertEqual(result.duration_ms, 12345)
+        self.assertTrue(result.is_audio_only)
+
+    @mock.patch("apps.common.services.media_uploads.configure_cloudinary")
+    @mock.patch("cloudinary.api.resource")
+    def test_incomplete_provider_metadata_is_rejected(
+        self, resource_mock, configure_mock
+    ) -> None:
+        resource_mock.return_value = {"public_id": "audio_123"}
+
+        with self.assertRaisesRegex(
+            CloudinaryUploadError, "incomplete audio asset metadata"
+        ):
+            get_cloudinary_audio_asset(public_id="audio_123")
+
+        configure_mock.assert_called_once_with()

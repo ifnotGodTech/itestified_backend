@@ -3,18 +3,22 @@ from dataclasses import dataclass
 from urllib.parse import urlparse
 
 from apps.common.services.media_uploads import (
+    CloudinaryAudioAsset,
     CloudinaryUploadError,
     CloudinaryUploadSignature,
     configure_cloudinary,
     create_direct_upload_signature,
+    get_cloudinary_audio_asset,
 )
 
 __all__ = [
     "CloudinaryUploadError",
     "CloudinaryUploadSignature",
+    "CloudinaryAudioAsset",
     "CloudinaryUploadResult",
     "build_cloudinary_video_thumbnail_url",
     "create_direct_upload_signature",
+    "get_cloudinary_audio_asset",
     "upload_testimony_media",
 ]
 

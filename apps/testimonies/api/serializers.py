@@ -8,7 +8,6 @@ from apps.subscriptions.selectors import is_user_premium
 from apps.testimonies.models import (
     Testimony,
     AudioUploadPolicy,
-    default_audio_content_types,
     TestimonyCategory,
     TestimonyComment,
     TestimonyFavorite,
@@ -27,7 +26,7 @@ from apps.testimonies.services.media_uploads import (
     build_cloudinary_video_thumbnail_url,
     upload_testimony_media,
 )
-from apps.testimonies.services.commands import enqueue_transcription_job
+from apps.testimonies.services.commands import create_audio_testimony_from_upload
 
 SOURCE_PREFIX = "source:"
 SOURCE_CANONICAL_NAMES = {
@@ -360,6 +359,7 @@ class AdminTestimonyListSerializer(serializers.ModelSerializer):
     comment_count = serializers.SerializerMethodField()
     thumbnail_url = serializers.SerializerMethodField()
     source = serializers.SerializerMethodField()
+    transcript_status = serializers.SerializerMethodField()
 
     class Meta:
         model = Testimony
@@ -378,6 +378,7 @@ class AdminTestimonyListSerializer(serializers.ModelSerializer):
             "comment_count",
             "audio_url",
             "duration_ms",
+            "transcript_status",
             "created_at",
             "updated_at",
         )
@@ -399,9 +400,14 @@ class AdminTestimonyListSerializer(serializers.ModelSerializer):
     def get_source(self, obj: Testimony) -> str:
         return extract_video_source(obj.body)
 
+    def get_transcript_status(self, obj: Testimony) -> str:
+        job = getattr(obj, "transcription_job", None)
+        return job.status if job is not None else "not_available"
+
 
 class AdminTestimonyDetailSerializer(AdminTestimonyListSerializer):
     moderation_history = serializers.SerializerMethodField()
+    transcript = serializers.SerializerMethodField()
 
     class Meta(AdminTestimonyListSerializer.Meta):
         fields = AdminTestimonyListSerializer.Meta.fields + (
@@ -414,8 +420,15 @@ class AdminTestimonyDetailSerializer(AdminTestimonyListSerializer):
             "publish_at",
             "archived_at",
             "moderation_history",
+            "transcript",
             "pull_quote",
         )
+
+    def get_transcript(self, obj: Testimony):
+        job = getattr(obj, "transcription_job", None)
+        if job is None or job.status != TranscriptionJobStatus.DONE:
+            return None
+        return job.transcript
 
     def get_moderation_history(self, obj: Testimony):
         history = obj.moderation_history.select_related("actor").all()
@@ -506,41 +519,85 @@ class TestimonyCreateSerializer(serializers.ModelSerializer):
             testimony_title=testimony.title,
             testimony_type=testimony.testimony_type,
             actor=user,
+            testimony_id=testimony.id,
         )
         return testimony
 
 
 class AudioUploadPolicySerializer(serializers.ModelSerializer):
+    SUPPORTED_CONTENT_TYPES = {
+        "audio/aac",
+        "audio/mp4",
+        "audio/x-m4a",
+        "audio/mpeg",
+        "audio/mp3",
+    }
+    MIN_FILE_SIZE_BYTES = 1 * 1024 * 1024
+    MAX_FILE_SIZE_BYTES = 500 * 1024 * 1024
+    MIN_DURATION_MS = 1 * 60 * 1000
+    MAX_DURATION_MS = 120 * 60 * 1000
+
     class Meta:
         model = AudioUploadPolicy
         fields = ("max_file_size_bytes", "max_duration_ms", "allowed_content_types", "updated_at")
         read_only_fields = ("updated_at",)
 
     def validate_max_file_size_bytes(self, value):
-        if value <= 0:
-            raise serializers.ValidationError("Maximum file size must be positive.")
+        if not self.MIN_FILE_SIZE_BYTES <= value <= self.MAX_FILE_SIZE_BYTES:
+            raise serializers.ValidationError("Maximum file size must be between 1 MB and 500 MB.")
         return value
 
     def validate_max_duration_ms(self, value):
-        if value <= 0:
-            raise serializers.ValidationError("Maximum duration must be positive.")
+        if not self.MIN_DURATION_MS <= value <= self.MAX_DURATION_MS:
+            raise serializers.ValidationError("Maximum duration must be between 1 minute and 120 minutes.")
         return value
 
     def validate_allowed_content_types(self, value):
         if not isinstance(value, list) or not value or any(not isinstance(item, str) or not item.strip() for item in value):
             raise serializers.ValidationError("At least one audio content type is required.")
-        return sorted({item.strip().lower() for item in value})
+        normalized = {item.strip().lower() for item in value}
+        unsupported = normalized - self.SUPPORTED_CONTENT_TYPES
+        if unsupported:
+            raise serializers.ValidationError(
+                f"Unsupported audio content type: {sorted(unsupported)[0]}."
+            )
+        return sorted(normalized)
+
+
+class AdminAudioUploadPolicySerializer(AudioUploadPolicySerializer):
+    updated_by_email = serializers.EmailField(source="updated_by.email", read_only=True, allow_null=True)
+    updated_by_name = serializers.SerializerMethodField()
+
+    class Meta(AudioUploadPolicySerializer.Meta):
+        fields = AudioUploadPolicySerializer.Meta.fields + (
+            "updated_by_email",
+            "updated_by_name",
+        )
+
+    def get_updated_by_name(self, obj: AudioUploadPolicy):
+        if obj.updated_by is None:
+            return None
+        profile = getattr(obj.updated_by, "profile", None)
+        if profile and profile.full_name.strip():
+            return profile.full_name
+        return obj.updated_by.email
 
 
 class AudioTestimonyCreateSerializer(serializers.Serializer):
+    CLIENT_METADATA_FIELDS = {
+        "audio_url",
+        "duration_ms",
+        "file_size_bytes",
+        "content_type",
+    }
+
+    upload_intent_id = serializers.UUIDField(write_only=True)
     title = serializers.CharField(max_length=255)
     category_id = serializers.PrimaryKeyRelatedField(
         source="category", queryset=TestimonyCategory.objects.filter(is_active=True)
     )
-    audio_url = serializers.URLField()
-    duration_ms = serializers.IntegerField(min_value=1)
-    file_size_bytes = serializers.IntegerField(min_value=1)
-    content_type = serializers.CharField(max_length=100)
+    audio_url = serializers.URLField(read_only=True)
+    duration_ms = serializers.IntegerField(read_only=True)
     body = serializers.CharField(required=False, allow_blank=True, default="")
 
     def validate_title(self, value):
@@ -548,46 +605,22 @@ class AudioTestimonyCreateSerializer(serializers.Serializer):
             raise serializers.ValidationError("Title is required.")
         return value.strip()
 
-    def validate_audio_url(self, value):
-        if not value.lower().startswith(("http://", "https://")):
-            raise serializers.ValidationError("Audio URL must be an HTTP(S) URL.")
-        return value.strip()
-
-    def validate_duration_ms(self, value):
-        policy = AudioUploadPolicy.objects.filter(pk=1).first()
-        max_duration = policy.max_duration_ms if policy else 15 * 60 * 1000
-        if value > max_duration:
-            raise serializers.ValidationError(f"Audio exceeds the {max_duration // 60000}-minute limit.")
-        return value
-
-    def validate_file_size_bytes(self, value):
-        policy = AudioUploadPolicy.objects.filter(pk=1).first()
-        max_size = policy.max_file_size_bytes if policy else 50 * 1024 * 1024
-        if value > max_size:
-            raise serializers.ValidationError("Audio exceeds the configured file-size limit.")
-        return value
-
-    def validate_content_type(self, value):
-        policy = AudioUploadPolicy.objects.filter(pk=1).first()
-        allowed = policy.allowed_content_types if policy else default_audio_content_types()
-        normalized = value.strip().lower()
-        if normalized not in allowed:
-            raise serializers.ValidationError("This audio format is not accepted.")
-        return normalized
+    def validate(self, attrs):
+        supplied_metadata = self.CLIENT_METADATA_FIELDS.intersection(self.initial_data)
+        if supplied_metadata:
+            raise serializers.ValidationError(
+                "Audio URL and media metadata are verified by the server and must not be supplied."
+            )
+        return attrs
 
     def create(self, validated_data):
-        user = self.context["request"].user
-        validated_data.pop("file_size_bytes", None)
-        validated_data.pop("content_type", None)
-        testimony = Testimony.objects.create(
-            author=user, testimony_type=TestimonyType.AUDIO,
-            status=TestimonyStatus.PENDING_REVIEW, **validated_data,
+        return create_audio_testimony_from_upload(
+            user=self.context["request"].user,
+            upload_intent_id=validated_data["upload_intent_id"],
+            title=validated_data["title"],
+            category=validated_data["category"],
+            body=validated_data.get("body", ""),
         )
-        enqueue_transcription_job(testimony=testimony)
-        notify_testimony_submitted_to_admins(
-            testimony_title=testimony.title, testimony_type=testimony.testimony_type, actor=user
-        )
-        return testimony
 
 
 class RejectedTestimonyResubmitSerializer(serializers.Serializer):

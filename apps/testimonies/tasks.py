@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 
 from celery import shared_task
+from django.utils import timezone
 
 from apps.common.services.ai_text import AITextServiceError, transcribe_video, translate_text
 from apps.testimonies.models import (
@@ -18,17 +19,37 @@ logger = logging.getLogger(__name__)
 
 @shared_task
 def run_transcription_job(job_id: int) -> None:
-    try:
-        job = TranscriptionJob.objects.select_related("testimony").get(id=job_id)
-    except TranscriptionJob.DoesNotExist:
-        logger.warning("run_transcription_job: job %s no longer exists", job_id)
+    claimed = TranscriptionJob.objects.filter(
+        id=job_id,
+        status=TranscriptionJobStatus.PENDING,
+    ).update(
+        status=TranscriptionJobStatus.PROCESSING,
+        error_message="",
+        updated_at=timezone.now(),
+    )
+    if not claimed:
+        status_value = (
+            TranscriptionJob.objects.filter(id=job_id)
+            .values_list("status", flat=True)
+            .first()
+        )
+        if status_value is None:
+            logger.warning("run_transcription_job: job %s no longer exists", job_id)
+        else:
+            logger.info(
+                "run_transcription_job: job %s not claimed because status is %s",
+                job_id,
+                status_value,
+            )
         return
-
-    job.status = TranscriptionJobStatus.PROCESSING
-    job.save(update_fields=["status", "updated_at"])
+    job = TranscriptionJob.objects.select_related("testimony").get(id=job_id)
 
     try:
-        source_url = job.testimony.audio_url if job.testimony.testimony_type == TestimonyType.AUDIO else job.testimony.video_url
+        source_url = (
+            job.testimony.audio_url
+            if job.testimony.testimony_type == TestimonyType.AUDIO
+            else job.testimony.video_url
+        )
         transcript = transcribe_video(video_url=source_url)
     except AITextServiceError as exc:
         job.status = TranscriptionJobStatus.FAILED

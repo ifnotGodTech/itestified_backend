@@ -1,17 +1,26 @@
 from __future__ import annotations
 
-from datetime import datetime
+import uuid
+import logging
+from datetime import datetime, timedelta
 
 from django.db import transaction
-from django.db.models import F
+from django.db.models import F, Q
 from django.utils import timezone
 
 from apps.testimonies.exceptions import (
     AIJobNotRetryableError,
+    AudioPremiumRequiredError,
+    AudioUploadAssetVerificationError,
+    AudioUploadIntentConsumedError,
+    AudioUploadIntentExpiredError,
+    AudioUploadIntentNotFoundError,
     TestimonyTransitionNotAllowedError,
     TestimonyTranslationNotReadyError,
 )
 from apps.testimonies.models import (
+    AudioUploadIntent,
+    AudioUploadPolicy,
     ModerationAction,
     Testimony,
     TestimonyModerationHistory,
@@ -24,12 +33,128 @@ from apps.testimonies.models import (
     TranslationJob,
     TranslationJobStatus,
 )
+from apps.subscriptions.selectors import is_user_premium
+from apps.testimonies.services.media_uploads import (
+    CloudinaryUploadError,
+    CloudinaryUploadSignature,
+    create_direct_upload_signature,
+    get_cloudinary_audio_asset,
+)
 from apps.notifications.services import (
     notify_new_video_testimony_published,
     notify_testimony_approved,
     notify_testimony_rejected,
+    notify_testimony_submitted_to_admins,
 )
 from apps.testimonies.tasks import run_transcription_job, run_translation_job
+
+
+logger = logging.getLogger(__name__)
+
+
+AUDIO_UPLOAD_INTENT_LIFETIME = timedelta(minutes=15)
+AUDIO_FORMAT_CONTENT_TYPES = {
+    "aac": {"audio/aac"},
+    "m4a": {"audio/mp4", "audio/x-m4a"},
+    "mp3": {"audio/mpeg", "audio/mp3"},
+    "mp4": {"audio/mp4"},
+}
+
+
+def issue_audio_upload_intent(*, user) -> tuple[AudioUploadIntent, CloudinaryUploadSignature]:
+    if not is_user_premium(user):
+        raise AudioPremiumRequiredError("Premium is required to submit an audio testimony.")
+
+    policy, _ = AudioUploadPolicy.objects.get_or_create(pk=1)
+    upload_public_id = f"audio_{uuid.uuid4().hex}"
+    signature = create_direct_upload_signature(
+        resource_type="audio",
+        public_id=upload_public_id,
+    )
+    intent = AudioUploadIntent.objects.create(
+        user=user,
+        folder=signature.folder,
+        public_id=upload_public_id,
+        max_file_size_bytes=policy.max_file_size_bytes,
+        max_duration_ms=policy.max_duration_ms,
+        allowed_content_types=list(policy.allowed_content_types),
+        expires_at=timezone.now() + AUDIO_UPLOAD_INTENT_LIFETIME,
+    )
+    return intent, signature
+
+
+def _verified_audio_content_type(*, asset_format: str, allowed_content_types: list[str]) -> str:
+    candidates = AUDIO_FORMAT_CONTENT_TYPES.get(asset_format, set())
+    allowed = {str(value).strip().lower() for value in allowed_content_types}
+    matches = sorted(candidates & allowed)
+    if not matches:
+        raise AudioUploadAssetVerificationError("This audio format is not accepted.")
+    return matches[0]
+
+
+@transaction.atomic
+def create_audio_testimony_from_upload(
+    *,
+    user,
+    upload_intent_id,
+    title: str,
+    category,
+    body: str = "",
+) -> Testimony:
+    if not is_user_premium(user):
+        raise AudioPremiumRequiredError("Premium is required to submit an audio testimony.")
+
+    try:
+        intent = AudioUploadIntent.objects.select_for_update().get(id=upload_intent_id)
+    except (AudioUploadIntent.DoesNotExist, ValueError, TypeError):
+        raise AudioUploadIntentNotFoundError("Audio upload authorization was not found.") from None
+
+    if intent.user_id != user.id:
+        raise AudioUploadIntentNotFoundError("Audio upload authorization was not found.")
+    if intent.consumed_at is not None:
+        raise AudioUploadIntentConsumedError("This audio upload has already been submitted.")
+    if intent.expires_at <= timezone.now():
+        raise AudioUploadIntentExpiredError("This audio upload authorization has expired.")
+
+    try:
+        asset = get_cloudinary_audio_asset(public_id=intent.asset_public_id)
+    except CloudinaryUploadError as exc:
+        raise AudioUploadAssetVerificationError(str(exc)) from exc
+
+    if asset.public_id != intent.asset_public_id:
+        raise AudioUploadAssetVerificationError("The uploaded audio does not match this authorization.")
+    if asset.resource_type != "video" or not asset.is_audio_only:
+        raise AudioUploadAssetVerificationError("The uploaded asset is not an audio-only file.")
+    if asset.file_size_bytes <= 0 or asset.file_size_bytes > intent.max_file_size_bytes:
+        raise AudioUploadAssetVerificationError("Audio exceeds the configured file-size limit.")
+    if asset.duration_ms <= 0 or asset.duration_ms > intent.max_duration_ms:
+        raise AudioUploadAssetVerificationError("Audio exceeds the configured duration limit.")
+    _verified_audio_content_type(
+        asset_format=asset.format,
+        allowed_content_types=intent.allowed_content_types,
+    )
+
+    testimony = Testimony.objects.create(
+        author=user,
+        category=category,
+        title=title,
+        body=body,
+        testimony_type=TestimonyType.AUDIO,
+        status=TestimonyStatus.PENDING_REVIEW,
+        audio_url=asset.secure_url,
+        duration_ms=asset.duration_ms,
+    )
+    intent.consumed_at = timezone.now()
+    intent.testimony = testimony
+    intent.save(update_fields=("consumed_at", "testimony"))
+    enqueue_transcription_job(testimony=testimony)
+    notify_testimony_submitted_to_admins(
+        testimony_title=testimony.title,
+        testimony_type=testimony.testimony_type,
+        actor=user,
+        testimony_id=testimony.id,
+    )
+    return testimony
 
 
 def _record_history(
@@ -167,22 +292,79 @@ def upload_now_video_testimony(*, testimony: Testimony, actor) -> Testimony:
 
 
 def enqueue_transcription_job(*, testimony: Testimony) -> TranscriptionJob | None:
-    """Phase 22 Slice 1 -- creates a TranscriptionJob for a newly-created
-    video testimony and enqueues the Celery task that runs it, deferred to
-    transaction.on_commit (safe to call unconditionally regardless of
-    caller context -- runs immediately outside an atomic block, or once the
-    enclosing transaction actually commits, same pattern as
-    apps/notifications/services.py). Audio isn't supported yet (Phase 28);
-    a written testimony returns None. A repeat call for a testimony that
-    already has a job is a no-op (returns the existing job, doesn't
-    re-enqueue) so this is safe to call more than once."""
-    if testimony.testimony_type != TestimonyType.VIDEO:
+    """Create and dispatch one durable transcript job for video or audio.
+
+    The row is created inside the caller's transaction; broker dispatch is
+    deferred until commit. A broker outage is logged without escaping into
+    the request, leaving the durable PENDING row available for redispatch.
+    """
+    if testimony.testimony_type not in (TestimonyType.VIDEO, TestimonyType.AUDIO):
         return None
     job, created = TranscriptionJob.objects.get_or_create(testimony=testimony)
     if not created:
         return job
-    transaction.on_commit(lambda: run_transcription_job.delay(job.id))
+    transaction.on_commit(lambda: dispatch_transcription_job(job_id=job.id))
     return job
+
+
+def dispatch_transcription_job(*, job_id: int) -> bool:
+    """Best-effort Celery publication that never breaks the domain action."""
+    try:
+        run_transcription_job.delay(job_id)
+    except Exception:  # noqa: BLE001 - broker/client exception classes vary.
+        logger.exception(
+            "transcription.dispatch_failed job_id=%s; job remains pending for redispatch",
+            job_id,
+        )
+        return False
+    return True
+
+
+def redispatch_stranded_transcription_jobs(
+    *,
+    pending_older_than: timedelta = timedelta(minutes=1),
+    processing_older_than: timedelta = timedelta(minutes=30),
+    limit: int = 100,
+) -> tuple[int, int]:
+    """Redispatch old PENDING jobs and recover stale PROCESSING jobs.
+
+    Duplicate Celery deliveries are safe because the task atomically claims
+    only a PENDING row. PROCESSING rows are reset only after the explicit
+    stale threshold, covering a worker that died after claiming a job.
+    Returns ``(attempted, published)`` for operator visibility.
+    """
+    if limit <= 0:
+        return 0, 0
+    now = timezone.now()
+    pending_cutoff = now - pending_older_than
+    processing_cutoff = now - processing_older_than
+    with transaction.atomic():
+        jobs = list(
+            TranscriptionJob.objects.select_for_update()
+            .filter(
+                Q(status=TranscriptionJobStatus.PENDING, updated_at__lte=pending_cutoff)
+                | Q(
+                    status=TranscriptionJobStatus.PROCESSING,
+                    updated_at__lte=processing_cutoff,
+                )
+            )
+            .order_by("updated_at", "id")[:limit]
+        )
+        stale_processing_ids = [
+            job.id for job in jobs if job.status == TranscriptionJobStatus.PROCESSING
+        ]
+        if stale_processing_ids:
+            TranscriptionJob.objects.filter(id__in=stale_processing_ids).update(
+                status=TranscriptionJobStatus.PENDING,
+                error_message="",
+                updated_at=now,
+            )
+        job_ids = [job.id for job in jobs]
+
+    published = sum(
+        dispatch_transcription_job(job_id=job_id) for job_id in job_ids
+    )
+    return len(job_ids), published
 
 
 def request_testimony_translation(*, testimony: Testimony, language: str) -> TranslationJob:
@@ -213,11 +395,8 @@ def request_testimony_translation(*, testimony: Testimony, language: str) -> Tra
 
 def retry_transcription_job(*, job_id: int) -> TranscriptionJob:
     """Phase 22 Slice 5 -- admin-triggered retry for a FAILED
-    TranscriptionJob. Unlike request_testimony_translation, nothing else
-    re-enqueues a transcription job on its own (it's only ever created
-    once, at testimony-creation time), so without this a failed job is
-    stuck forever. Only a FAILED job may be retried -- pending/processing
-    is already in flight, and done is already correct."""
+    TranscriptionJob. Only a FAILED job may be retried here; old PENDING or
+    stale PROCESSING jobs use the operator redispatch command instead."""
     job = TranscriptionJob.objects.select_related("testimony").get(id=job_id)
     if job.status != TranscriptionJobStatus.FAILED:
         raise AIJobNotRetryableError(f"Job is '{job.status}', not 'failed' -- nothing to retry.")
@@ -225,7 +404,7 @@ def retry_transcription_job(*, job_id: int) -> TranscriptionJob:
     job.status = TranscriptionJobStatus.PENDING
     job.error_message = ""
     job.save(update_fields=["status", "error_message", "updated_at"])
-    transaction.on_commit(lambda: run_transcription_job.delay(job.id))
+    transaction.on_commit(lambda: dispatch_transcription_job(job_id=job.id))
     return job
 
 

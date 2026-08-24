@@ -18,6 +18,22 @@ class CloudinaryUploadSignature:
     overwrite: bool = False
 
 
+@dataclass(frozen=True)
+class CloudinaryAudioAsset:
+    public_id: str
+    secure_url: str
+    resource_type: str
+    format: str
+    file_size_bytes: int
+    duration_ms: int
+    width: int
+    height: int
+
+    @property
+    def is_audio_only(self) -> bool:
+        return self.width <= 0 and self.height <= 0
+
+
 def require_env(name: str) -> str:
     value = os.environ.get(name, "").strip()
     if not value:
@@ -132,4 +148,60 @@ def create_direct_upload_signature(
         signature=signature,
         public_id=public_id,
         overwrite=overwrite,
+    )
+
+
+def get_cloudinary_audio_asset(*, public_id: str) -> CloudinaryAudioAsset:
+    """Read authoritative metadata for a Cloudinary audio asset.
+
+    Cloudinary stores audio under the ``video`` resource type. The Admin API
+    lookup is intentionally kept at this external-service boundary so domain
+    services and tests do not depend directly on the provider SDK.
+    """
+
+    configure_cloudinary()
+    try:
+        from cloudinary import api
+    except ImportError as exc:
+        raise CloudinaryUploadError("cloudinary API could not be imported.") from exc
+
+    try:
+        # Cloudinary's Admin API omits duration for audio assets from the
+        # compact resource response. Requesting media metadata makes the
+        # provider return authoritative duration/codec fields as well as the
+        # standard size and dimensions used below.
+        payload = api.resource(
+            public_id,
+            resource_type="video",
+            type="upload",
+            media_metadata=True,
+        )
+    except Exception as exc:  # noqa: BLE001 - Cloudinary exception types vary by SDK version.
+        reason = str(exc).strip()
+        if reason:
+            raise CloudinaryUploadError(f"Audio asset verification failed: {reason}") from exc
+        raise CloudinaryUploadError("Audio asset verification failed.") from exc
+
+    secure_url = str(payload.get("secure_url") or "").strip()
+    returned_public_id = str(payload.get("public_id") or "").strip()
+    if not secure_url or not returned_public_id:
+        raise CloudinaryUploadError("Cloudinary returned incomplete audio asset metadata.")
+
+    try:
+        file_size_bytes = int(payload.get("bytes") or 0)
+        duration_ms = round(float(payload.get("duration") or 0) * 1000)
+        width = int(payload.get("width") or 0)
+        height = int(payload.get("height") or 0)
+    except (TypeError, ValueError) as exc:
+        raise CloudinaryUploadError("Cloudinary returned invalid audio asset metadata.") from exc
+
+    return CloudinaryAudioAsset(
+        public_id=returned_public_id,
+        secure_url=secure_url,
+        resource_type=str(payload.get("resource_type") or "").strip().lower(),
+        format=str(payload.get("format") or "").strip().lower(),
+        file_size_bytes=file_size_bytes,
+        duration_ms=duration_ms,
+        width=width,
+        height=height,
     )

@@ -14,6 +14,7 @@ class UserNotificationSerializer(serializers.ModelSerializer):
             "notification_type",
             "title",
             "message",
+            "metadata",
             "is_read",
             "actor_email",
             "recipient_email",

@@ -200,10 +200,19 @@ class NotifyFunctionsPushWiringTests(TestCase):
         with patch("apps.notifications.services.send_push_to_tokens") as send_mock:
             with self.captureOnCommitCallbacks(execute=True):
                 notify_testimony_submitted_to_admins(
-                    testimony_title="My Story", testimony_type="text", actor=actor
+                    testimony_title="My Story", testimony_type="audio", actor=actor, testimony_id=731
                 )
 
         send_mock.assert_not_called()
+        notification = UserNotification.objects.get(
+            recipient=admin,
+            notification_type=NotificationType.TESTIMONY_SUBMITTED,
+        )
+        self.assertEqual(notification.title, "New Audio Testimony Submitted")
+        self.assertEqual(
+            notification.metadata,
+            {"testimony_id": 731, "testimony_type": "audio"},
+        )
 
     def test_donation_received_does_not_push(self):
         admin = self._with_device("donation-admin@example.com")

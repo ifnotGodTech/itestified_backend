@@ -16,6 +16,7 @@ from rest_framework.views import APIView
 from apps.subscriptions.selectors import is_user_premium
 from apps.testimonies.exceptions import (
     AIJobNotRetryableError,
+    AudioUploadContractError,
     TestimonyTransitionNotAllowedError,
     TestimonyTranslationNotReadyError,
 )
@@ -42,6 +43,7 @@ from apps.testimonies.validators import parse_future_publish_at
 from apps.testimonies.services.commands import (
     approve_testimony,
     archive_testimony,
+    issue_audio_upload_intent,
     enqueue_transcription_job,
     reject_testimony,
     remove_testimony_reaction,
@@ -84,6 +86,7 @@ from .serializers import (
     TestimonyTranslationSerializer,
     AudioTestimonyCreateSerializer,
     AudioUploadPolicySerializer,
+    AdminAudioUploadPolicySerializer,
     normalize_video_source,
 )
 from apps.testimonies.services.media_uploads import CloudinaryUploadError, create_direct_upload_signature
@@ -341,13 +344,6 @@ class AuthenticatedWrittenTestimonyCreateView(generics.CreateAPIView):
     serializer_class = TestimonyCreateSerializer
 
 
-def _premium_required_response():
-    return Response(
-        {"code": "premium_required", "message": "Premium is required to submit an audio testimony."},
-        status=status.HTTP_403_FORBIDDEN,
-    )
-
-
 class AudioUploadPolicyView(APIView):
     permission_classes = [AllowAny]
 
@@ -361,18 +357,29 @@ class AuthenticatedAudioUploadSignatureView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        if not is_user_premium(request.user):
-            return _premium_required_response()
-        policy, _ = AudioUploadPolicy.objects.get_or_create(pk=1)
         try:
-            signature = create_direct_upload_signature(resource_type="audio")
+            intent, signature = issue_audio_upload_intent(user=request.user)
+        except AudioUploadContractError as exc:
+            return Response(
+                {"code": exc.code, "message": str(exc)},
+                status=exc.http_status,
+            )
         except CloudinaryUploadError as exc:
             return Response({"message": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         return Response({
             "cloud_name": signature.cloud_name, "api_key": signature.api_key,
             "timestamp": signature.timestamp, "folder": signature.folder,
-            "signature": signature.signature, "resource_type": "audio",
-            "policy": AudioUploadPolicySerializer(policy).data,
+            "public_id": signature.public_id,
+            "signature": signature.signature,
+            "resource_type": "video",
+            "upload_resource_type": "video",
+            "upload_intent_id": str(intent.id),
+            "expires_at": intent.expires_at,
+            "policy": {
+                "max_file_size_bytes": intent.max_file_size_bytes,
+                "max_duration_ms": intent.max_duration_ms,
+                "allowed_content_types": intent.allowed_content_types,
+            },
         })
 
 
@@ -382,18 +389,24 @@ class AuthenticatedAudioTestimonyCreateView(generics.CreateAPIView):
     serializer_class = AudioTestimonyCreateSerializer
 
     def create(self, request, *args, **kwargs):
-        if not is_user_premium(request.user):
-            return _premium_required_response()
-        return super().create(request, *args, **kwargs)
+        try:
+            return super().create(request, *args, **kwargs)
+        except AudioUploadContractError as exc:
+            return Response(
+                {"code": exc.code, "message": str(exc)},
+                status=exc.http_status,
+            )
 
 
 class AdminAudioUploadPolicyView(generics.RetrieveUpdateAPIView):
     authentication_classes = [SessionAuthentication]
     permission_classes = [IsActiveAdmin]
-    serializer_class = AudioUploadPolicySerializer
+    serializer_class = AdminAudioUploadPolicySerializer
 
     def get_object(self):
-        policy, _ = AudioUploadPolicy.objects.get_or_create(pk=1)
+        policy, _ = AudioUploadPolicy.objects.select_related(
+            "updated_by", "updated_by__profile"
+        ).get_or_create(pk=1)
         return policy
 
     def perform_update(self, serializer):
@@ -441,6 +454,7 @@ class AuthenticatedRejectedTestimonyResubmitView(APIView):
             testimony_title=testimony.title,
             testimony_type=testimony.testimony_type,
             actor=request.user,
+            testimony_id=testimony.id,
         )
 
         return Response(TestimonyDetailSerializer(testimony).data, status=status.HTTP_200_OK)
@@ -701,7 +715,7 @@ class AdminTestimonyListView(generics.ListAPIView):
 
     def get_queryset(self):
         queryset = (
-            Testimony.objects.select_related("author", "author__profile", "category")
+            Testimony.objects.select_related("author", "author__profile", "category", "transcription_job")
             .annotate(comment_count_total=Count("comments"))
             .all()
         )
@@ -738,7 +752,7 @@ class AdminTestimonyDetailView(generics.RetrieveAPIView):
 
     def get_queryset(self):
         return (
-            Testimony.objects.select_related("author", "author__profile", "category")
+            Testimony.objects.select_related("author", "author__profile", "category", "transcription_job")
             .annotate(comment_count_total=Count("comments"))
             .all()
         )
@@ -752,7 +766,7 @@ class AdminPendingModerationQueueView(generics.ListAPIView):
 
     def get_queryset(self):
         return (
-            Testimony.objects.select_related("author", "author__profile", "category")
+            Testimony.objects.select_related("author", "author__profile", "category", "transcription_job")
             .annotate(comment_count_total=Count("comments"))
             .filter(status=TestimonyStatus.PENDING_REVIEW)
             .order_by("created_at")

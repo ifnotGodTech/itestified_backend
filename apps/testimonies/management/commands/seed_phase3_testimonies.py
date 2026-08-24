@@ -2,7 +2,14 @@ from django.core.management.base import BaseCommand
 from django.utils import timezone
 from rest_framework.authtoken.models import Token
 
-from apps.testimonies.models import Testimony, TestimonyCategory, TestimonyStatus, TestimonyType
+from apps.testimonies.models import (
+    Testimony,
+    TestimonyCategory,
+    TestimonyStatus,
+    TestimonyType,
+    TranscriptionJob,
+    TranscriptionJobStatus,
+)
 from apps.users.models import Profile, User
 
 
@@ -78,6 +85,19 @@ class Command(BaseCommand):
                 "rejection_reason": "Please add more specific details and context.",
             },
             {
+                "title": "Audio testimony: Peace in the waiting",
+                "author": user_map["qa.author1@example.com"],
+                "category": category_map["faith"],
+                "status": TestimonyStatus.PENDING_REVIEW,
+                "testimony_type": TestimonyType.AUDIO,
+                "body": "A spoken testimony about receiving peace during a difficult season.",
+                "audio_url": "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
+                "duration_ms": 248000,
+                "video_url": "",
+                "thumbnail_url": "",
+                "rejection_reason": "",
+            },
+            {
                 "title": "Video testimony: Restoration",
                 "author": user_map["qa.author2@example.com"],
                 "category": category_map["salvation"],
@@ -92,7 +112,7 @@ class Command(BaseCommand):
 
         for row in seed_rows:
             publish_at = timezone.now() if row["status"] == TestimonyStatus.APPROVED else None
-            Testimony.objects.update_or_create(
+            testimony, _ = Testimony.objects.update_or_create(
                 title=row["title"],
                 defaults={
                     "author": row["author"],
@@ -100,6 +120,8 @@ class Command(BaseCommand):
                     "status": row["status"],
                     "testimony_type": row["testimony_type"],
                     "body": row["body"],
+                    "audio_url": row.get("audio_url", ""),
+                    "duration_ms": row.get("duration_ms", 0),
                     "video_url": row["video_url"],
                     "thumbnail_url": row["thumbnail_url"],
                     "rejection_reason": row["rejection_reason"],
@@ -107,6 +129,15 @@ class Command(BaseCommand):
                     "updated_at": timezone.now(),
                 },
             )
+            if row["testimony_type"] == TestimonyType.AUDIO:
+                TranscriptionJob.objects.update_or_create(
+                    testimony=testimony,
+                    defaults={
+                        "status": TranscriptionJobStatus.DONE,
+                        "transcript": "God gave me peace before the answer arrived, and my faith became steady again.",
+                        "error_message": "",
+                    },
+                )
 
         self.stdout.write(self.style.SUCCESS("Phase 3 testimonies seed completed."))
         self.stdout.write("QA users (password: TestPass#123):")

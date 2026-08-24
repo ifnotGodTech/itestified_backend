@@ -1,15 +1,21 @@
-"""Phase 22 Slice 1 (transcription) and Slice 2 (translation) -- backend
-only. Mobile wiring is Slice 3/4, not built yet. Mocks apps.common.services
+"""Phase 22 transcription/translation plus Phase 28 audio reliability.
+
+Mocks apps.common.services
 .ai_text's boundary functions (the only place OpenAI is ever called), never
 Celery itself -- CELERY_TASK_ALWAYS_EAGER (config/settings/test.py) runs
 .delay() synchronously in-process, so captureOnCommitCallbacks(execute=True)
 exercises the real service -> Celery -> task -> AI-boundary -> DB pipeline
 end-to-end without needing a live worker or a real API key."""
 
+from datetime import timedelta
+from io import StringIO
 from unittest.mock import patch
 
+from django.core.management import call_command
+from django.db import transaction
 from django.test import TestCase
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework.authtoken.models import Token
 
 from apps.subscriptions.models import Subscription, SubscriptionStatus
@@ -26,6 +32,7 @@ from apps.testimonies.models import (
 )
 from apps.testimonies.services.commands import (
     enqueue_transcription_job,
+    redispatch_stranded_transcription_jobs,
     request_testimony_translation,
 )
 from apps.common.services.ai_text import AITextServiceError
@@ -33,9 +40,12 @@ from apps.users.tests.factories import ProfileFactory, UserFactory
 
 
 def _make_video_testimony(**overrides):
-    category = overrides.pop("category", None) or TestimonyCategory.objects.create(
-        name="Healing", slug="healing"
-    )
+    category = overrides.pop("category", None)
+    if category is None:
+        sequence = TestimonyCategory.objects.count() + 1
+        category = TestimonyCategory.objects.create(
+            name=f"Healing {sequence}", slug=f"healing-{sequence}"
+        )
     author = overrides.pop("author", None)
     if author is None:
         author = UserFactory(email=f"author-{TestimonyCategory.objects.count()}@example.com")
@@ -51,6 +61,17 @@ def _make_video_testimony(**overrides):
     )
     defaults.update(overrides)
     return Testimony.objects.create(**defaults)
+
+
+def _make_audio_testimony(**overrides):
+    defaults = {
+        "testimony_type": TestimonyType.AUDIO,
+        "video_url": "",
+        "audio_url": "https://example.com/testimony.m4a",
+        "duration_ms": 120000,
+    }
+    defaults.update(overrides)
+    return _make_video_testimony(**defaults)
 
 
 class EnqueueTranscriptionJobTests(TestCase):
@@ -80,6 +101,58 @@ class EnqueueTranscriptionJobTests(TestCase):
         self.assertEqual(job.status, TranscriptionJobStatus.FAILED)
         self.assertIn("OPENAI_API_KEY", job.error_message)
         self.assertEqual(job.retry_count, 1)
+
+    def test_audio_job_uses_audio_url_as_transcription_source(self):
+        testimony = _make_audio_testimony()
+        with patch(
+            "apps.testimonies.tasks.transcribe_video",
+            return_value="Audio transcript.",
+        ) as transcribe_mock:
+            with self.captureOnCommitCallbacks(execute=True):
+                job = enqueue_transcription_job(testimony=testimony)
+
+        transcribe_mock.assert_called_once_with(video_url=testimony.audio_url)
+        job.refresh_from_db()
+        self.assertEqual(job.status, TranscriptionJobStatus.DONE)
+        self.assertEqual(job.transcript, "Audio transcript.")
+
+    def test_broker_failure_leaves_pending_job_without_raising(self):
+        testimony = _make_audio_testimony()
+        with patch(
+            "apps.testimonies.services.commands.run_transcription_job.delay",
+            side_effect=RuntimeError("redis unavailable"),
+        ):
+            with self.assertLogs(
+                "apps.testimonies.services.commands", level="ERROR"
+            ) as logs:
+                with self.captureOnCommitCallbacks(execute=True):
+                    job = enqueue_transcription_job(testimony=testimony)
+
+        job.refresh_from_db()
+        self.assertEqual(job.status, TranscriptionJobStatus.PENDING)
+        self.assertIn("transcription.dispatch_failed", "\n".join(logs.output))
+
+    def test_job_creation_rolls_back_with_testimony_and_never_dispatches(self):
+        category = TestimonyCategory.objects.create(name="Deliverance", slug="deliverance")
+        author = UserFactory(email="rollback-audio@example.com")
+        with patch(
+            "apps.testimonies.services.commands.dispatch_transcription_job"
+        ) as dispatch_mock:
+            with self.assertRaises(RuntimeError):
+                with transaction.atomic():
+                    testimony = Testimony.objects.create(
+                        author=author,
+                        category=category,
+                        title="Rollback",
+                        testimony_type=TestimonyType.AUDIO,
+                        audio_url="https://example.com/rollback.m4a",
+                    )
+                    enqueue_transcription_job(testimony=testimony)
+                    raise RuntimeError("roll back")
+
+        self.assertFalse(Testimony.objects.filter(title="Rollback").exists())
+        self.assertFalse(TranscriptionJob.objects.exists())
+        dispatch_mock.assert_not_called()
 
     def test_written_testimonies_never_get_a_job(self):
         category = TestimonyCategory.objects.create(name="Faith", slug="faith")
@@ -199,6 +272,81 @@ class RunTranscriptionJobTaskTests(TestCase):
         from apps.testimonies.tasks import run_transcription_job
 
         run_transcription_job(999999)  # should just log and return
+
+    def test_duplicate_delivery_only_transcribes_once(self):
+        from apps.testimonies.tasks import run_transcription_job
+
+        testimony = _make_audio_testimony()
+        job = TranscriptionJob.objects.create(testimony=testimony)
+        with patch(
+            "apps.testimonies.tasks.transcribe_video",
+            return_value="Once only.",
+        ) as transcribe_mock:
+            run_transcription_job(job.id)
+            run_transcription_job(job.id)
+
+        transcribe_mock.assert_called_once_with(video_url=testimony.audio_url)
+        job.refresh_from_db()
+        self.assertEqual(job.status, TranscriptionJobStatus.DONE)
+
+
+class RedispatchStrandedTranscriptionJobsTests(TestCase):
+    def test_redispatches_old_pending_and_recovers_stale_processing_only(self):
+        old_pending = TranscriptionJob.objects.create(testimony=_make_audio_testimony())
+        fresh_pending = TranscriptionJob.objects.create(testimony=_make_audio_testimony())
+        stale_processing = TranscriptionJob.objects.create(
+            testimony=_make_audio_testimony(),
+            status=TranscriptionJobStatus.PROCESSING,
+        )
+        done = TranscriptionJob.objects.create(
+            testimony=_make_audio_testimony(),
+            status=TranscriptionJobStatus.DONE,
+        )
+        TranscriptionJob.objects.filter(id=old_pending.id).update(
+            updated_at=timezone.now() - timedelta(minutes=5)
+        )
+        TranscriptionJob.objects.filter(id=stale_processing.id).update(
+            updated_at=timezone.now() - timedelta(hours=1)
+        )
+
+        with patch(
+            "apps.testimonies.services.commands.dispatch_transcription_job",
+            return_value=True,
+        ) as dispatch_mock:
+            attempted, published = redispatch_stranded_transcription_jobs()
+
+        self.assertEqual((attempted, published), (2, 2))
+        self.assertEqual(
+            {call.kwargs["job_id"] for call in dispatch_mock.call_args_list},
+            {old_pending.id, stale_processing.id},
+        )
+        stale_processing.refresh_from_db()
+        fresh_pending.refresh_from_db()
+        done.refresh_from_db()
+        self.assertEqual(stale_processing.status, TranscriptionJobStatus.PENDING)
+        self.assertEqual(fresh_pending.status, TranscriptionJobStatus.PENDING)
+        self.assertEqual(done.status, TranscriptionJobStatus.DONE)
+
+    def test_management_command_exposes_operator_redispatch_path(self):
+        output = StringIO()
+        with patch(
+            "apps.testimonies.management.commands.redispatch_transcription_jobs.redispatch_stranded_transcription_jobs",
+            return_value=(3, 2),
+        ) as redispatch_mock:
+            call_command(
+                "redispatch_transcription_jobs",
+                pending_older_than_seconds=120,
+                processing_older_than_seconds=2400,
+                limit=25,
+                stdout=output,
+            )
+
+        redispatch_mock.assert_called_once_with(
+            pending_older_than=timedelta(seconds=120),
+            processing_older_than=timedelta(seconds=2400),
+            limit=25,
+        )
+        self.assertIn("attempted=3 published=2", output.getvalue())
 
 
 class TestimonyDetailTranscriptFieldsApiTests(TestCase):

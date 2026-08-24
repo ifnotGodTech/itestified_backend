@@ -139,7 +139,9 @@ def notify_testimony_rejected(*, recipient, actor, testimony_title: str, reason:
     )
 
 
-def notify_testimony_submitted_to_admins(*, testimony_title: str, testimony_type: str, actor) -> None:
+def notify_testimony_submitted_to_admins(
+    *, testimony_title: str, testimony_type: str, actor, testimony_id: Optional[int] = None
+) -> None:
     admin_user_ids = list(
         AdminAssignment.objects.filter(status=AdminAssignmentStatus.ACTIVE)
         .exclude(user_id=actor.id)
@@ -159,6 +161,10 @@ def notify_testimony_submitted_to_admins(*, testimony_title: str, testimony_type
             notification_type=NotificationType.TESTIMONY_SUBMITTED,
             title=title,
             message=message,
+            metadata={
+                "testimony_id": testimony_id,
+                "testimony_type": testimony_type,
+            },
         )
         for user_id in admin_user_ids
     ]
