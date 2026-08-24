@@ -1673,7 +1673,7 @@ Build:
 - localized pricing display at checkout, not just currency conversion
 - evaluate whether UK/US coverage needs a second payment processor alongside Flutterwave, whose strongest coverage is Africa
 
-Status: not started — sequenced after Phase 21 since it expands an already-working subscription system rather than preceding it.
+Status: ⏸ Pending — deliberately deferred 2026-08-24, not just unsequenced. No target date set; revisit when there's real demand signal for non-NGN/USD subscribers.
 
 ### Phase 27: Live Testimony Broadcasts
 
