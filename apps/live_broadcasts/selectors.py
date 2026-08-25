@@ -6,6 +6,7 @@ from apps.creators.selectors import get_creator_profile
 from apps.live_broadcasts.exceptions import LiveMinutePricingNotConfiguredError, NotAVerifiedMinistryError
 from apps.live_broadcasts.models import (
     LiveBroadcast,
+    LiveBroadcastStatus,
     LiveMinutePricing,
     LiveStreamingPolicy,
     MinistryStreamingAllowance,
@@ -70,6 +71,31 @@ def reserved_minutes_this_month(*, creator, year: int, month: int) -> int:
         max_duration_minutes_applied__isnull=False,
     )
     return sum(b.max_viewers_applied * b.max_duration_minutes_applied for b in broadcasts)
+
+
+def _broadcast_display_queryset():
+    return LiveBroadcast.objects.select_related(
+        "creator", "creator__creator_profile", "creator__profile"
+    )
+
+
+def list_live_broadcasts():
+    """Phase 27 Slice 2 -- viewer discovery, live-now. Public (guests
+    included); no viewer-count annotation here -- that comes from Agora's
+    own SDK events fired to a client only once it has actually joined the
+    channel (see Slice 4's own "no new real-time backend infrastructure"
+    note), not something this browse list needs to reconstruct."""
+    return _broadcast_display_queryset().filter(status=LiveBroadcastStatus.LIVE).order_by("-started_at")
+
+
+def list_upcoming_broadcasts():
+    """Phase 27 Slice 2 -- viewer discovery, scheduled-upcoming."""
+    now = timezone.now()
+    return (
+        _broadcast_display_queryset()
+        .filter(status=LiveBroadcastStatus.SCHEDULED, scheduled_at__gt=now)
+        .order_by("scheduled_at")
+    )
 
 
 def compute_allowance_summary(*, creator) -> dict:

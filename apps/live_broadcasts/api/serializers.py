@@ -8,6 +8,61 @@ from apps.live_broadcasts.models import (
 from apps.testimonies.models import TestimonyCategory
 
 
+class PublicLiveBroadcastSerializer(serializers.ModelSerializer):
+    """Phase 27 Slice 2 -- what a viewer (including a guest) sees browsing
+    live-now/upcoming broadcasts. Mirrors TestimonyListSerializer's own
+    author_name/author_avatar fallback chain (Phase 23 Slice 10) exactly:
+    every LiveBroadcast creator is already a verified Ministry by
+    construction, but the same defensive fallback is kept for
+    consistency. Callers must select_related "creator__creator_profile",
+    "creator__profile" to stay free of N+1 queries."""
+
+    ministry_id = serializers.CharField(source="creator_id", read_only=True)
+    ministry_name = serializers.SerializerMethodField()
+    ministry_avatar = serializers.SerializerMethodField()
+
+    class Meta:
+        model = LiveBroadcast
+        fields = [
+            "id",
+            "title",
+            "status",
+            "scheduled_at",
+            "started_at",
+            "ministry_id",
+            "ministry_name",
+            "ministry_avatar",
+        ]
+        read_only_fields = fields
+
+    def get_ministry_name(self, obj: LiveBroadcast) -> str:
+        creator_profile = getattr(obj.creator, "creator_profile", None)
+        if creator_profile and creator_profile.display_name.strip():
+            return creator_profile.display_name
+        profile = getattr(obj.creator, "profile", None)
+        if profile and profile.full_name.strip():
+            return profile.full_name
+        return obj.creator.email
+
+    def get_ministry_avatar(self, obj: LiveBroadcast) -> str:
+        creator_profile = getattr(obj.creator, "creator_profile", None)
+        if creator_profile and creator_profile.avatar_url:
+            return creator_profile.avatar_url
+        profile = getattr(obj.creator, "profile", None)
+        return profile.avatar if profile else ""
+
+
+class ViewerJoinCredentialSerializer(serializers.Serializer):
+    app_id = serializers.CharField()
+    channel_name = serializers.CharField()
+    uid = serializers.IntegerField()
+    token = serializers.CharField()
+    expires_at_unix = serializers.IntegerField()
+    ministry_name = serializers.CharField()
+    ministry_avatar = serializers.CharField()
+    title = serializers.CharField()
+
+
 class LiveBroadcastSerializer(serializers.ModelSerializer):
     class Meta:
         model = LiveBroadcast

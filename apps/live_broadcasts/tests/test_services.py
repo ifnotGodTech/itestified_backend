@@ -385,3 +385,77 @@ class ReconcileStaleLiveBroadcastsTests(TestCase):
         self.assertEqual(ended_count, 0)
         broadcast.refresh_from_db()
         self.assertEqual(broadcast.status, LiveBroadcastStatus.LIVE)
+
+
+class BrowseSelectorTests(TestCase):
+    def setUp(self):
+        self.ministry = _verified_ministry()
+        self.category = _category()
+
+    def test_list_live_broadcasts_only_returns_live_ones(self):
+        from apps.live_broadcasts import selectors
+
+        live = LiveBroadcast.objects.create(creator=self.ministry, title="Live One", category=self.category)
+        live.status = LiveBroadcastStatus.LIVE
+        live.save()
+        LiveBroadcast.objects.create(creator=self.ministry, title="Still Scheduled", category=self.category)
+
+        results = list(selectors.list_live_broadcasts())
+        self.assertEqual([b.id for b in results], [live.id])
+
+    def test_list_upcoming_broadcasts_excludes_past_and_non_scheduled(self):
+        from apps.live_broadcasts import selectors
+
+        future = LiveBroadcast.objects.create(
+            creator=self.ministry,
+            title="Next Week",
+            category=self.category,
+            scheduled_at=timezone.now() + timezone.timedelta(days=7),
+        )
+        LiveBroadcast.objects.create(
+            creator=self.ministry,
+            title="Already Passed",
+            category=self.category,
+            scheduled_at=timezone.now() - timezone.timedelta(days=1),
+        )
+        live_now = LiveBroadcast.objects.create(
+            creator=self.ministry,
+            title="Currently Live",
+            category=self.category,
+            scheduled_at=timezone.now() + timezone.timedelta(days=1),
+        )
+        live_now.status = LiveBroadcastStatus.LIVE
+        live_now.save()
+
+        results = list(selectors.list_upcoming_broadcasts())
+        self.assertEqual([b.id for b in results], [future.id])
+
+
+class JoinBroadcastAsViewerTests(TestCase):
+    def setUp(self):
+        self.ministry = _verified_ministry()
+        self.category = _category()
+        self.broadcast = LiveBroadcast.objects.create(
+            creator=self.ministry, title="Sunday Service", category=self.category
+        )
+
+    def test_cannot_join_a_non_live_broadcast(self):
+        with self.assertRaises(LiveBroadcastWrongStatusError):
+            commands.join_broadcast_as_viewer(broadcast=self.broadcast)
+
+    @patch("apps.live_broadcasts.services.commands.agora.issue_viewer_credential")
+    def test_joining_a_live_broadcast_issues_a_subscriber_credential(self, issue_mock):
+        self.broadcast.status = LiveBroadcastStatus.LIVE
+        self.broadcast.agora_channel_name = "itestified-live-1-abcd"
+        self.broadcast.save()
+        issue_mock.return_value = PublisherCredential(
+            app_id="app", channel_name="itestified-live-1-abcd", uid=1_000_000_001, token="t", expires_at_unix=1
+        )
+
+        commands.join_broadcast_as_viewer(broadcast=self.broadcast)
+
+        issue_mock.assert_called_once()
+        _, kwargs = issue_mock.call_args
+        self.assertEqual(kwargs["channel_name"], "itestified-live-1-abcd")
+        self.assertGreaterEqual(kwargs["uid"], commands.VIEWER_UID_RANGE_START)
+        self.assertLess(kwargs["uid"], commands.VIEWER_UID_RANGE_START + commands.VIEWER_UID_RANGE_SIZE)

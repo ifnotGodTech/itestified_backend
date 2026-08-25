@@ -166,3 +166,64 @@ class AdminApprovalApiTests(TestCase):
         )
         self.assertEqual(decide_response.status_code, 200)
         self.assertEqual(decide_response.json()["status"], "approved")
+
+
+class ViewerBrowseApiTests(TestCase):
+    def test_guest_can_list_live_broadcasts(self):
+        ministry, _token = _verified_ministry()
+        category = TestimonyCategory.objects.create(name="Faith", slug="faith")
+        live = LiveBroadcast.objects.create(creator=ministry, title="Sunday Service", category=category)
+        live.status = LiveBroadcastStatus.LIVE
+        live.save()
+
+        response = self.client.get(reverse("live-broadcast-live-now"))
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(len(body), 1)
+        self.assertEqual(body[0]["ministry_name"], "Grace Chapel")
+        self.assertEqual(body[0]["title"], "Sunday Service")
+
+    def test_guest_can_list_upcoming_broadcasts(self):
+        ministry, _token = _verified_ministry()
+        category = TestimonyCategory.objects.create(name="Faith", slug="faith")
+        LiveBroadcast.objects.create(
+            creator=ministry,
+            title="Next Week",
+            category=category,
+            scheduled_at=timezone.now() + timezone.timedelta(days=7),
+        )
+
+        response = self.client.get(reverse("live-broadcast-upcoming"))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.json()), 1)
+
+    def test_guest_gets_404_joining_a_missing_broadcast(self):
+        response = self.client.post(reverse("live-broadcast-join", kwargs={"broadcast_id": 999999}))
+        self.assertEqual(response.status_code, 404)
+
+    def test_guest_cannot_join_a_non_live_broadcast(self):
+        ministry, _token = _verified_ministry()
+        category = TestimonyCategory.objects.create(name="Faith", slug="faith")
+        broadcast = LiveBroadcast.objects.create(creator=ministry, title="Sunday Service", category=category)
+
+        response = self.client.post(reverse("live-broadcast-join", kwargs={"broadcast_id": broadcast.id}))
+        self.assertEqual(response.status_code, 400)
+
+    @patch("apps.live_broadcasts.services.commands.agora.issue_viewer_credential")
+    def test_guest_can_join_a_live_broadcast(self, issue_mock):
+        ministry, _token = _verified_ministry()
+        category = TestimonyCategory.objects.create(name="Faith", slug="faith")
+        broadcast = LiveBroadcast.objects.create(creator=ministry, title="Sunday Service", category=category)
+        broadcast.status = LiveBroadcastStatus.LIVE
+        broadcast.agora_channel_name = "itestified-live-1-abcd"
+        broadcast.save()
+        issue_mock.return_value = PublisherCredential(
+            app_id="app", channel_name="itestified-live-1-abcd", uid=1_000_000_001, token="t", expires_at_unix=1
+        )
+
+        response = self.client.post(reverse("live-broadcast-join", kwargs={"broadcast_id": broadcast.id}))
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["channel_name"], "itestified-live-1-abcd")
+        self.assertEqual(body["ministry_name"], "Grace Chapel")
+        self.assertEqual(body["title"], "Sunday Service")

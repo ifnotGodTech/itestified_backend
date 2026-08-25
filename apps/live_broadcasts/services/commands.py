@@ -43,6 +43,13 @@ logger = logging.getLogger(__name__)
 # staying inside Agora's 32-bit unsigned uid range.
 RECORDING_UID_OFFSET = 2_000_000_000
 
+# Phase 27 Slice 2 -- each viewer join mints a random uid in its own
+# range, disjoint from both real publisher uids (small User pks) and the
+# recording bot's range above, so a collision is impossible by
+# construction rather than merely unlikely.
+VIEWER_UID_RANGE_START = 1_000_000_000
+VIEWER_UID_RANGE_SIZE = 500_000_000
+
 
 def create_live_broadcast(*, creator, title: str, category, scheduled_at=None) -> LiveBroadcast:
     """Phase 27 Slice 1's backend counterpart -- creates the record only.
@@ -143,6 +150,27 @@ def go_live(*, broadcast: LiveBroadcast, actor) -> agora.PublisherCredential:
     )
     transaction.on_commit(lambda: notify_followers_of_live_broadcast(broadcast))
     return credential
+
+
+def join_broadcast_as_viewer(*, broadcast: LiveBroadcast) -> agora.PublisherCredential:
+    """Phase 27 Slice 2 -- issues a per-viewer subscribe-only token,
+    minted fresh on every join (never persisted or reused across
+    viewers). No eligibility check beyond the broadcast actually being
+    LIVE -- watching is open to anyone, guests included, per this
+    slice's own product decision."""
+    if broadcast.status != LiveBroadcastStatus.LIVE:
+        raise LiveBroadcastWrongStatusError(f"This broadcast is not currently live (status '{broadcast.status}').")
+
+    viewer_uid = VIEWER_UID_RANGE_START + secrets.randbelow(VIEWER_UID_RANGE_SIZE)
+    # Generous fixed window rather than tying it to the broadcast's own
+    # remaining duration -- a viewer joining near the end of a long
+    # broadcast should still get a usable token, not one that expires in
+    # a handful of seconds.
+    return agora.issue_viewer_credential(
+        channel_name=broadcast.agora_channel_name,
+        uid=viewer_uid,
+        expire_seconds=4 * 60 * 60,
+    )
 
 
 def _gateway() -> FlutterwaveGateway:

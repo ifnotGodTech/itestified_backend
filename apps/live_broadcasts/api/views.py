@@ -1,6 +1,6 @@
-from rest_framework import status
+from rest_framework import generics, status
 from rest_framework.authentication import SessionAuthentication, TokenAuthentication
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -33,9 +33,11 @@ from .serializers import (
     LiveBroadcastApprovalRequestSerializer,
     LiveBroadcastSerializer,
     LiveMinutePurchaseSerializer,
+    PublicLiveBroadcastSerializer,
     PublisherCredentialSerializer,
     RequestBroadcastApprovalSerializer,
     VerifyMinutePurchaseSerializer,
+    ViewerJoinCredentialSerializer,
 )
 
 
@@ -44,6 +46,58 @@ def _get_owned_broadcast(*, user, broadcast_id: int) -> LiveBroadcast:
     if broadcast is None:
         raise LiveBroadcastNotFoundError()
     return broadcast
+
+
+class LiveNowBroadcastListView(generics.ListAPIView):
+    """Phase 27 Slice 2 -- viewer discovery, live-now. Public, guests
+    included, matching PublicTestimonyListView's own permissioning."""
+
+    permission_classes = [AllowAny]
+    serializer_class = PublicLiveBroadcastSerializer
+    pagination_class = None
+
+    def get_queryset(self):
+        return selectors.list_live_broadcasts()
+
+
+class UpcomingBroadcastListView(generics.ListAPIView):
+    """Phase 27 Slice 2 -- viewer discovery, scheduled-upcoming."""
+
+    permission_classes = [AllowAny]
+    serializer_class = PublicLiveBroadcastSerializer
+    pagination_class = None
+
+    def get_queryset(self):
+        return selectors.list_upcoming_broadcasts()
+
+
+class LiveBroadcastJoinView(APIView):
+    """Phase 27 Slice 2 -- a viewer (including a guest) requests a
+    subscribe-only Agora credential to watch a live broadcast."""
+
+    permission_classes = [AllowAny]
+
+    def post(self, request, broadcast_id: int):
+        broadcast = LiveBroadcast.objects.select_related(
+            "creator", "creator__creator_profile", "creator__profile"
+        ).filter(id=broadcast_id).first()
+        if broadcast is None:
+            return Response({"message": "Broadcast not found."}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            credential = commands.join_broadcast_as_viewer(broadcast=broadcast)
+        except LiveBroadcastWrongStatusError as exc:
+            return Response({"message": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except AgoraNotConfiguredError as exc:
+            return Response({"message": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        display = PublicLiveBroadcastSerializer(broadcast).data
+        payload = {
+            **credential.__dict__,
+            "ministry_name": display["ministry_name"],
+            "ministry_avatar": display["ministry_avatar"],
+            "title": broadcast.title,
+        }
+        return Response(ViewerJoinCredentialSerializer(payload).data, status=status.HTTP_200_OK)
 
 
 class LiveBroadcastListCreateView(APIView):

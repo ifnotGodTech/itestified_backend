@@ -58,6 +58,15 @@ def issue_publisher_credential(*, channel_name: str, uid: int, expire_seconds: i
     return _build_rtc_credential(channel_name=channel_name, uid=uid, role=ROLE_PUBLISHER, expire_seconds=expire_seconds)
 
 
+def issue_viewer_credential(*, channel_name: str, uid: int, expire_seconds: int) -> PublisherCredential:
+    """Phase 27 Slice 2 -- a per-viewer subscribe-only token, issued only
+    once (join time), never persisted. Subscriber role: a viewer only
+    watches what the Ministry publishes, matching the phase's own
+    no-real-time-comments decision -- there's nothing for a viewer to
+    publish into the channel."""
+    return _build_rtc_credential(channel_name=channel_name, uid=uid, role=ROLE_SUBSCRIBER, expire_seconds=expire_seconds)
+
+
 def issue_recording_token(*, channel_name: str, uid: int, expire_seconds: int) -> PublisherCredential:
     """Phase 27 Slice 5 -- token for the Cloud Recording bot's own uid to
     join the channel. Subscriber role: the bot only records what's
