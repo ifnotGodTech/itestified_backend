@@ -3,7 +3,7 @@ from unittest.mock import patch
 from django.test import TestCase
 from django.utils import timezone
 
-from apps.creators.models import CreatorProfile
+from apps.creators.models import CreatorFollow, CreatorProfile
 from apps.live_broadcasts.exceptions import (
     InsufficientAllowanceError,
     LiveBroadcastingDisabledError,
@@ -154,6 +154,54 @@ class GoLiveTests(TestCase):
         third = LiveBroadcast.objects.create(creator=self.ministry, title="Friday Service", category=self.broadcast.category)
         with self.assertRaises(InsufficientAllowanceError):
             commands.go_live(broadcast=third, actor=self.ministry)
+
+
+class NotifyFollowersOfLiveBroadcastTests(TestCase):
+    def setUp(self):
+        self.ministry = _verified_ministry()
+        self.category = _category()
+        self.broadcast = LiveBroadcast.objects.create(
+            creator=self.ministry, title="Sunday Service", category=self.category
+        )
+        MinistryStreamingAllowance.objects.create(
+            creator=self.ministry, year=timezone.now().year, month=timezone.now().month,
+            base_allowance_minutes=200, purchased_minutes=1300,
+        )
+
+    @patch("apps.live_broadcasts.services.commands.agora.issue_publisher_credential")
+    def test_followers_are_notified_when_the_broadcast_goes_live(self, issue_mock):
+        from apps.notifications.models import NotificationType, UserNotification
+
+        follower = UserFactory(email="follower@example.com")
+        non_follower = UserFactory(email="stranger@example.com")
+        CreatorFollow.objects.create(follower=follower, creator=self.ministry)
+        issue_mock.return_value = _fake_credential()
+
+        with self.captureOnCommitCallbacks(execute=True):
+            commands.go_live(broadcast=self.broadcast, actor=self.ministry)
+
+        self.assertTrue(
+            UserNotification.objects.filter(
+                recipient=follower, notification_type=NotificationType.LIVE_BROADCAST_STARTED
+            ).exists()
+        )
+        self.assertFalse(
+            UserNotification.objects.filter(
+                recipient=non_follower, notification_type=NotificationType.LIVE_BROADCAST_STARTED
+            ).exists()
+        )
+
+    @patch("apps.live_broadcasts.services.commands.agora.issue_publisher_credential")
+    def test_no_notifications_created_when_there_are_no_followers(self, issue_mock):
+        from apps.notifications.models import NotificationType, UserNotification
+
+        issue_mock.return_value = _fake_credential()
+        with self.captureOnCommitCallbacks(execute=True):
+            commands.go_live(broadcast=self.broadcast, actor=self.ministry)
+
+        self.assertFalse(
+            UserNotification.objects.filter(notification_type=NotificationType.LIVE_BROADCAST_STARTED).exists()
+        )
 
 
 class MinutePurchaseTests(TestCase):

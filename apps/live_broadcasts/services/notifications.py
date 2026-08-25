@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from apps.creators.models import CreatorFollow
 from apps.live_broadcasts.models import LiveBroadcast, LiveBroadcastApprovalRequest, LiveBroadcastApprovalStatus
 from apps.notifications.models import NotificationType, UserNotification
 from apps.notifications.services import send_push_to_users
@@ -80,3 +81,41 @@ def notify_creator_broadcast_recording_ready(broadcast: LiveBroadcast) -> UserNo
     )
     send_push_to_users(user_ids=[broadcast.creator_id], title=title, body=message)
     return notification
+
+
+def notify_followers_of_live_broadcast(broadcast: LiveBroadcast) -> int:
+    """Phase 27 Slice 6 -- one notification per follower per broadcast,
+    the moment go_live() (services/commands.py) actually succeeds, not at
+    scheduling time (a follower shouldn't be pinged for something that
+    hasn't started, and might never start if the Ministry never taps Go
+    Live). Mirrors `notify_creator_digest`'s bulk-create shape
+    (apps.notifications) -- same "one row per follower, not per event
+    fan-out elsewhere" batching principle, just triggered by a single
+    broadcast instead of a daily digest window."""
+    follower_ids = list(
+        CreatorFollow.objects.filter(creator_id=broadcast.creator_id).values_list("follower_id", flat=True)
+    )
+    if not follower_ids:
+        return 0
+
+    creator_display_name = getattr(broadcast.creator, "email", "A Ministry you follow")
+    creator_profile = getattr(broadcast.creator, "creator_profile", None)
+    if creator_profile is not None and creator_profile.display_name:
+        creator_display_name = creator_profile.display_name
+
+    title = f"{creator_display_name} is live now"
+    message = f'"{broadcast.title}" just started -- watch now.'
+    rows = [
+        UserNotification(
+            recipient_id=follower_id,
+            actor=broadcast.creator,
+            notification_type=NotificationType.LIVE_BROADCAST_STARTED,
+            title=title,
+            message=message,
+            metadata={"broadcast_id": broadcast.id},
+        )
+        for follower_id in follower_ids
+    ]
+    UserNotification.objects.bulk_create(rows)
+    send_push_to_users(user_ids=follower_ids, title=title, body=message)
+    return len(rows)

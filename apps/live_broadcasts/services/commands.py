@@ -33,6 +33,7 @@ from apps.live_broadcasts.services.notifications import (
     notify_admins_of_approval_request,
     notify_creator_broadcast_recording_ready,
     notify_creator_of_approval_decision,
+    notify_followers_of_live_broadcast,
 )
 
 logger = logging.getLogger(__name__)
@@ -140,6 +141,7 @@ def go_live(*, broadcast: LiveBroadcast, actor) -> agora.PublisherCredential:
             "updated_at",
         ]
     )
+    transaction.on_commit(lambda: notify_followers_of_live_broadcast(broadcast))
     return credential
 
 
