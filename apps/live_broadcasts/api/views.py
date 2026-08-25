@@ -26,6 +26,8 @@ from apps.live_broadcasts.models import (
 from apps.live_broadcasts.services import commands
 
 from .serializers import (
+    AdminActiveBroadcastSerializer,
+    AdminScheduledBroadcastSerializer,
     AllowanceSerializer,
     CreateLiveBroadcastSerializer,
     DecideBroadcastApprovalSerializer,
@@ -221,6 +223,34 @@ class LiveBroadcastRequestApprovalView(APIView):
         approval_request = commands.request_broadcast_approval(broadcast=broadcast, **serializer.validated_data)
         return Response(
             LiveBroadcastApprovalRequestSerializer(approval_request).data, status=status.HTTP_201_CREATED
+        )
+
+
+class AdminBroadcastMonitorView(APIView):
+    """Phase 27 Slice 7 -- the Live Broadcasts monitoring panel. Expected
+    to be polled every 15-30s while the panel is open (see the plan's own
+    "simple polling" note); each call queries Agora's Channel Management
+    REST API on demand for every active broadcast's viewer count rather
+    than the backend standing up new real-time infrastructure."""
+
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsActiveAdmin]
+
+    def get(self, request):
+        policy = selectors.get_live_streaming_policy()
+        return Response(
+            {
+                "active": AdminActiveBroadcastSerializer(
+                    selectors.list_active_broadcasts_for_admin(), many=True
+                ).data,
+                "scheduled": AdminScheduledBroadcastSerializer(
+                    selectors.list_scheduled_broadcasts_for_admin(), many=True
+                ).data,
+                "policy": {
+                    "max_concurrent_viewers": policy.max_concurrent_viewers,
+                    "max_duration_minutes": policy.max_duration_minutes,
+                },
+            }
         )
 
 

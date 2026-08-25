@@ -52,6 +52,92 @@ class PublicLiveBroadcastSerializer(serializers.ModelSerializer):
         return profile.avatar if profile else ""
 
 
+class AdminActiveBroadcastSerializer(serializers.ModelSerializer):
+    """Phase 27 Slice 7 -- admin monitoring, active-now section. Reads
+    `viewer_count`/`elapsed_seconds`/`reserved_minutes_this_month`/
+    `total_allowance_minutes`/`remaining_allowance_minutes` as plain
+    attributes already attached by `selectors.list_active_broadcasts_for_admin`
+    (never computed here -- an external REST call and cross-model
+    aggregation are selector/service concerns, not serializer ones)."""
+
+    ministry_id = serializers.CharField(source="creator_id", read_only=True)
+    ministry_name = serializers.SerializerMethodField()
+    ministry_avatar = serializers.SerializerMethodField()
+    elapsed_seconds = serializers.IntegerField(read_only=True)
+    viewer_count = serializers.IntegerField(read_only=True, allow_null=True)
+    reserved_minutes_this_month = serializers.IntegerField(read_only=True)
+    total_allowance_minutes = serializers.IntegerField(read_only=True)
+    remaining_allowance_minutes = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = LiveBroadcast
+        fields = [
+            "id",
+            "title",
+            "started_at",
+            "elapsed_seconds",
+            "ministry_id",
+            "ministry_name",
+            "ministry_avatar",
+            "viewer_count",
+            "max_viewers_applied",
+            "max_duration_minutes_applied",
+            "reserved_minutes_this_month",
+            "total_allowance_minutes",
+            "remaining_allowance_minutes",
+        ]
+        read_only_fields = fields
+
+    def get_ministry_name(self, obj: LiveBroadcast) -> str:
+        creator_profile = getattr(obj.creator, "creator_profile", None)
+        if creator_profile and creator_profile.display_name.strip():
+            return creator_profile.display_name
+        profile = getattr(obj.creator, "profile", None)
+        if profile and profile.full_name.strip():
+            return profile.full_name
+        return obj.creator.email
+
+    def get_ministry_avatar(self, obj: LiveBroadcast) -> str:
+        creator_profile = getattr(obj.creator, "creator_profile", None)
+        if creator_profile and creator_profile.avatar_url:
+            return creator_profile.avatar_url
+        profile = getattr(obj.creator, "profile", None)
+        return profile.avatar if profile else ""
+
+
+class AdminScheduledBroadcastSerializer(serializers.ModelSerializer):
+    """Phase 27 Slice 7 -- admin monitoring, scheduled/upcoming section.
+    No viewer/usage figures here (nothing to measure yet); the caps that
+    *will* apply come from the current `LiveStreamingPolicy`, returned
+    once as a sibling `policy` object in `AdminBroadcastMonitorView`'s
+    response rather than repeated identically on every row."""
+
+    ministry_id = serializers.CharField(source="creator_id", read_only=True)
+    ministry_name = serializers.SerializerMethodField()
+    ministry_avatar = serializers.SerializerMethodField()
+
+    class Meta:
+        model = LiveBroadcast
+        fields = ["id", "title", "scheduled_at", "ministry_id", "ministry_name", "ministry_avatar"]
+        read_only_fields = fields
+
+    def get_ministry_name(self, obj: LiveBroadcast) -> str:
+        creator_profile = getattr(obj.creator, "creator_profile", None)
+        if creator_profile and creator_profile.display_name.strip():
+            return creator_profile.display_name
+        profile = getattr(obj.creator, "profile", None)
+        if profile and profile.full_name.strip():
+            return profile.full_name
+        return obj.creator.email
+
+    def get_ministry_avatar(self, obj: LiveBroadcast) -> str:
+        creator_profile = getattr(obj.creator, "creator_profile", None)
+        if creator_profile and creator_profile.avatar_url:
+            return creator_profile.avatar_url
+        profile = getattr(obj.creator, "profile", None)
+        return profile.avatar if profile else ""
+
+
 class ViewerJoinCredentialSerializer(serializers.Serializer):
     app_id = serializers.CharField()
     channel_name = serializers.CharField()

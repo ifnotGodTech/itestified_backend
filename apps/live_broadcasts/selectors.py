@@ -11,6 +11,7 @@ from apps.live_broadcasts.models import (
     LiveStreamingPolicy,
     MinistryStreamingAllowance,
 )
+from apps.live_broadcasts.services import agora as agora_service
 
 
 def require_verified_ministry(user):
@@ -96,6 +97,41 @@ def list_upcoming_broadcasts():
         .filter(status=LiveBroadcastStatus.SCHEDULED, scheduled_at__gt=now)
         .order_by("scheduled_at")
     )
+
+
+def list_active_broadcasts_for_admin() -> list[LiveBroadcast]:
+    """Phase 27 Slice 7 -- admin monitoring, every Ministry's currently
+    live broadcast platform-wide (unlike every other selector in this
+    module, not scoped to one creator). Viewer count and this-month
+    allowance usage are computed here and attached as plain attributes
+    rather than left to the serializer, since both involve an external
+    REST call / cross-model aggregation, not simple field access --
+    the serializer just reads whatever's attached."""
+    broadcasts = list(
+        _broadcast_display_queryset().filter(status=LiveBroadcastStatus.LIVE).order_by("-started_at")
+    )
+    now = timezone.now()
+    for broadcast in broadcasts:
+        broadcast.elapsed_seconds = int((now - broadcast.started_at).total_seconds()) if broadcast.started_at else 0
+        broadcast.viewer_count = (
+            agora_service.get_channel_viewer_count(channel_name=broadcast.agora_channel_name)
+            if broadcast.agora_channel_name
+            else None
+        )
+        allowance = compute_allowance_summary(creator=broadcast.creator)
+        broadcast.reserved_minutes_this_month = allowance["reserved_minutes"]
+        broadcast.total_allowance_minutes = allowance["total_allowance_minutes"]
+        broadcast.remaining_allowance_minutes = allowance["remaining_minutes"]
+    return broadcasts
+
+
+def list_scheduled_broadcasts_for_admin():
+    """Phase 27 Slice 7 -- admin monitoring, every Ministry's scheduled/
+    upcoming broadcast platform-wide. Unlike `list_upcoming_broadcasts`
+    (public, only ever shows what a viewer could actually still catch),
+    this includes a "start now" broadcast that hasn't gone live yet
+    (`scheduled_at` blank) -- an admin needs visibility into that too."""
+    return _broadcast_display_queryset().filter(status=LiveBroadcastStatus.SCHEDULED).order_by("scheduled_at")
 
 
 def compute_allowance_summary(*, creator) -> dict:

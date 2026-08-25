@@ -17,6 +17,7 @@ class NotificationType(models.TextChoices):
     LIVE_BROADCAST_APPROVAL_DECIDED = "live_broadcast_approval_decided", "Live Broadcast Approval Decided"
     LIVE_BROADCAST_RECORDING_READY = "live_broadcast_recording_ready", "Live Broadcast Recording Ready"
     LIVE_BROADCAST_STARTED = "live_broadcast_started", "Live Broadcast Started"
+    LIVE_BROADCAST_ADMIN_ALERT = "live_broadcast_admin_alert", "Live Broadcast Admin Alert"
 
 
 class UserNotification(models.Model):

@@ -1,6 +1,7 @@
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
-from django.test import TestCase
+import requests
+from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from apps.creators.models import CreatorFollow, CreatorProfile
@@ -201,6 +202,61 @@ class NotifyFollowersOfLiveBroadcastTests(TestCase):
 
         self.assertFalse(
             UserNotification.objects.filter(notification_type=NotificationType.LIVE_BROADCAST_STARTED).exists()
+        )
+
+
+class NotifyAdminsOfLiveBroadcastStartedTests(TestCase):
+    def setUp(self):
+        self.ministry = _verified_ministry()
+        self.category = _category()
+        self.broadcast = LiveBroadcast.objects.create(
+            creator=self.ministry, title="Sunday Service", category=self.category
+        )
+        MinistryStreamingAllowance.objects.create(
+            creator=self.ministry, year=timezone.now().year, month=timezone.now().month,
+            base_allowance_minutes=200, purchased_minutes=1300,
+        )
+
+    @patch("apps.live_broadcasts.services.commands.agora.issue_publisher_credential")
+    def test_on_duty_admins_are_notified_when_a_broadcast_goes_live(self, issue_mock):
+        from apps.notifications.models import NotificationType, UserNotification
+        from apps.users.choices import AdminAssignmentStatus, AdminRoleCode
+        from apps.users.tests.factories import AdminAssignmentFactory, AdminRoleFactory
+
+        active_admin = UserFactory(email="admin@example.com")
+        AdminAssignmentFactory(user=active_admin, role=AdminRoleFactory(code=AdminRoleCode.SUPER_ADMIN))
+        inactive_admin = UserFactory(email="inactive-admin@example.com")
+        AdminAssignmentFactory(
+            user=inactive_admin,
+            role=AdminRoleFactory(code=AdminRoleCode.MODERATOR),
+            status=AdminAssignmentStatus.DEACTIVATED,
+        )
+        issue_mock.return_value = _fake_credential()
+
+        with self.captureOnCommitCallbacks(execute=True):
+            commands.go_live(broadcast=self.broadcast, actor=self.ministry)
+
+        self.assertTrue(
+            UserNotification.objects.filter(
+                recipient=active_admin, notification_type=NotificationType.LIVE_BROADCAST_ADMIN_ALERT
+            ).exists()
+        )
+        self.assertFalse(
+            UserNotification.objects.filter(
+                recipient=inactive_admin, notification_type=NotificationType.LIVE_BROADCAST_ADMIN_ALERT
+            ).exists()
+        )
+
+    @patch("apps.live_broadcasts.services.commands.agora.issue_publisher_credential")
+    def test_no_admin_notifications_created_when_there_are_no_active_admins(self, issue_mock):
+        from apps.notifications.models import NotificationType, UserNotification
+
+        issue_mock.return_value = _fake_credential()
+        with self.captureOnCommitCallbacks(execute=True):
+            commands.go_live(broadcast=self.broadcast, actor=self.ministry)
+
+        self.assertFalse(
+            UserNotification.objects.filter(notification_type=NotificationType.LIVE_BROADCAST_ADMIN_ALERT).exists()
         )
 
 
@@ -431,6 +487,74 @@ class BrowseSelectorTests(TestCase):
         self.assertEqual([b.id for b in results], [future.id])
 
 
+class AdminMonitorSelectorTests(TestCase):
+    def setUp(self):
+        self.ministry = _verified_ministry()
+        self.category = _category()
+        MinistryStreamingAllowance.objects.create(
+            creator=self.ministry, year=timezone.now().year, month=timezone.now().month,
+            base_allowance_minutes=200, purchased_minutes=0,
+        )
+
+    def test_list_active_broadcasts_for_admin_attaches_viewer_count_and_allowance(self):
+        from apps.live_broadcasts import selectors
+
+        live = LiveBroadcast.objects.create(
+            creator=self.ministry,
+            title="Live One",
+            category=self.category,
+            status=LiveBroadcastStatus.LIVE,
+            started_at=timezone.now() - timezone.timedelta(minutes=5),
+            agora_channel_name="itestified-live-1-abcd",
+            max_viewers_applied=50,
+            max_duration_minutes_applied=30,
+        )
+        LiveBroadcast.objects.create(creator=self.ministry, title="Still Scheduled", category=self.category)
+
+        with patch(
+            "apps.live_broadcasts.selectors.agora_service.get_channel_viewer_count", return_value=7
+        ) as viewer_mock:
+            results = selectors.list_active_broadcasts_for_admin()
+
+        self.assertEqual([b.id for b in results], [live.id])
+        viewer_mock.assert_called_once_with(channel_name="itestified-live-1-abcd")
+        self.assertEqual(results[0].viewer_count, 7)
+        self.assertGreaterEqual(results[0].elapsed_seconds, 300)
+        self.assertEqual(results[0].total_allowance_minutes, 200)
+
+    def test_list_active_broadcasts_for_admin_reports_none_viewer_count_without_a_channel(self):
+        from apps.live_broadcasts import selectors
+
+        live = LiveBroadcast.objects.create(
+            creator=self.ministry,
+            title="Live One",
+            category=self.category,
+            status=LiveBroadcastStatus.LIVE,
+            started_at=timezone.now(),
+        )
+        results = selectors.list_active_broadcasts_for_admin()
+        self.assertEqual([b.id for b in results], [live.id])
+        self.assertIsNone(results[0].viewer_count)
+
+    def test_list_scheduled_broadcasts_for_admin_includes_start_now_broadcasts(self):
+        from apps.live_broadcasts import selectors
+
+        start_now = LiveBroadcast.objects.create(creator=self.ministry, title="Start Now", category=self.category)
+        scheduled_ahead = LiveBroadcast.objects.create(
+            creator=self.ministry,
+            title="Next Week",
+            category=self.category,
+            scheduled_at=timezone.now() + timezone.timedelta(days=7),
+        )
+        live = LiveBroadcast.objects.create(
+            creator=self.ministry, title="Already Live", category=self.category, status=LiveBroadcastStatus.LIVE
+        )
+
+        results = list(selectors.list_scheduled_broadcasts_for_admin())
+        self.assertEqual({b.id for b in results}, {start_now.id, scheduled_ahead.id})
+        self.assertNotIn(live.id, {b.id for b in results})
+
+
 class JoinBroadcastAsViewerTests(TestCase):
     def setUp(self):
         self.ministry = _verified_ministry()
@@ -459,3 +583,51 @@ class JoinBroadcastAsViewerTests(TestCase):
         self.assertEqual(kwargs["channel_name"], "itestified-live-1-abcd")
         self.assertGreaterEqual(kwargs["uid"], commands.VIEWER_UID_RANGE_START)
         self.assertLess(kwargs["uid"], commands.VIEWER_UID_RANGE_START + commands.VIEWER_UID_RANGE_SIZE)
+
+
+@override_settings(
+    AGORA_APP_ID="app-id", AGORA_APP_CERTIFICATE="cert", AGORA_CUSTOMER_ID="cid", AGORA_CUSTOMER_SECRET="secret"
+)
+class GetChannelViewerCountTests(TestCase):
+    @patch("apps.live_broadcasts.services.agora.requests.get")
+    def test_returns_audience_total_when_channel_exists(self, get_mock):
+        from apps.live_broadcasts.services import agora
+
+        get_mock.return_value = Mock(
+            json=lambda: {"data": {"channel_exist": True, "broadcasters": [1], "audience": [2, 3], "audience_total": 2}}
+        )
+        count = agora.get_channel_viewer_count(channel_name="itestified-live-1-abcd")
+        self.assertEqual(count, 2)
+        called_url = get_mock.call_args.args[0]
+        self.assertIn("/dev/v1/channel/user/app-id/itestified-live-1-abcd", called_url)
+
+    @patch("apps.live_broadcasts.services.agora.requests.get")
+    def test_falls_back_to_audience_list_length_when_total_missing(self, get_mock):
+        from apps.live_broadcasts.services import agora
+
+        get_mock.return_value = Mock(
+            json=lambda: {"data": {"channel_exist": True, "broadcasters": [1], "audience": [2, 3, 4]}}
+        )
+        count = agora.get_channel_viewer_count(channel_name="itestified-live-1-abcd")
+        self.assertEqual(count, 3)
+
+    @patch("apps.live_broadcasts.services.agora.requests.get")
+    def test_returns_zero_when_channel_does_not_exist(self, get_mock):
+        from apps.live_broadcasts.services import agora
+
+        get_mock.return_value = Mock(json=lambda: {"data": {"channel_exist": False}})
+        count = agora.get_channel_viewer_count(channel_name="itestified-live-1-abcd")
+        self.assertEqual(count, 0)
+
+    @patch("apps.live_broadcasts.services.agora.requests.get", side_effect=requests.ConnectionError("down"))
+    def test_returns_none_on_request_failure(self, get_mock):
+        from apps.live_broadcasts.services import agora
+
+        self.assertIsNone(agora.get_channel_viewer_count(channel_name="itestified-live-1-abcd"))
+
+
+class GetChannelViewerCountNotConfiguredTests(TestCase):
+    def test_returns_none_when_agora_is_not_configured(self):
+        from apps.live_broadcasts.services import agora
+
+        self.assertIsNone(agora.get_channel_viewer_count(channel_name="itestified-live-1-abcd"))

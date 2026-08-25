@@ -31,6 +31,7 @@ from apps.live_broadcasts.models import (
 from apps.live_broadcasts.services import agora
 from apps.live_broadcasts.services.notifications import (
     notify_admins_of_approval_request,
+    notify_admins_of_live_broadcast_started,
     notify_creator_broadcast_recording_ready,
     notify_creator_of_approval_decision,
     notify_followers_of_live_broadcast,
@@ -149,6 +150,7 @@ def go_live(*, broadcast: LiveBroadcast, actor) -> agora.PublisherCredential:
         ]
     )
     transaction.on_commit(lambda: notify_followers_of_live_broadcast(broadcast))
+    transaction.on_commit(lambda: notify_admins_of_live_broadcast_started(broadcast))
     return credential
 
 

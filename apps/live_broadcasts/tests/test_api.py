@@ -168,6 +168,60 @@ class AdminApprovalApiTests(TestCase):
         self.assertEqual(decide_response.json()["status"], "approved")
 
 
+class AdminBroadcastMonitorApiTests(TestCase):
+    def _admin(self):
+        admin = UserFactory(email="admin@example.com")
+        role = AdminRoleFactory(code=AdminRoleCode.SUPER_ADMIN)
+        AdminAssignmentFactory(user=admin, role=role)
+        return admin
+
+    def test_non_admin_cannot_view_the_monitor_panel(self):
+        ministry, _token = _verified_ministry()
+        self.client.force_login(ministry)
+        response = self.client.get(reverse("admin-live-broadcast-monitor"))
+        self.assertEqual(response.status_code, 403)
+
+    @patch("apps.live_broadcasts.selectors.agora_service.get_channel_viewer_count", return_value=12)
+    def test_admin_sees_active_and_scheduled_broadcasts(self, _viewer_mock):
+        ministry, _token = _verified_ministry()
+        category = TestimonyCategory.objects.create(name="Faith", slug="faith")
+        now = timezone.now()
+        MinistryStreamingAllowance.objects.create(
+            creator=ministry, year=now.year, month=now.month, base_allowance_minutes=200, purchased_minutes=0
+        )
+        active = LiveBroadcast.objects.create(
+            creator=ministry,
+            title="Live Now",
+            category=category,
+            status=LiveBroadcastStatus.LIVE,
+            started_at=now,
+            agora_channel_name="itestified-live-1-abcd",
+            max_viewers_applied=50,
+            max_duration_minutes_applied=30,
+        )
+        scheduled = LiveBroadcast.objects.create(
+            creator=ministry,
+            title="Next Week",
+            category=category,
+            scheduled_at=now + timezone.timedelta(days=7),
+        )
+
+        admin = self._admin()
+        self.client.force_login(admin)
+        response = self.client.get(reverse("admin-live-broadcast-monitor"))
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(len(body["active"]), 1)
+        self.assertEqual(body["active"][0]["id"], active.id)
+        self.assertEqual(body["active"][0]["viewer_count"], 12)
+        self.assertEqual(body["active"][0]["ministry_name"], "Grace Chapel")
+        self.assertEqual(len(body["scheduled"]), 1)
+        self.assertEqual(body["scheduled"][0]["id"], scheduled.id)
+        self.assertIn("max_concurrent_viewers", body["policy"])
+        self.assertIn("max_duration_minutes", body["policy"])
+
+
 class ViewerBrowseApiTests(TestCase):
     def test_guest_can_list_live_broadcasts(self):
         ministry, _token = _verified_ministry()

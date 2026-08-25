@@ -196,6 +196,49 @@ def stop_cloud_recording(*, channel_name: str, recording_uid: int, resource_id: 
     response.raise_for_status()
 
 
+def get_channel_viewer_count(*, channel_name: str) -> int | None:
+    """Phase 27 Slice 7 -- admin monitoring panel, queried on demand each
+    time it's viewed/refreshed rather than the backend joining the
+    channel itself (see Slice 4's own "no new real-time backend
+    infrastructure" stance). Endpoint path is verified against Agora's
+    live docs (`https://api.agora.io/dev/v1/channel/user/{appid}/
+    {channelName}`, "Query user list"); the exact response shape below
+    (`audience_total` alongside a `broadcasters`/`audience` uid list) is
+    reconstructed from a search-engine-indexed excerpt of that same page
+    -- the page itself renders client-side and 404s to a direct fetch,
+    the same limitation noted on get_participant_minutes_used/
+    query_cloud_recording above -- so confirm it against the Agora
+    Console once a real project exists. `broadcasters` (the Ministry's
+    own publisher) is deliberately excluded from the count returned here
+    since this is "viewer count", not "participant count".
+
+    Returns None (never raises) on any failure -- Agora being
+    unreachable/misconfigured must never break the monitoring panel
+    itself, only make one row's viewer count show as unavailable.
+    """
+    try:
+        app_id, _ = _require_token_credentials()
+        headers = _rest_auth_header()
+    except AgoraNotConfiguredError:
+        return None
+    try:
+        response = requests.get(
+            f"{settings.AGORA_REST_BASE_URL.rstrip('/')}/dev/v1/channel/user/{app_id}/{channel_name}",
+            headers=headers,
+            timeout=10,
+        )
+        response.raise_for_status()
+        data = response.json().get("data") or {}
+    except requests.RequestException:
+        return None
+    if not data.get("channel_exist"):
+        return 0
+    audience_total = data.get("audience_total")
+    if audience_total is not None:
+        return int(audience_total)
+    return len(data.get("audience") or [])
+
+
 def query_cloud_recording(*, resource_id: str, sid: str) -> dict:
     """Returns the raw `serverResponse` payload. NOTE: Agora's exact
     fileList shape for mix-mode recordings couldn't be directly verified
