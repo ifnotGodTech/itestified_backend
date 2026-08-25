@@ -36,6 +36,7 @@ INSTALLED_APPS = [
     "apps.profile_content",
     "apps.media_exports",
     "apps.referrals",
+    "apps.live_broadcasts",
 ]
 
 MIDDLEWARE = [
@@ -191,6 +192,21 @@ PREMIUM_PLAN_PRICING_MINOR_UNITS = {
     "NGN": 300000,
     "USD": 499,
 }
+
+# Phase 27 Slice 4: Agora Live Broadcasting. AGORA_APP_ID/AGORA_APP_CERTIFICATE
+# come from the Agora Console project and are used only to sign RTC tokens
+# locally (agora-token-builder) -- no network call needed to issue a token.
+# AGORA_CUSTOMER_ID/AGORA_CUSTOMER_SECRET are a *separate* credential pair
+# Agora issues for its RESTful APIs (Usage API for cost-cap enforcement,
+# Channel Management API for Slice 8's kill switch) -- Basic-Auth'd, distinct
+# from the App ID/Certificate pair above. All blank by default until a real
+# Agora project exists; services/agora.py fails clearly rather than silently
+# no-opping when a call is attempted with nothing configured.
+AGORA_APP_ID = os.environ.get("AGORA_APP_ID", "")
+AGORA_APP_CERTIFICATE = os.environ.get("AGORA_APP_CERTIFICATE", "")
+AGORA_CUSTOMER_ID = os.environ.get("AGORA_CUSTOMER_ID", "")
+AGORA_CUSTOMER_SECRET = os.environ.get("AGORA_CUSTOMER_SECRET", "")
+AGORA_REST_BASE_URL = os.environ.get("AGORA_REST_BASE_URL", "https://api.agora.io")
 
 # Phase 22 groundwork: shared Celery/Redis task queue for async work (AI
 # transcription/translation now; any future off-request-path job routes

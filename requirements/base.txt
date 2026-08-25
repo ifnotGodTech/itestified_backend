@@ -8,3 +8,4 @@ firebase-admin>=6.5,<8
 celery>=5.4,<6
 redis>=5.0,<6
 openai>=1.40,<2
+agora-token-builder>=1.0.0,<2

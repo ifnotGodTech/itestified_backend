@@ -13,6 +13,8 @@ class NotificationType(models.TextChoices):
     SCRIPTURE_PUBLISHED = "scripture_published", "Scripture Published"
     CREATOR_DIGEST = "creator_digest", "Creator Digest"
     PRAYER_RESPONSE = "prayer_response", "Prayer Response"
+    LIVE_BROADCAST_APPROVAL_REQUESTED = "live_broadcast_approval_requested", "Live Broadcast Approval Requested"
+    LIVE_BROADCAST_APPROVAL_DECIDED = "live_broadcast_approval_decided", "Live Broadcast Approval Decided"
 
 
 class UserNotification(models.Model):
