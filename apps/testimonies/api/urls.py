@@ -24,6 +24,7 @@ from .views import (
     AdminVideoTestimonyUploadView,
     AdminVideoTestimonyCreateFromUrlView,
     AdminDeleteTestimonyView,
+    AuthenticatedDraftTestimonySubmitView,
     AuthenticatedMyTestimonyListView,
     AuthenticatedMyTestimonyDeleteView,
     AuthenticatedRejectedTestimonyResubmitView,
@@ -60,6 +61,11 @@ urlpatterns = [
         "mine/<int:testimony_id>/resubmit/",
         AuthenticatedRejectedTestimonyResubmitView.as_view(),
         name="testimony-mine-resubmit",
+    ),
+    path(
+        "mine/<int:testimony_id>/submit-draft/",
+        AuthenticatedDraftTestimonySubmitView.as_view(),
+        name="testimony-mine-submit-draft",
     ),
     path(
         "mine/<int:testimony_id>/",

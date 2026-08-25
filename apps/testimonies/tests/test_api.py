@@ -526,6 +526,82 @@ class TestimonyApiTests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["message"], "Only rejected testimonies can be resubmitted.")
 
+    def test_draft_testimony_submit_transitions_to_pending_and_notifies_admin(self) -> None:
+        owner = UserFactory(email="draft-owner@example.com")
+        ProfileFactory(user=owner, full_name="Draft Owner")
+        owner_token = Token.objects.create(user=owner)
+        draft = Testimony.objects.create(
+            author=owner,
+            category=self.category_faith,
+            title="Sunday Worship Service",
+            testimony_type=TestimonyType.VIDEO,
+            status=TestimonyStatus.DRAFT,
+            video_url="https://bucket.example/recordings/sunday.mp4",
+        )
+
+        admin_user = UserFactory(email="draft-admin@example.com")
+        ProfileFactory(user=admin_user, full_name="Draft Admin")
+        admin_role = AdminRoleFactory(code=AdminRoleCode.MODERATOR)
+        AdminAssignmentFactory(user=admin_user, role=admin_role)
+
+        response = self.client.post(
+            reverse("testimony-mine-submit-draft", kwargs={"testimony_id": draft.id}),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {owner_token.key}",
+        )
+        self.assertEqual(response.status_code, 200)
+        draft.refresh_from_db()
+        self.assertEqual(draft.status, TestimonyStatus.PENDING_REVIEW)
+
+        admin_notification = UserNotification.objects.filter(
+            recipient=admin_user,
+            actor=owner,
+            notification_type=NotificationType.TESTIMONY_SUBMITTED,
+        ).first()
+        self.assertIsNotNone(admin_notification)
+
+    def test_draft_testimony_submit_returns_404_for_non_owner(self) -> None:
+        owner = UserFactory(email="draft-owner-2@example.com")
+        other = UserFactory(email="draft-other@example.com")
+        other_token = Token.objects.create(user=other)
+        draft = Testimony.objects.create(
+            author=owner,
+            category=self.category_faith,
+            title="Owner Draft",
+            testimony_type=TestimonyType.VIDEO,
+            status=TestimonyStatus.DRAFT,
+            video_url="https://bucket.example/recordings/owner.mp4",
+        )
+
+        response = self.client.post(
+            reverse("testimony-mine-submit-draft", kwargs={"testimony_id": draft.id}),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {other_token.key}",
+        )
+        self.assertEqual(response.status_code, 404)
+        draft.refresh_from_db()
+        self.assertEqual(draft.status, TestimonyStatus.DRAFT)
+
+    def test_draft_testimony_submit_rejects_non_draft_status(self) -> None:
+        owner = UserFactory(email="draft-owner-3@example.com")
+        owner_token = Token.objects.create(user=owner)
+        pending = Testimony.objects.create(
+            author=owner,
+            category=self.category_faith,
+            title="Pending testimony",
+            testimony_type=TestimonyType.VIDEO,
+            status=TestimonyStatus.PENDING_REVIEW,
+            video_url="https://bucket.example/recordings/pending.mp4",
+        )
+
+        response = self.client.post(
+            reverse("testimony-mine-submit-draft", kwargs={"testimony_id": pending.id}),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {owner_token.key}",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["message"], "Only a draft testimony can be submitted this way.")
+
     def test_my_testimony_delete_allows_owner_for_rejected(self) -> None:
         owner = UserFactory(email="delete-owner@example.com")
         owner_token = Token.objects.create(user=owner)

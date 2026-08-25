@@ -460,6 +460,42 @@ class AuthenticatedRejectedTestimonyResubmitView(APIView):
         return Response(TestimonyDetailSerializer(testimony).data, status=status.HTTP_200_OK)
 
 
+class AuthenticatedDraftTestimonySubmitView(APIView):
+    """Phase 27 Slice 3 -- the creator's "submit for review" decision on a
+    DRAFT testimony (today, only ever produced by Slice 5's live-broadcast
+    archival). No content is editable here -- Slice 5 already set title/
+    category/video_url at archival time; this is a pure status transition,
+    mirroring AuthenticatedRejectedTestimonyResubmitView's shape but with
+    nothing to validate. "Hold privately" needs no endpoint at all -- it's
+    simply not calling this one; the testimony stays DRAFT until the
+    creator is ready."""
+
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, testimony_id: int):
+        testimony = Testimony.objects.filter(id=testimony_id, author=request.user).first()
+        if testimony is None:
+            return Response({"message": "Testimony not found."}, status=status.HTTP_404_NOT_FOUND)
+        if testimony.status != TestimonyStatus.DRAFT:
+            return Response(
+                {"message": "Only a draft testimony can be submitted this way."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        testimony.status = TestimonyStatus.PENDING_REVIEW
+        testimony.save(update_fields=["status", "updated_at"])
+
+        notify_testimony_submitted_to_admins(
+            testimony_title=testimony.title,
+            testimony_type=testimony.testimony_type,
+            actor=request.user,
+            testimony_id=testimony.id,
+        )
+
+        return Response(TestimonyDetailSerializer(testimony).data, status=status.HTTP_200_OK)
+
+
 class AuthenticatedMyTestimonyDeleteView(APIView):
     authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
