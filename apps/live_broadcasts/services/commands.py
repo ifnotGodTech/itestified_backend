@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import secrets
 
 from django.conf import settings
@@ -9,6 +10,7 @@ from django.utils import timezone
 from apps.common.services.flutterwave import FlutterwaveGateway, FlutterwaveGatewayError
 from apps.live_broadcasts import selectors
 from apps.live_broadcasts.exceptions import (
+    AgoraNotConfiguredError,
     InsufficientAllowanceError,
     LiveBroadcastApprovalAlreadyDecidedError,
     LiveBroadcastingDisabledError,
@@ -20,6 +22,8 @@ from apps.live_broadcasts.models import (
     LiveBroadcast,
     LiveBroadcastApprovalRequest,
     LiveBroadcastApprovalStatus,
+    LiveBroadcastEndedReason,
+    LiveBroadcastRecordingStatus,
     LiveBroadcastStatus,
     LiveMinutePurchase,
     LiveMinutePurchaseStatus,
@@ -27,18 +31,29 @@ from apps.live_broadcasts.models import (
 from apps.live_broadcasts.services import agora
 from apps.live_broadcasts.services.notifications import (
     notify_admins_of_approval_request,
+    notify_creator_broadcast_recording_ready,
     notify_creator_of_approval_decision,
 )
 
+logger = logging.getLogger(__name__)
 
-def create_live_broadcast(*, creator, title: str, scheduled_at=None) -> LiveBroadcast:
+# Offset keeps the Cloud Recording bot's own Agora uid from ever colliding
+# with a real publisher uid (which is just the creator's User pk) while
+# staying inside Agora's 32-bit unsigned uid range.
+RECORDING_UID_OFFSET = 2_000_000_000
+
+
+def create_live_broadcast(*, creator, title: str, category, scheduled_at=None) -> LiveBroadcast:
     """Phase 27 Slice 1's backend counterpart -- creates the record only.
     No Agora resources are allocated until go_live() below succeeds, per
-    the phase's own Background note."""
+    the phase's own Background note. `category` is required up front
+    (Slice 5): the recording this broadcast eventually produces becomes a
+    real Testimony, and Testimony.category is non-nullable."""
     selectors.require_verified_ministry(creator)
     return LiveBroadcast.objects.create(
         creator=creator,
         title=title.strip(),
+        category=category,
         scheduled_at=scheduled_at,
     )
 
@@ -84,6 +99,32 @@ def go_live(*, broadcast: LiveBroadcast, actor) -> agora.PublisherCredential:
     broadcast.agora_publisher_uid = credential.uid
     broadcast.max_viewers_applied = policy.max_concurrent_viewers
     broadcast.max_duration_minutes_applied = policy.max_duration_minutes
+
+    # Best-effort: a Cloud Recording hiccup should never block the
+    # Ministry from actually broadcasting (see Phase 27 Slice 5's own
+    # note) -- it just means there's nothing to archive once they end.
+    recording_uid = RECORDING_UID_OFFSET + broadcast.id
+    try:
+        recording_credential = agora.issue_recording_token(
+            channel_name=channel_name, uid=recording_uid, expire_seconds=(policy.max_duration_minutes * 60) + 300
+        )
+        resource_id = agora.acquire_cloud_recording(channel_name=channel_name, recording_uid=recording_uid)
+        sid = agora.start_cloud_recording(
+            channel_name=channel_name,
+            recording_uid=recording_uid,
+            resource_id=resource_id,
+            recording_token=recording_credential.token,
+        )
+        broadcast.recording_status = LiveBroadcastRecordingStatus.RECORDING
+        broadcast.agora_recording_resource_id = resource_id
+        broadcast.agora_recording_sid = sid
+        broadcast.agora_recording_uid = recording_uid
+    except AgoraNotConfiguredError:
+        broadcast.recording_status = LiveBroadcastRecordingStatus.FAILED
+    except Exception:  # noqa: BLE001 - a recording-infra failure must never fail go-live itself.
+        logger.exception("live_broadcasts.go_live: cloud recording start failed for broadcast %s", broadcast.id)
+        broadcast.recording_status = LiveBroadcastRecordingStatus.FAILED
+
     broadcast.save(
         update_fields=[
             "status",
@@ -92,6 +133,10 @@ def go_live(*, broadcast: LiveBroadcast, actor) -> agora.PublisherCredential:
             "agora_publisher_uid",
             "max_viewers_applied",
             "max_duration_minutes_applied",
+            "recording_status",
+            "agora_recording_resource_id",
+            "agora_recording_sid",
+            "agora_recording_uid",
             "updated_at",
         ]
     )
@@ -212,3 +257,108 @@ def decide_broadcast_approval(
 
     transaction.on_commit(lambda: notify_creator_of_approval_decision(approval_request))
     return approval_request
+
+
+@transaction.atomic
+def end_broadcast(*, broadcast: LiveBroadcast, reason: str, actor=None) -> LiveBroadcast:
+    """Phase 27 Slice 5 -- the shared ending path regardless of *why* a
+    broadcast ends (creator taps "End", a stream drops and
+    reconcile_stale_live_broadcasts catches it, or -- once Slice 8 exists
+    -- an admin kill). Only ever stops Cloud Recording and kicks off
+    archival; it never publishes anything itself (Slice 3 owns that
+    decision)."""
+    if broadcast.status != LiveBroadcastStatus.LIVE:
+        raise LiveBroadcastWrongStatusError(f"Cannot end a broadcast in status '{broadcast.status}'.")
+
+    broadcast.status = LiveBroadcastStatus.ENDED
+    broadcast.ended_at = timezone.now()
+    broadcast.ended_reason = reason
+
+    if broadcast.recording_status == LiveBroadcastRecordingStatus.RECORDING:
+        try:
+            agora.stop_cloud_recording(
+                channel_name=broadcast.agora_channel_name,
+                recording_uid=broadcast.agora_recording_uid,
+                resource_id=broadcast.agora_recording_resource_id,
+                sid=broadcast.agora_recording_sid,
+            )
+            broadcast.recording_status = LiveBroadcastRecordingStatus.STOPPING
+        except Exception:  # noqa: BLE001 - ending the broadcast must succeed even if the stop call fails.
+            logger.exception("live_broadcasts.end_broadcast: stop_cloud_recording failed for broadcast %s", broadcast.id)
+            broadcast.recording_status = LiveBroadcastRecordingStatus.FAILED
+
+    broadcast.save(update_fields=["status", "ended_at", "ended_reason", "recording_status", "updated_at"])
+
+    if broadcast.recording_status == LiveBroadcastRecordingStatus.STOPPING:
+        from apps.live_broadcasts.tasks import poll_and_archive_recording
+
+        transaction.on_commit(lambda: poll_and_archive_recording.delay(broadcast.id))
+
+    return broadcast
+
+
+def archive_broadcast_recording(*, broadcast: LiveBroadcast, video_url: str):
+    """Phase 27 Slice 5 -- called once poll_and_archive_recording
+    (tasks.py) confirms Agora's file is written to storage. Creates the
+    DRAFT testimony Slice 3's submit-or-hold decision operates on;
+    archiving never publishes anything by itself."""
+    from apps.testimonies.models import Testimony, TestimonyStatus, TestimonyType
+
+    with transaction.atomic():
+        testimony = Testimony.objects.create(
+            author=broadcast.creator,
+            category=broadcast.category,
+            title=broadcast.title,
+            testimony_type=TestimonyType.VIDEO,
+            status=TestimonyStatus.DRAFT,
+            video_url=video_url,
+        )
+        broadcast.archived_testimony = testimony
+        broadcast.recording_status = LiveBroadcastRecordingStatus.ARCHIVED
+        broadcast.save(update_fields=["archived_testimony", "recording_status", "updated_at"])
+        transaction.on_commit(lambda: notify_creator_broadcast_recording_ready(broadcast))
+    return testimony
+
+
+def mark_recording_failed(*, broadcast: LiveBroadcast) -> None:
+    broadcast.recording_status = LiveBroadcastRecordingStatus.FAILED
+    broadcast.save(update_fields=["recording_status", "updated_at"])
+
+
+# A broadcast's own publish token already expires at
+# max_duration_minutes_applied + 300s (go_live's own buffer) -- past that,
+# Agora itself has already cut the creator's connection, so anything still
+# marked LIVE this far out definitely dropped rather than merely running
+# long. The extra 300s here just covers this command's own run cadence
+# (see render.yaml's cron schedule) so a broadcast isn't flagged the
+# instant its token buffer lapses.
+STALE_BROADCAST_GRACE_SECONDS = 300
+
+
+def reconcile_stale_live_broadcasts() -> int:
+    """Phase 27's own Test requirement ("a dropped stream mid-broadcast is
+    handled gracefully") -- there's no proactive drop detection via
+    Agora's Channel Management API here (its exact channel-presence
+    semantics weren't verified while building this); instead, any
+    broadcast still LIVE well past when its own publish token must have
+    expired is unambiguously stale, purely from data this app already
+    has. Run periodically via `manage.py reconcile_stale_live_broadcasts`
+    (see render.yaml's cron service), matching this codebase's existing
+    cron-command pattern (`publish_scheduled_testimonies` etc.) rather
+    than introducing a new Celery beat scheduler."""
+    now = timezone.now()
+    ended_count = 0
+    stale_broadcasts = LiveBroadcast.objects.filter(
+        status=LiveBroadcastStatus.LIVE,
+        started_at__isnull=False,
+        max_duration_minutes_applied__isnull=False,
+    )
+    for broadcast in stale_broadcasts:
+        deadline = broadcast.started_at + timezone.timedelta(
+            minutes=broadcast.max_duration_minutes_applied,
+            seconds=300 + STALE_BROADCAST_GRACE_SECONDS,
+        )
+        if now >= deadline:
+            end_broadcast(broadcast=broadcast, reason=LiveBroadcastEndedReason.DROPPED)
+            ended_count += 1
+    return ended_count

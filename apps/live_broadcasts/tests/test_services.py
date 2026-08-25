@@ -13,6 +13,8 @@ from apps.live_broadcasts.exceptions import (
 from apps.live_broadcasts.models import (
     LiveBroadcast,
     LiveBroadcastApprovalStatus,
+    LiveBroadcastEndedReason,
+    LiveBroadcastRecordingStatus,
     LiveBroadcastStatus,
     LiveMinutePricing,
     LiveMinutePurchaseStatus,
@@ -21,6 +23,7 @@ from apps.live_broadcasts.models import (
 )
 from apps.live_broadcasts.services import commands
 from apps.live_broadcasts.services.agora import PublisherCredential
+from apps.testimonies.models import TestimonyCategory
 from apps.users.tests.factories import UserFactory
 
 
@@ -28,6 +31,10 @@ def _verified_ministry(email="ministry@example.com") -> "User":  # noqa: F821 - 
     user = UserFactory(email=email)
     CreatorProfile.objects.create(user=user, display_name="Grace Chapel", is_verified=True)
     return user
+
+
+def _category() -> TestimonyCategory:
+    return TestimonyCategory.objects.create(name="Testimony Category", slug="testimony-category")
 
 
 def _fake_credential(**overrides):
@@ -46,17 +53,17 @@ class CreateLiveBroadcastTests(TestCase):
     def test_non_ministry_cannot_schedule(self):
         user = UserFactory()
         with self.assertRaises(NotAVerifiedMinistryError):
-            commands.create_live_broadcast(creator=user, title="Sunday Service")
+            commands.create_live_broadcast(creator=user, title="Sunday Service", category=_category())
 
     def test_unverified_creator_profile_cannot_schedule(self):
         user = UserFactory()
         CreatorProfile.objects.create(user=user, display_name="Unverified Ministry", is_verified=False)
         with self.assertRaises(NotAVerifiedMinistryError):
-            commands.create_live_broadcast(creator=user, title="Sunday Service")
+            commands.create_live_broadcast(creator=user, title="Sunday Service", category=_category())
 
     def test_verified_ministry_can_schedule(self):
         ministry = _verified_ministry()
-        broadcast = commands.create_live_broadcast(creator=ministry, title="Sunday Service")
+        broadcast = commands.create_live_broadcast(creator=ministry, title="Sunday Service", category=_category())
         self.assertEqual(broadcast.status, LiveBroadcastStatus.SCHEDULED)
         self.assertEqual(broadcast.agora_channel_name, "")
 
@@ -64,7 +71,7 @@ class CreateLiveBroadcastTests(TestCase):
 class GoLiveTests(TestCase):
     def setUp(self):
         self.ministry = _verified_ministry()
-        self.broadcast = LiveBroadcast.objects.create(creator=self.ministry, title="Sunday Service")
+        self.broadcast = LiveBroadcast.objects.create(creator=self.ministry, title="Sunday Service", category=_category())
 
     def _give_sufficient_allowance(self):
         now = timezone.now()
@@ -137,14 +144,14 @@ class GoLiveTests(TestCase):
         # First broadcast reserves 1,500 worst-case minutes.
         commands.go_live(broadcast=self.broadcast, actor=self.ministry)
 
-        second = LiveBroadcast.objects.create(creator=self.ministry, title="Midweek Service")
+        second = LiveBroadcast.objects.create(creator=self.ministry, title="Midweek Service", category=self.broadcast.category)
         # Second broadcast would need another 1,500; remaining is
         # 200 + 3000 - 1500 = 1700, which is enough for one more but not
         # a third -- proves prior go-lives this month are actually
         # deducted, not just the current attempt considered in isolation.
         commands.go_live(broadcast=second, actor=self.ministry)
 
-        third = LiveBroadcast.objects.create(creator=self.ministry, title="Friday Service")
+        third = LiveBroadcast.objects.create(creator=self.ministry, title="Friday Service", category=self.broadcast.category)
         with self.assertRaises(InsufficientAllowanceError):
             commands.go_live(broadcast=third, actor=self.ministry)
 
@@ -188,7 +195,7 @@ class MinutePurchaseTests(TestCase):
 class ApprovalFallbackTests(TestCase):
     def setUp(self):
         self.ministry = _verified_ministry()
-        self.broadcast = LiveBroadcast.objects.create(creator=self.ministry, title="Sunday Service")
+        self.broadcast = LiveBroadcast.objects.create(creator=self.ministry, title="Sunday Service", category=_category())
 
     def test_approving_credits_allowance_and_marks_decided(self):
         admin = UserFactory(email="admin@example.com")
@@ -209,3 +216,124 @@ class ApprovalFallbackTests(TestCase):
         self.assertEqual(decided.status, LiveBroadcastApprovalStatus.REJECTED)
         summary = commands.selectors.compute_allowance_summary(creator=self.ministry)
         self.assertEqual(summary["purchased_minutes"], 0)
+
+
+class EndBroadcastTests(TestCase):
+    def setUp(self):
+        self.ministry = _verified_ministry()
+        self.category = _category()
+
+    def _live_broadcast(self, recording_status=LiveBroadcastRecordingStatus.RECORDING):
+        broadcast = LiveBroadcast.objects.create(
+            creator=self.ministry, title="Sunday Service", category=self.category
+        )
+        broadcast.status = LiveBroadcastStatus.LIVE
+        broadcast.started_at = timezone.now()
+        broadcast.agora_channel_name = "itestified-live-1-abcd"
+        broadcast.agora_recording_resource_id = "resource-1"
+        broadcast.agora_recording_sid = "sid-1"
+        broadcast.agora_recording_uid = 2_000_000_001
+        broadcast.recording_status = recording_status
+        broadcast.max_duration_minutes_applied = 30
+        broadcast.save()
+        return broadcast
+
+    def test_cannot_end_a_non_live_broadcast(self):
+        broadcast = LiveBroadcast.objects.create(
+            creator=self.ministry, title="Sunday Service", category=self.category
+        )
+        with self.assertRaises(LiveBroadcastWrongStatusError):
+            commands.end_broadcast(broadcast=broadcast, reason=LiveBroadcastEndedReason.CREATOR_ENDED)
+
+    @patch("apps.live_broadcasts.tasks.poll_and_archive_recording.delay")
+    @patch("apps.live_broadcasts.services.commands.agora.stop_cloud_recording")
+    def test_ending_a_recording_broadcast_stops_recording_and_enqueues_polling(self, stop_mock, delay_mock):
+        broadcast = self._live_broadcast()
+        with self.captureOnCommitCallbacks(execute=True):
+            commands.end_broadcast(broadcast=broadcast, reason=LiveBroadcastEndedReason.CREATOR_ENDED)
+
+        broadcast.refresh_from_db()
+        self.assertEqual(broadcast.status, LiveBroadcastStatus.ENDED)
+        self.assertEqual(broadcast.ended_reason, LiveBroadcastEndedReason.CREATOR_ENDED)
+        self.assertEqual(broadcast.recording_status, LiveBroadcastRecordingStatus.STOPPING)
+        stop_mock.assert_called_once()
+        delay_mock.assert_called_once_with(broadcast.id)
+
+    @patch("apps.live_broadcasts.tasks.poll_and_archive_recording.delay")
+    def test_ending_a_broadcast_with_no_recording_does_not_enqueue_polling(self, delay_mock):
+        broadcast = self._live_broadcast(recording_status=LiveBroadcastRecordingStatus.FAILED)
+        commands.end_broadcast(broadcast=broadcast, reason=LiveBroadcastEndedReason.DROPPED)
+
+        broadcast.refresh_from_db()
+        self.assertEqual(broadcast.status, LiveBroadcastStatus.ENDED)
+        self.assertEqual(broadcast.ended_reason, LiveBroadcastEndedReason.DROPPED)
+        delay_mock.assert_not_called()
+
+
+class ArchiveBroadcastRecordingTests(TestCase):
+    def test_archiving_creates_a_draft_testimony_and_notifies_creator(self):
+        from apps.notifications.models import NotificationType, UserNotification
+        from apps.testimonies.models import TestimonyStatus, TestimonyType
+
+        ministry = _verified_ministry()
+        category = _category()
+        broadcast = LiveBroadcast.objects.create(creator=ministry, title="Sunday Service", category=category)
+
+        with self.captureOnCommitCallbacks(execute=True):
+            testimony = commands.archive_broadcast_recording(
+                broadcast=broadcast, video_url="https://bucket.example/recordings/sunday.mp4"
+            )
+
+        self.assertEqual(testimony.testimony_type, TestimonyType.VIDEO)
+        self.assertEqual(testimony.status, TestimonyStatus.DRAFT)
+        self.assertEqual(testimony.category_id, category.id)
+        self.assertEqual(testimony.video_url, "https://bucket.example/recordings/sunday.mp4")
+
+        broadcast.refresh_from_db()
+        self.assertEqual(broadcast.archived_testimony_id, testimony.id)
+        self.assertEqual(broadcast.recording_status, LiveBroadcastRecordingStatus.ARCHIVED)
+
+        self.assertTrue(
+            UserNotification.objects.filter(
+                recipient=ministry, notification_type=NotificationType.LIVE_BROADCAST_RECORDING_READY
+            ).exists()
+        )
+
+
+class ReconcileStaleLiveBroadcastsTests(TestCase):
+    def setUp(self):
+        self.ministry = _verified_ministry()
+        self.category = _category()
+
+    def test_a_broadcast_well_past_its_token_expiry_is_marked_dropped(self):
+        broadcast = LiveBroadcast.objects.create(
+            creator=self.ministry, title="Sunday Service", category=self.category
+        )
+        broadcast.status = LiveBroadcastStatus.LIVE
+        broadcast.started_at = timezone.now() - timezone.timedelta(hours=2)
+        broadcast.max_duration_minutes_applied = 30
+        broadcast.recording_status = LiveBroadcastRecordingStatus.FAILED
+        broadcast.save()
+
+        ended_count = commands.reconcile_stale_live_broadcasts()
+
+        self.assertEqual(ended_count, 1)
+        broadcast.refresh_from_db()
+        self.assertEqual(broadcast.status, LiveBroadcastStatus.ENDED)
+        self.assertEqual(broadcast.ended_reason, LiveBroadcastEndedReason.DROPPED)
+
+    def test_a_broadcast_still_within_its_window_is_left_alone(self):
+        broadcast = LiveBroadcast.objects.create(
+            creator=self.ministry, title="Sunday Service", category=self.category
+        )
+        broadcast.status = LiveBroadcastStatus.LIVE
+        broadcast.started_at = timezone.now()
+        broadcast.max_duration_minutes_applied = 30
+        broadcast.recording_status = LiveBroadcastRecordingStatus.FAILED
+        broadcast.save()
+
+        ended_count = commands.reconcile_stale_live_broadcasts()
+
+        self.assertEqual(ended_count, 0)
+        broadcast.refresh_from_db()
+        self.assertEqual(broadcast.status, LiveBroadcastStatus.LIVE)

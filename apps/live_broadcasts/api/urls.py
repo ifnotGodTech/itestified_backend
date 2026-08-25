@@ -3,6 +3,7 @@ from django.urls import path
 from .views import (
     AdminLiveBroadcastApprovalDecideView,
     AdminLiveBroadcastApprovalRequestListView,
+    LiveBroadcastEndView,
     LiveBroadcastGoLiveView,
     LiveBroadcastListCreateView,
     LiveBroadcastRequestApprovalView,
@@ -15,6 +16,7 @@ urlpatterns = [
     path("", LiveBroadcastListCreateView.as_view(), name="live-broadcast-list-create"),
     path("allowance/", LiveStreamingAllowanceView.as_view(), name="live-broadcast-allowance"),
     path("<int:broadcast_id>/go-live/", LiveBroadcastGoLiveView.as_view(), name="live-broadcast-go-live"),
+    path("<int:broadcast_id>/end/", LiveBroadcastEndView.as_view(), name="live-broadcast-end"),
     path(
         "<int:broadcast_id>/request-approval/",
         LiveBroadcastRequestApprovalView.as_view(),

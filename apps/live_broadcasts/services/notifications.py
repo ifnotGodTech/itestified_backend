@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from apps.live_broadcasts.models import LiveBroadcastApprovalRequest, LiveBroadcastApprovalStatus
+from apps.live_broadcasts.models import LiveBroadcast, LiveBroadcastApprovalRequest, LiveBroadcastApprovalStatus
 from apps.notifications.models import NotificationType, UserNotification
 from apps.notifications.services import send_push_to_users
 from apps.users.choices import AdminAssignmentStatus
@@ -60,4 +60,23 @@ def notify_creator_of_approval_decision(approval_request: LiveBroadcastApprovalR
         metadata={"broadcast_id": approval_request.broadcast_id, "approval_request_id": approval_request.id},
     )
     send_push_to_users(user_ids=[approval_request.creator_id], title=title, body=message)
+    return notification
+
+
+def notify_creator_broadcast_recording_ready(broadcast: LiveBroadcast) -> UserNotification:
+    """Phase 27 Slice 5 -- the creator's recording is archived as a DRAFT
+    testimony (services/commands.py's archive_broadcast_recording) and
+    waiting on their own Slice 3 decision (submit for review or hold);
+    this is what tells them it's there to act on, instead of them having
+    to keep checking back."""
+    title = "Your broadcast recording is ready"
+    message = f'The recording of "{broadcast.title}" is ready for you to review and submit whenever you\'re ready.'
+    notification = UserNotification.objects.create(
+        recipient=broadcast.creator,
+        notification_type=NotificationType.LIVE_BROADCAST_RECORDING_READY,
+        title=title,
+        message=message,
+        metadata={"broadcast_id": broadcast.id, "testimony_id": broadcast.archived_testimony_id},
+    )
+    send_push_to_users(user_ids=[broadcast.creator_id], title=title, body=message)
     return notification

@@ -17,7 +17,12 @@ from apps.live_broadcasts.exceptions import (
     LiveMinutePurchaseNotFoundError,
     NotAVerifiedMinistryError,
 )
-from apps.live_broadcasts.models import LiveBroadcast, LiveBroadcastApprovalRequest, LiveBroadcastApprovalStatus
+from apps.live_broadcasts.models import (
+    LiveBroadcast,
+    LiveBroadcastApprovalRequest,
+    LiveBroadcastApprovalStatus,
+    LiveBroadcastEndedReason,
+)
 from apps.live_broadcasts.services import commands
 
 from .serializers import (
@@ -84,6 +89,23 @@ class LiveBroadcastGoLiveView(APIView):
         except AgoraNotConfiguredError as exc:
             return Response({"message": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
         return Response(PublisherCredentialSerializer(credential.__dict__).data, status=status.HTTP_200_OK)
+
+
+class LiveBroadcastEndView(APIView):
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, broadcast_id: int):
+        try:
+            broadcast = _get_owned_broadcast(user=request.user, broadcast_id=broadcast_id)
+            broadcast = commands.end_broadcast(
+                broadcast=broadcast, reason=LiveBroadcastEndedReason.CREATOR_ENDED, actor=request.user
+            )
+        except LiveBroadcastNotFoundError:
+            return Response({"message": "Broadcast not found."}, status=status.HTTP_404_NOT_FOUND)
+        except LiveBroadcastWrongStatusError as exc:
+            return Response({"message": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(LiveBroadcastSerializer(broadcast).data, status=status.HTTP_200_OK)
 
 
 class LiveStreamingAllowanceView(APIView):

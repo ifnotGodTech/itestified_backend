@@ -12,6 +12,7 @@ from apps.live_broadcasts.models import (
     MinistryStreamingAllowance,
 )
 from apps.live_broadcasts.services.agora import PublisherCredential
+from apps.testimonies.models import TestimonyCategory
 from apps.users.choices import AdminRoleCode
 from apps.users.tests.factories import AdminAssignmentFactory, AdminRoleFactory, UserFactory
 from django.utils import timezone
@@ -32,9 +33,10 @@ class LiveBroadcastApiTests(TestCase):
     def test_non_ministry_gets_403_on_create(self):
         user = UserFactory()
         token = Token.objects.create(user=user)
+        category = TestimonyCategory.objects.create(name="Faith", slug="faith")
         response = self.client.post(
             reverse("live-broadcast-list-create"),
-            {"title": "Sunday Service"},
+            {"title": "Sunday Service", "category_id": category.id},
             content_type="application/json",
             HTTP_AUTHORIZATION=f"Token {token.key}",
         )
@@ -42,9 +44,10 @@ class LiveBroadcastApiTests(TestCase):
 
     def test_verified_ministry_can_schedule(self):
         ministry, token = _verified_ministry()
+        category = TestimonyCategory.objects.create(name="Faith", slug="faith")
         response = self.client.post(
             reverse("live-broadcast-list-create"),
-            {"title": "Sunday Service"},
+            {"title": "Sunday Service", "category_id": category.id},
             content_type="application/json",
             HTTP_AUTHORIZATION=f"Token {token.key}",
         )
@@ -90,6 +93,32 @@ class LiveBroadcastApiTests(TestCase):
         body = response.json()
         self.assertEqual(body["total_allowance_minutes"], 200)
         self.assertEqual(body["remaining_minutes"], 200)
+
+    def test_end_broadcast_requires_it_to_be_live(self):
+        ministry, token = _verified_ministry()
+        category = TestimonyCategory.objects.create(name="Faith", slug="faith")
+        broadcast = LiveBroadcast.objects.create(creator=ministry, title="Sunday Service", category=category)
+
+        response = self.client.post(
+            reverse("live-broadcast-end", kwargs={"broadcast_id": broadcast.id}),
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_creator_can_end_a_live_broadcast(self):
+        ministry, token = _verified_ministry()
+        category = TestimonyCategory.objects.create(name="Faith", slug="faith")
+        broadcast = LiveBroadcast.objects.create(creator=ministry, title="Sunday Service", category=category)
+        broadcast.status = LiveBroadcastStatus.LIVE
+        broadcast.save()
+
+        response = self.client.post(
+            reverse("live-broadcast-end", kwargs={"broadcast_id": broadcast.id}),
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "ended")
+        self.assertEqual(response.json()["ended_reason"], "creator_ended")
 
     def test_request_approval_creates_pending_request(self):
         ministry, token = _verified_ministry()

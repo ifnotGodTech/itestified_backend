@@ -11,18 +11,49 @@ class LiveBroadcastStatus(models.TextChoices):
     CANCELED = "canceled", "Canceled"
 
 
+class LiveBroadcastEndedReason(models.TextChoices):
+    CREATOR_ENDED = "creator_ended", "Creator Ended"
+    DROPPED = "dropped", "Dropped"
+    ADMIN_TERMINATED = "admin_terminated", "Admin Terminated"
+
+
+class LiveBroadcastRecordingStatus(models.TextChoices):
+    NOT_STARTED = "not_started", "Not Started"
+    RECORDING = "recording", "Recording"
+    STOPPING = "stopping", "Stopping"
+    ARCHIVED = "archived", "Archived"
+    FAILED = "failed", "Failed"
+
+
 class LiveBroadcast(models.Model):
-    """Phase 27 Slice 1/4 -- created in SCHEDULED status whether the
+    """Phase 27 Slice 1/4/5 -- created in SCHEDULED status whether the
     Ministry is scheduling ahead of time or about to go live immediately;
-    either way `agora_channel_name` stays blank and no vendor resources
-    exist until go_live() (services/commands.py) actually succeeds. This
-    mirrors the phase's own Background note: scheduling never allocates
-    Agora resources by itself."""
+    `agora_channel_name` stays blank and no vendor resources exist until
+    go_live() (services/commands.py) actually succeeds. This mirrors the
+    phase's own Background note: scheduling never allocates Agora
+    resources by itself."""
 
     creator = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name="live_broadcasts",
+    )
+    # Required at scheduling time, same as every other testimony type --
+    # added here (Slice 5) once archival surfaced that Testimony.category
+    # is non-nullable/PROTECT, so an archived recording needs one from the
+    # moment it's scheduled, not invented later. Nullable at the DB level
+    # only to keep this an additive migration on top of the already-shipped
+    # 0001 (no existing rows to backfill a default onto -- the feature has
+    # no real broadcasts yet, live-streaming isn't functional until a real
+    # Agora project exists); create_live_broadcast() and the mobile
+    # serializer both require it unconditionally, so no row created going
+    # forward is ever actually null.
+    category = models.ForeignKey(
+        "testimonies.TestimonyCategory",
+        on_delete=models.PROTECT,
+        related_name="live_broadcasts",
+        null=True,
+        blank=True,
     )
     title = models.CharField(max_length=255)
     status = models.CharField(
@@ -33,6 +64,7 @@ class LiveBroadcast(models.Model):
     )
     started_at = models.DateTimeField(null=True, blank=True)
     ended_at = models.DateTimeField(null=True, blank=True)
+    ended_reason = models.CharField(max_length=20, choices=LiveBroadcastEndedReason.choices, blank=True)
 
     # Populated only once go_live() succeeds -- never at creation/scheduling
     # time. Unguessable suffix so a channel name can't be reconstructed from
@@ -45,6 +77,24 @@ class LiveBroadcast(models.Model):
     # applied to a broadcast already under way.
     max_viewers_applied = models.PositiveIntegerField(null=True, blank=True)
     max_duration_minutes_applied = models.PositiveIntegerField(null=True, blank=True)
+
+    # Phase 27 Slice 5 -- Agora Cloud Recording (composite/mix mode, one
+    # publisher). A recording failure never blocks go_live() itself
+    # (see commands.py); FAILED here just means there's nothing to
+    # archive when the broadcast ends.
+    recording_status = models.CharField(
+        max_length=20, choices=LiveBroadcastRecordingStatus.choices, default=LiveBroadcastRecordingStatus.NOT_STARTED
+    )
+    agora_recording_resource_id = models.CharField(max_length=255, blank=True)
+    agora_recording_sid = models.CharField(max_length=255, blank=True)
+    agora_recording_uid = models.PositiveIntegerField(null=True, blank=True)
+    archived_testimony = models.ForeignKey(
+        "testimonies.Testimony",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="source_live_broadcast",
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

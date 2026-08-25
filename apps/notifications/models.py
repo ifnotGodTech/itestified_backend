@@ -15,6 +15,7 @@ class NotificationType(models.TextChoices):
     PRAYER_RESPONSE = "prayer_response", "Prayer Response"
     LIVE_BROADCAST_APPROVAL_REQUESTED = "live_broadcast_approval_requested", "Live Broadcast Approval Requested"
     LIVE_BROADCAST_APPROVAL_DECIDED = "live_broadcast_approval_decided", "Live Broadcast Approval Decided"
+    LIVE_BROADCAST_RECORDING_READY = "live_broadcast_recording_ready", "Live Broadcast Recording Ready"
 
 
 class UserNotification(models.Model):

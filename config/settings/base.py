@@ -208,6 +208,26 @@ AGORA_CUSTOMER_ID = os.environ.get("AGORA_CUSTOMER_ID", "")
 AGORA_CUSTOMER_SECRET = os.environ.get("AGORA_CUSTOMER_SECRET", "")
 AGORA_REST_BASE_URL = os.environ.get("AGORA_REST_BASE_URL", "https://api.agora.io")
 
+# Phase 27 Slice 5: Agora Cloud Recording doesn't host files itself -- it
+# pushes the finished composite (mix-mode) recording to a third-party
+# bucket you configure. VENDOR/REGION are Agora's own numeric codes for
+# that bucket (confirm the exact codes for your chosen provider/region
+# against Agora's console at setup time -- default below, 1/0, is a
+# best-effort AWS S3/first-region guess, not vendor-verified). This is a
+# new integration for the app -- everything else here is Cloudinary-only.
+# AGORA_RECORDING_PUBLIC_URL_BASE is deliberately separate from the numeric
+# codes above: it's the bucket's own known public base URL, used only to
+# build a playable link from the filename Agora's query API returns, and
+# requires the bucket to serve public-read objects (same "every video URL
+# in this app is a plain public HTTPS URL" expectation Cloudinary already
+# meets).
+AGORA_RECORDING_STORAGE_VENDOR = int(os.environ.get("AGORA_RECORDING_STORAGE_VENDOR", "1"))
+AGORA_RECORDING_STORAGE_REGION = int(os.environ.get("AGORA_RECORDING_STORAGE_REGION", "0"))
+AGORA_RECORDING_STORAGE_BUCKET = os.environ.get("AGORA_RECORDING_STORAGE_BUCKET", "")
+AGORA_RECORDING_STORAGE_ACCESS_KEY = os.environ.get("AGORA_RECORDING_STORAGE_ACCESS_KEY", "")
+AGORA_RECORDING_STORAGE_SECRET_KEY = os.environ.get("AGORA_RECORDING_STORAGE_SECRET_KEY", "")
+AGORA_RECORDING_PUBLIC_URL_BASE = os.environ.get("AGORA_RECORDING_PUBLIC_URL_BASE", "")
+
 # Phase 22 groundwork: shared Celery/Redis task queue for async work (AI
 # transcription/translation now; any future off-request-path job routes
 # through the same broker rather than a bespoke polling command per feature).

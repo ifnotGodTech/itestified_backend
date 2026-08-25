@@ -111,6 +111,29 @@ services:
         sync: false
       - key: CLOUDINARY_BRANDED_EXPORT_FOLDER
         value: itestified/exports
+      # Phase 27 Slice 4/5: blank until a real Agora project exists (see
+      # config/settings/base.py's own note) -- go-live/end-broadcast fail
+      # clearly rather than silently no-opping until these are set.
+      - key: AGORA_APP_ID
+        sync: false
+      - key: AGORA_APP_CERTIFICATE
+        sync: false
+      - key: AGORA_CUSTOMER_ID
+        sync: false
+      - key: AGORA_CUSTOMER_SECRET
+        sync: false
+      - key: AGORA_RECORDING_STORAGE_VENDOR
+        sync: false
+      - key: AGORA_RECORDING_STORAGE_REGION
+        sync: false
+      - key: AGORA_RECORDING_STORAGE_BUCKET
+        sync: false
+      - key: AGORA_RECORDING_STORAGE_ACCESS_KEY
+        sync: false
+      - key: AGORA_RECORDING_STORAGE_SECRET_KEY
+        sync: false
+      - key: AGORA_RECORDING_PUBLIC_URL_BASE
+        sync: false
 
   # Phase 22 groundwork: dedicated worker process draining the shared
   # Celery/Redis queue. Separate from the web service so a slow AI API call
@@ -177,6 +200,26 @@ services:
       - key: CLOUDINARY_BRANDED_EXPORT_FOLDER
         value: itestified/exports
       - key: OPENAI_API_KEY
+        sync: false
+      - key: AGORA_APP_ID
+        sync: false
+      - key: AGORA_APP_CERTIFICATE
+        sync: false
+      - key: AGORA_CUSTOMER_ID
+        sync: false
+      - key: AGORA_CUSTOMER_SECRET
+        sync: false
+      - key: AGORA_RECORDING_STORAGE_VENDOR
+        sync: false
+      - key: AGORA_RECORDING_STORAGE_REGION
+        sync: false
+      - key: AGORA_RECORDING_STORAGE_BUCKET
+        sync: false
+      - key: AGORA_RECORDING_STORAGE_ACCESS_KEY
+        sync: false
+      - key: AGORA_RECORDING_STORAGE_SECRET_KEY
+        sync: false
+      - key: AGORA_RECORDING_PUBLIC_URL_BASE
         sync: false
 
   - type: cron
@@ -257,6 +300,88 @@ services:
       - key: BREVO_FROM_EMAIL
         sync: false
       - key: GOOGLE_OAUTH_CLIENT_IDS
+        sync: false
+
+  # Phase 27 Slice 5: catches a dropped stream (Agora's SDK notifies
+  # connected viewer clients directly, but the backend still needs to mark
+  # the LiveBroadcast row ended and kick off archival). Deliberately a
+  # cron command, not a new Celery beat scheduler -- matches this file's
+  # existing itestified-scheduled-publisher pattern rather than
+  # introducing a second periodic-task mechanism. 5-minute cadence matches
+  # STALE_BROADCAST_GRACE_SECONDS's own assumption in services/commands.py.
+  - type: cron
+    name: itestified-live-broadcast-reconciler
+    runtime: python
+    rootDir: backend
+    plan: starter
+    schedule: "*/5 * * * *"
+    buildCommand: pip install -r requirements/production.txt
+    startCommand: python manage.py reconcile_stale_live_broadcasts
+    envVars:
+      - key: DJANGO_SETTINGS_MODULE
+        value: config.settings.production
+      - key: DJANGO_SECRET_KEY
+        sync: false
+      - key: DJANGO_ALLOWED_HOSTS
+        value: itestified-backend.onrender.com
+      - key: DJANGO_CSRF_TRUSTED_ORIGINS
+        value: https://itestified-backend.onrender.com
+      - key: DJANGO_SECURE_SSL_REDIRECT
+        value: true
+      - key: DJANGO_USE_X_FORWARDED_HOST
+        value: true
+      - key: OTP_HINT_IN_RESPONSE
+        value: false
+      - key: PYTHON_VERSION
+        value: 3.12.4
+      - key: DATABASE_URL
+        fromDatabase:
+          name: itestified-db
+          property: connectionString
+      - key: POSTGRES_DB
+        fromDatabase:
+          name: itestified-db
+          property: database
+      - key: POSTGRES_USER
+        fromDatabase:
+          name: itestified-db
+          property: user
+      - key: POSTGRES_PASSWORD
+        fromDatabase:
+          name: itestified-db
+          property: password
+      - key: POSTGRES_HOST
+        fromDatabase:
+          name: itestified-db
+          property: host
+      - key: POSTGRES_PORT
+        fromDatabase:
+          name: itestified-db
+          property: port
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: itestified-redis
+          property: connectionString
+      - key: AGORA_APP_ID
+        sync: false
+      - key: AGORA_APP_CERTIFICATE
+        sync: false
+      - key: AGORA_CUSTOMER_ID
+        sync: false
+      - key: AGORA_CUSTOMER_SECRET
+        sync: false
+      - key: AGORA_RECORDING_STORAGE_VENDOR
+        sync: false
+      - key: AGORA_RECORDING_STORAGE_REGION
+        sync: false
+      - key: AGORA_RECORDING_STORAGE_BUCKET
+        sync: false
+      - key: AGORA_RECORDING_STORAGE_ACCESS_KEY
+        sync: false
+      - key: AGORA_RECORDING_STORAGE_SECRET_KEY
+        sync: false
+      - key: AGORA_RECORDING_PUBLIC_URL_BASE
         sync: false
 
   # Deliberately its own job, not appended to itestified-scheduled-publisher

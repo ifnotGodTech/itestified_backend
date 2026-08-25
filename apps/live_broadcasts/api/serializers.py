@@ -5,6 +5,7 @@ from apps.live_broadcasts.models import (
     LiveBroadcastApprovalRequest,
     LiveMinutePurchase,
 )
+from apps.testimonies.models import TestimonyCategory
 
 
 class LiveBroadcastSerializer(serializers.ModelSerializer):
@@ -13,13 +14,17 @@ class LiveBroadcastSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "title",
+            "category",
             "status",
             "scheduled_at",
             "started_at",
             "ended_at",
+            "ended_reason",
             "agora_channel_name",
             "max_viewers_applied",
             "max_duration_minutes_applied",
+            "recording_status",
+            "archived_testimony",
             "created_at",
         ]
         read_only_fields = fields
@@ -27,6 +32,10 @@ class LiveBroadcastSerializer(serializers.ModelSerializer):
 
 class CreateLiveBroadcastSerializer(serializers.Serializer):
     title = serializers.CharField(max_length=255)
+    category_id = serializers.PrimaryKeyRelatedField(
+        source="category",
+        queryset=TestimonyCategory.objects.filter(is_active=True),
+    )
     scheduled_at = serializers.DateTimeField(required=False, allow_null=True, default=None)
 
     def validate_title(self, value: str) -> str:

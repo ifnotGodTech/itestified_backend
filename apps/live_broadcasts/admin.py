@@ -12,8 +12,18 @@ from .models import (
 
 @admin.register(LiveBroadcast)
 class LiveBroadcastAdmin(admin.ModelAdmin):
-    list_display = ("id", "creator", "title", "status", "scheduled_at", "started_at", "ended_at")
-    list_filter = ("status",)
+    list_display = (
+        "id",
+        "creator",
+        "title",
+        "status",
+        "ended_reason",
+        "recording_status",
+        "started_at",
+        "ended_at",
+        "archived_testimony",
+    )
+    list_filter = ("status", "ended_reason", "recording_status")
     search_fields = ("title", "creator__email", "agora_channel_name")
 
 
