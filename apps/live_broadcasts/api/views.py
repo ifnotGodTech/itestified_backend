@@ -22,6 +22,7 @@ from apps.live_broadcasts.models import (
     LiveBroadcastApprovalRequest,
     LiveBroadcastApprovalStatus,
     LiveBroadcastEndedReason,
+    LiveMinutePricing,
 )
 from apps.live_broadcasts.services import commands
 
@@ -35,10 +36,16 @@ from .serializers import (
     InitiateMinutePurchaseSerializer,
     LiveBroadcastApprovalRequestSerializer,
     LiveBroadcastSerializer,
+    LiveMinutePricingSerializer,
     LiveMinutePurchaseSerializer,
+    LiveStreamingPolicySerializer,
+    MinistryUsageRowSerializer,
+    PlatformUsageSummarySerializer,
     PublicLiveBroadcastSerializer,
     PublisherCredentialSerializer,
     RequestBroadcastApprovalSerializer,
+    SetLiveMinutePriceSerializer,
+    UpdateLiveStreamingPolicySerializer,
     VerifyMinutePurchaseSerializer,
     ViewerJoinCredentialSerializer,
 )
@@ -279,6 +286,61 @@ class AdminBroadcastEndView(APIView):
         except AgoraNotConfiguredError as exc:
             return Response({"message": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
         return Response(LiveBroadcastSerializer(broadcast).data, status=status.HTTP_200_OK)
+
+
+class AdminLiveStreamingPolicyView(APIView):
+    """Phase 27 Slice 9 -- admin-configurable, no-deploy-needed, mirroring
+    PremiumPricing/MediaExportBrandingConfig's existing pattern exactly."""
+
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsActiveAdmin]
+
+    def get(self, request):
+        policy = selectors.get_live_streaming_policy()
+        return Response(LiveStreamingPolicySerializer(policy).data)
+
+    def post(self, request):
+        serializer = UpdateLiveStreamingPolicySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        policy = commands.update_live_streaming_policy(actor=request.user, **serializer.validated_data)
+        return Response(LiveStreamingPolicySerializer(policy).data, status=status.HTTP_200_OK)
+
+
+class AdminLiveMinutePricingListView(generics.ListAPIView):
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsActiveAdmin]
+    serializer_class = LiveMinutePricingSerializer
+    pagination_class = None
+    queryset = LiveMinutePricing.objects.all()
+
+
+class AdminSetLiveMinutePriceView(APIView):
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsActiveAdmin]
+
+    def post(self, request):
+        serializer = SetLiveMinutePriceSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        pricing = commands.set_live_minute_price(actor=request.user, **serializer.validated_data)
+        return Response(LiveMinutePricingSerializer(pricing).data, status=status.HTTP_200_OK)
+
+
+class AdminLiveStreamingCostSummaryView(APIView):
+    """Phase 27 Slice 9 -- this month's total Agora usage against the
+    shared free-tier ceiling, broken down per Ministry."""
+
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsActiveAdmin]
+
+    def get(self, request):
+        return Response(
+            {
+                "platform": PlatformUsageSummarySerializer(selectors.compute_platform_usage_summary()).data,
+                "ministries": MinistryUsageRowSerializer(
+                    selectors.list_ministry_usage_for_current_month(), many=True
+                ).data,
+            }
+        )
 
 
 class AdminLiveBroadcastApprovalRequestListView(APIView):

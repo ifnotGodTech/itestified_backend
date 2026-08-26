@@ -19,8 +19,10 @@ from apps.live_broadcasts.models import (
     LiveBroadcastRecordingStatus,
     LiveBroadcastStatus,
     LiveMinutePricing,
+    LiveMinutePricingHistory,
     LiveMinutePurchaseStatus,
     LiveStreamingPolicy,
+    LiveStreamingPolicyHistory,
     MinistryStreamingAllowance,
 )
 from apps.live_broadcasts.services import commands
@@ -734,3 +736,141 @@ class BanChannelPublisherNotConfiguredTests(TestCase):
 
         with self.assertRaises(AgoraNotConfiguredError):
             agora.ban_channel_publisher(channel_name="itestified-live-1-abcd", uid=42, ban_seconds=300)
+
+
+@override_settings(
+    AGORA_APP_ID="app-id", AGORA_APP_CERTIFICATE="cert", AGORA_CUSTOMER_ID="cid", AGORA_CUSTOMER_SECRET="secret"
+)
+class GetParticipantMinutesUsedTests(TestCase):
+    @patch("apps.live_broadcasts.services.agora.requests.get")
+    def test_sums_totalDuration_across_every_returned_row(self, get_mock):
+        from apps.live_broadcasts.services import agora
+
+        get_mock.return_value = Mock(
+            json=lambda: {"data": [{"totalDuration": 120, "ts": 1}, {"totalDuration": 80, "ts": 2}]}
+        )
+        used = agora.get_participant_minutes_used(year=2026, month=8)
+        self.assertEqual(used, 200)
+        called_url = get_mock.call_args.args[0]
+        called_params = get_mock.call_args.kwargs["params"]
+        self.assertIn("/beta/insight/usage/by_time", called_url)
+        self.assertEqual(called_params["appid"], "app-id")
+        self.assertEqual(called_params["metric"], "totalDuration")
+        self.assertEqual(called_params["aggregateGranularity"], "1d")
+
+    @patch("apps.live_broadcasts.services.agora.requests.get", side_effect=requests.ConnectionError("down"))
+    def test_returns_none_on_request_failure(self, get_mock):
+        from apps.live_broadcasts.services import agora
+
+        self.assertIsNone(agora.get_participant_minutes_used(year=2026, month=8))
+
+
+class GetParticipantMinutesUsedNotConfiguredTests(TestCase):
+    def test_returns_none_when_agora_is_not_configured(self):
+        from apps.live_broadcasts.services import agora
+
+        self.assertIsNone(agora.get_participant_minutes_used(year=2026, month=8))
+
+
+class UpdateLiveStreamingPolicyTests(TestCase):
+    def test_changing_one_field_writes_exactly_one_history_row(self):
+        policy = commands.selectors.get_live_streaming_policy()
+        admin = UserFactory(email="admin@example.com")
+
+        updated = commands.update_live_streaming_policy(
+            actor=admin,
+            is_enabled=policy.is_enabled,
+            max_concurrent_viewers=999,
+            max_duration_minutes=policy.max_duration_minutes,
+            shared_monthly_ceiling_minutes=policy.shared_monthly_ceiling_minutes,
+            default_ministry_monthly_allowance_minutes=policy.default_ministry_monthly_allowance_minutes,
+        )
+
+        self.assertEqual(updated.max_concurrent_viewers, 999)
+        self.assertEqual(updated.updated_by, admin)
+        history = LiveStreamingPolicyHistory.objects.filter(policy=updated)
+        self.assertEqual(history.count(), 1)
+        entry = history.first()
+        self.assertEqual(entry.field_name, "max_concurrent_viewers")
+        self.assertEqual(entry.to_value, "999")
+        self.assertEqual(entry.actor, admin)
+
+    def test_changing_no_fields_writes_no_history_and_does_not_touch_updated_by(self):
+        policy = commands.selectors.get_live_streaming_policy()
+        admin = UserFactory(email="admin@example.com")
+
+        updated = commands.update_live_streaming_policy(
+            actor=admin,
+            is_enabled=policy.is_enabled,
+            max_concurrent_viewers=policy.max_concurrent_viewers,
+            max_duration_minutes=policy.max_duration_minutes,
+            shared_monthly_ceiling_minutes=policy.shared_monthly_ceiling_minutes,
+            default_ministry_monthly_allowance_minutes=policy.default_ministry_monthly_allowance_minutes,
+        )
+
+        self.assertIsNone(updated.updated_by)
+        self.assertEqual(LiveStreamingPolicyHistory.objects.count(), 0)
+
+    def test_changing_multiple_fields_writes_one_row_each(self):
+        policy = commands.selectors.get_live_streaming_policy()
+        admin = UserFactory(email="admin@example.com")
+
+        commands.update_live_streaming_policy(
+            actor=admin,
+            is_enabled=False,
+            max_concurrent_viewers=10,
+            max_duration_minutes=policy.max_duration_minutes,
+            shared_monthly_ceiling_minutes=policy.shared_monthly_ceiling_minutes,
+            default_ministry_monthly_allowance_minutes=policy.default_ministry_monthly_allowance_minutes,
+        )
+
+        changed_fields = set(LiveStreamingPolicyHistory.objects.values_list("field_name", flat=True))
+        self.assertEqual(changed_fields, {"is_enabled", "max_concurrent_viewers"})
+
+
+class SetLiveMinutePriceTests(TestCase):
+    def test_creating_a_new_price_records_a_null_from_amount(self):
+        admin = UserFactory(email="admin@example.com")
+        pricing = commands.set_live_minute_price(currency="NGN", price_per_1000_minutes=500000, actor=admin)
+
+        self.assertEqual(pricing.price_per_1000_minutes, 500000)
+        self.assertEqual(pricing.updated_by, admin)
+        history = LiveMinutePricingHistory.objects.get(pricing=pricing)
+        self.assertIsNone(history.from_amount)
+        self.assertEqual(history.to_amount, 500000)
+
+    def test_updating_an_existing_price_records_the_prior_amount(self):
+        admin = UserFactory(email="admin@example.com")
+        LiveMinutePricing.objects.create(currency="NGN", price_per_1000_minutes=400000)
+
+        pricing = commands.set_live_minute_price(currency="NGN", price_per_1000_minutes=600000, actor=admin)
+
+        self.assertEqual(pricing.price_per_1000_minutes, 600000)
+        history = LiveMinutePricingHistory.objects.get(pricing=pricing)
+        self.assertEqual(history.from_amount, 400000)
+        self.assertEqual(history.to_amount, 600000)
+
+
+class MinistryUsageSelectorTests(TestCase):
+    def test_only_ministries_with_an_allowance_row_this_month_are_included(self):
+        from apps.live_broadcasts import selectors
+
+        ministry = _verified_ministry()
+        now = timezone.now()
+        MinistryStreamingAllowance.objects.create(
+            creator=ministry, year=now.year, month=now.month, base_allowance_minutes=200, purchased_minutes=50
+        )
+        _verified_ministry(email="untouched@example.com")
+
+        rows = selectors.list_ministry_usage_for_current_month()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["creator"], ministry)
+        self.assertEqual(rows[0]["total_allowance_minutes"], 250)
+
+    @patch("apps.live_broadcasts.selectors.agora_service.get_participant_minutes_used", return_value=1234)
+    def test_platform_usage_summary_reports_used_minutes_and_ceiling(self, usage_mock):
+        from apps.live_broadcasts import selectors
+
+        summary = selectors.compute_platform_usage_summary()
+        self.assertEqual(summary["used_minutes"], 1234)
+        self.assertEqual(summary["shared_monthly_ceiling_minutes"], LiveStreamingPolicy().shared_monthly_ceiling_minutes)

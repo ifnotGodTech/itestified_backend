@@ -134,6 +134,51 @@ def list_scheduled_broadcasts_for_admin():
     return _broadcast_display_queryset().filter(status=LiveBroadcastStatus.SCHEDULED).order_by("scheduled_at")
 
 
+def list_ministry_usage_for_current_month() -> list[dict]:
+    """Phase 27 Slice 9 -- per-Ministry cost/usage breakdown for the admin
+    view. Reuses the same local worst-case-reservation methodology as
+    Slice 4's own allowance check (see reserved_minutes_this_month's own
+    docstring) rather than Agora's Usage API, which has no concept of
+    "Ministry" to break usage down by -- it only reports every Ministry
+    combined (see services/agora.py's get_participant_minutes_used).
+    Only Ministries that already have an allowance row this month are
+    included -- a Ministry that hasn't gone live at all this month has
+    nothing to show."""
+    now = timezone.now()
+    allowances = MinistryStreamingAllowance.objects.filter(year=now.year, month=now.month).select_related(
+        "creator", "creator__creator_profile", "creator__profile"
+    )
+    rows = []
+    for allowance in allowances:
+        reserved = reserved_minutes_this_month(creator=allowance.creator, year=now.year, month=now.month)
+        rows.append(
+            {
+                "creator": allowance.creator,
+                "base_allowance_minutes": allowance.base_allowance_minutes,
+                "purchased_minutes": allowance.purchased_minutes,
+                "total_allowance_minutes": allowance.total_allowance_minutes,
+                "reserved_minutes": reserved,
+                "remaining_minutes": max(allowance.total_allowance_minutes - reserved, 0),
+            }
+        )
+    return rows
+
+
+def compute_platform_usage_summary() -> dict:
+    """Phase 27 Slice 9 -- this month's total Agora usage (best-effort,
+    from Agora's own Usage API -- see get_participant_minutes_used's own
+    note on what could/couldn't be confirmed) against the shared
+    platform-wide monthly ceiling."""
+    now = timezone.now()
+    policy = get_live_streaming_policy()
+    return {
+        "year": now.year,
+        "month": now.month,
+        "used_minutes": agora_service.get_participant_minutes_used(year=now.year, month=now.month),
+        "shared_monthly_ceiling_minutes": policy.shared_monthly_ceiling_minutes,
+    }
+
+
 def compute_allowance_summary(*, creator) -> dict:
     now = timezone.now()
     allowance = get_or_create_current_month_allowance(creator=creator)

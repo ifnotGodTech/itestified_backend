@@ -292,6 +292,126 @@ class AdminEndBroadcastApiTests(TestCase):
         self.assertEqual(response.status_code, 404)
 
 
+class AdminLiveStreamingPolicyApiTests(TestCase):
+    def _admin(self):
+        admin = UserFactory(email="admin@example.com")
+        role = AdminRoleFactory(code=AdminRoleCode.SUPER_ADMIN)
+        AdminAssignmentFactory(user=admin, role=role)
+        return admin
+
+    def test_non_admin_cannot_view_or_update_the_policy(self):
+        ministry, _token = _verified_ministry()
+        self.client.force_login(ministry)
+        self.assertEqual(self.client.get(reverse("admin-live-streaming-policy")).status_code, 403)
+        self.assertEqual(self.client.post(reverse("admin-live-streaming-policy"), {}).status_code, 403)
+
+    def test_admin_can_view_and_update_the_policy(self):
+        self.client.force_login(self._admin())
+
+        get_response = self.client.get(reverse("admin-live-streaming-policy"))
+        self.assertEqual(get_response.status_code, 200)
+        self.assertIn("max_concurrent_viewers", get_response.json())
+
+        post_response = self.client.post(
+            reverse("admin-live-streaming-policy"),
+            {
+                "is_enabled": True,
+                "max_concurrent_viewers": 75,
+                "max_duration_minutes": 45,
+                "shared_monthly_ceiling_minutes": 20000,
+                "default_ministry_monthly_allowance_minutes": 300,
+            },
+            content_type="application/json",
+        )
+        self.assertEqual(post_response.status_code, 200)
+        body = post_response.json()
+        self.assertEqual(body["max_concurrent_viewers"], 75)
+        self.assertEqual(body["default_ministry_monthly_allowance_minutes"], 300)
+
+    def test_updating_the_policy_with_invalid_values_returns_400(self):
+        self.client.force_login(self._admin())
+        response = self.client.post(
+            reverse("admin-live-streaming-policy"),
+            {
+                "is_enabled": True,
+                "max_concurrent_viewers": 0,
+                "max_duration_minutes": 30,
+                "shared_monthly_ceiling_minutes": 10000,
+                "default_ministry_monthly_allowance_minutes": 200,
+            },
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+
+class AdminLiveMinutePricingApiTests(TestCase):
+    def _admin(self):
+        admin = UserFactory(email="admin@example.com")
+        role = AdminRoleFactory(code=AdminRoleCode.SUPER_ADMIN)
+        AdminAssignmentFactory(user=admin, role=role)
+        return admin
+
+    def test_non_admin_cannot_view_or_set_pricing(self):
+        ministry, _token = _verified_ministry()
+        self.client.force_login(ministry)
+        self.assertEqual(self.client.get(reverse("admin-live-minute-pricing-list")).status_code, 403)
+        self.assertEqual(self.client.post(reverse("admin-live-minute-pricing-set"), {}).status_code, 403)
+
+    def test_admin_can_list_and_set_pricing(self):
+        self.client.force_login(self._admin())
+
+        set_response = self.client.post(
+            reverse("admin-live-minute-pricing-set"),
+            {"currency": "ngn", "price_per_1000_minutes": 500000},
+            content_type="application/json",
+        )
+        self.assertEqual(set_response.status_code, 200)
+        self.assertEqual(set_response.json()["currency"], "NGN")
+
+        list_response = self.client.get(reverse("admin-live-minute-pricing-list"))
+        self.assertEqual(list_response.status_code, 200)
+        self.assertEqual(len(list_response.json()), 1)
+
+    def test_setting_pricing_with_an_invalid_currency_returns_400(self):
+        self.client.force_login(self._admin())
+        response = self.client.post(
+            reverse("admin-live-minute-pricing-set"),
+            {"currency": "NAIRA", "price_per_1000_minutes": 500000},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+
+class AdminLiveStreamingCostSummaryApiTests(TestCase):
+    def _admin(self):
+        admin = UserFactory(email="admin@example.com")
+        role = AdminRoleFactory(code=AdminRoleCode.SUPER_ADMIN)
+        AdminAssignmentFactory(user=admin, role=role)
+        return admin
+
+    def test_non_admin_cannot_view_the_cost_summary(self):
+        ministry, _token = _verified_ministry()
+        self.client.force_login(ministry)
+        response = self.client.get(reverse("admin-live-streaming-cost-summary"))
+        self.assertEqual(response.status_code, 403)
+
+    def test_admin_sees_platform_total_and_per_ministry_breakdown(self):
+        ministry, _token = _verified_ministry()
+        now = timezone.now()
+        MinistryStreamingAllowance.objects.create(
+            creator=ministry, year=now.year, month=now.month, base_allowance_minutes=200, purchased_minutes=0
+        )
+        self.client.force_login(self._admin())
+
+        response = self.client.get(reverse("admin-live-streaming-cost-summary"))
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertIn("shared_monthly_ceiling_minutes", body["platform"])
+        self.assertEqual(len(body["ministries"]), 1)
+        self.assertEqual(body["ministries"][0]["ministry_name"], "Grace Chapel")
+        self.assertEqual(body["ministries"][0]["total_allowance_minutes"], 200)
+
+
 class ViewerBrowseApiTests(TestCase):
     def test_guest_can_list_live_broadcasts(self):
         ministry, _token = _verified_ministry()

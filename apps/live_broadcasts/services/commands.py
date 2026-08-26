@@ -25,8 +25,12 @@ from apps.live_broadcasts.models import (
     LiveBroadcastEndedReason,
     LiveBroadcastRecordingStatus,
     LiveBroadcastStatus,
+    LiveMinutePricing,
+    LiveMinutePricingHistory,
     LiveMinutePurchase,
     LiveMinutePurchaseStatus,
+    LiveStreamingPolicy,
+    LiveStreamingPolicyHistory,
 )
 from apps.live_broadcasts.services import agora
 from apps.live_broadcasts.services.notifications import (
@@ -428,3 +432,77 @@ def reconcile_stale_live_broadcasts() -> int:
             end_broadcast(broadcast=broadcast, reason=LiveBroadcastEndedReason.DROPPED)
             ended_count += 1
     return ended_count
+
+
+@transaction.atomic
+def update_live_streaming_policy(
+    *,
+    actor,
+    is_enabled: bool,
+    max_concurrent_viewers: int,
+    max_duration_minutes: int,
+    shared_monthly_ceiling_minutes: int,
+    default_ministry_monthly_allowance_minutes: int,
+) -> LiveStreamingPolicy:
+    """Phase 27 Slice 9 -- admin-configurable, no-deploy-needed, mirroring
+    PremiumPricing/MediaExportBrandingConfig's existing pattern exactly.
+    One LiveStreamingPolicyHistory row per field that actually changed,
+    not one row per save regardless -- an admin changing only the viewer
+    cap shouldn't manufacture history entries claiming every other field
+    also "changed" from its own value to itself (see that model's own
+    docstring)."""
+    policy = selectors.get_live_streaming_policy()
+    new_values = {
+        "is_enabled": is_enabled,
+        "max_concurrent_viewers": max_concurrent_viewers,
+        "max_duration_minutes": max_duration_minutes,
+        "shared_monthly_ceiling_minutes": shared_monthly_ceiling_minutes,
+        "default_ministry_monthly_allowance_minutes": default_ministry_monthly_allowance_minutes,
+    }
+    changed_fields = []
+    history_rows = []
+    for field_name, new_value in new_values.items():
+        old_value = getattr(policy, field_name)
+        if old_value == new_value:
+            continue
+        changed_fields.append(field_name)
+        history_rows.append(
+            LiveStreamingPolicyHistory(
+                policy=policy,
+                field_name=field_name,
+                from_value=str(old_value),
+                to_value=str(new_value),
+                actor=actor,
+            )
+        )
+        setattr(policy, field_name, new_value)
+
+    if changed_fields:
+        policy.updated_by = actor
+        policy.save(update_fields=[*changed_fields, "updated_by", "updated_at"])
+        LiveStreamingPolicyHistory.objects.bulk_create(history_rows)
+    return policy
+
+
+@transaction.atomic
+def set_live_minute_price(*, currency: str, price_per_1000_minutes: int, actor) -> LiveMinutePricing:
+    """Phase 27 Slice 9 -- mirrors PremiumPricingHistory's one-row-per-save
+    shape, simpler than PremiumPricing's own update (no vendor payment-
+    plan concept here -- this rate is only read at purchase-initiate
+    time, see initiate_minute_purchase above)."""
+    pricing = LiveMinutePricing.objects.select_for_update().filter(currency=currency).first()
+    from_amount = pricing.price_per_1000_minutes if pricing else None
+
+    if pricing is None:
+        pricing = LiveMinutePricing.objects.create(
+            currency=currency, price_per_1000_minutes=price_per_1000_minutes, updated_by=actor
+        )
+    else:
+        pricing.price_per_1000_minutes = price_per_1000_minutes
+        pricing.updated_by = actor
+        pricing.save(update_fields=["price_per_1000_minutes", "updated_by", "updated_at"])
+
+    LiveMinutePricingHistory.objects.create(
+        pricing=pricing, from_amount=from_amount, to_amount=price_per_1000_minutes, actor=actor
+    )
+    return pricing

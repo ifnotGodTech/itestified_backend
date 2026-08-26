@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import base64
+import calendar
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone as dt_timezone
 
 import requests
 from django.conf import settings
@@ -125,37 +127,70 @@ def ban_channel_publisher(*, channel_name: str, uid: int, ban_seconds: int) -> N
     response.raise_for_status()
 
 
-def get_participant_minutes_used(*, year: int, month: int) -> int:
-    """Queries Agora's Analytics/Usage REST API for this project's total
-    participant-minutes consumed in the given calendar month, across every
-    Ministry -- this is what the shared monthly ceiling (LiveStreamingPolicy
-    .shared_monthly_ceiling_minutes) is checked against, deliberately not a
-    locally reconstructed estimate that could drift from what Agora
-    actually bills.
+def get_participant_minutes_used(*, year: int, month: int) -> int | None:
+    """Phase 27 Slice 9 -- queries Agora's Analytics/Usage REST API for
+    this project's total usage in the given calendar month, across every
+    Ministry combined. This is what the shared platform-wide monthly
+    ceiling (LiveStreamingPolicy.shared_monthly_ceiling_minutes) is
+    checked against for the admin cost-visibility view -- deliberately
+    not a locally reconstructed estimate that could drift from what
+    Agora actually bills. Per-Ministry attribution is NOT available from
+    this endpoint (Agora has no concept of "Ministry", only App ID/
+    channel/user) -- see selectors.list_ministry_usage_for_current_month
+    for the per-Ministry breakdown, which reuses the same local
+    worst-case-reservation methodology as Slice 4's own allowance check.
 
-    NOTE: the exact Analytics endpoint path/response shape could not be
-    directly verified against Agora's live docs while building this (the
-    reference page at
-    https://docs.agora.io/en/agora-analytics/reference/api render
-    client-side and returned 404 to a plain fetch); this targets the
-    `/beta/insight/usage/by_time` path surfaced via search results as the
-    usage-by-time endpoint. Confirm this against the Agora Console once a
-    real project/App ID exists, before relying on it for the go-live cap
-    check -- everything else in this module doesn't depend on getting this
-    one path exactly right.
+    Endpoint verified by directly fetching Agora's own docs-portal source
+    on GitHub (`AgoraIO/docs-portal`, `.../api-reference/api-ref/
+    agora-analytics/analytics-rest-api.md`) -- unlike every other Agora
+    endpoint in this module, this page's *rendered* docs.agora.io version
+    is client-side JS and 404s to a direct fetch, but its raw markdown
+    source on GitHub does not: `GET /beta/insight/usage/by_time` takes
+    `appid`, `startTs`/`endTs` (Unix seconds), `metric`, and
+    `aggregateGranularity` (`1d`/`1h`), returning
+    `{"data": [{"<metric>": number, "ts": number}, ...]}` -- one row per
+    period, summed here across the whole month. `metric=totalDuration` is
+    used as the closest available metric to "usage minutes"; Agora's own
+    billing docs confirm usage is calculated per-user (i.e. participant-
+    minutes, matching this app's own methodology), but the exact unit
+    `totalDuration` reports in (seconds vs. minutes, per-call vs.
+    per-participant) could not be confirmed from documentation alone --
+    confirm against the Agora Console once a real project exists, before
+    treating this as authoritative rather than directional.
+
+    Returns None (never raises) on any failure -- this is a best-effort
+    cost-visibility figure, not something that should break the admin
+    dashboard if Agora is unreachable/misconfigured.
     """
-    app_id, _ = _require_token_credentials()
-    headers = _rest_auth_header()
-    from_date = f"{year:04d}-{month:02d}-01"
-    response = requests.get(
-        f"{settings.AGORA_REST_BASE_URL.rstrip('/')}/beta/insight/usage/by_time",
-        headers=headers,
-        params={"appId": app_id, "from": from_date, "granularity": "month"},
-        timeout=15,
-    )
-    response.raise_for_status()
-    data = response.json()
-    return int(data.get("participant_minutes") or data.get("usage", {}).get("participant_minutes") or 0)
+    try:
+        app_id, _ = _require_token_credentials()
+        headers = _rest_auth_header()
+    except AgoraNotConfiguredError:
+        return None
+
+    _, days_in_month = calendar.monthrange(year, month)
+    start_ts = int(datetime(year, month, 1, tzinfo=dt_timezone.utc).timestamp())
+    end_ts = int(datetime(year, month, days_in_month, 23, 59, 59, tzinfo=dt_timezone.utc).timestamp())
+
+    try:
+        response = requests.get(
+            f"{settings.AGORA_REST_BASE_URL.rstrip('/')}/beta/insight/usage/by_time",
+            headers=headers,
+            params={
+                "appid": app_id,
+                "startTs": start_ts,
+                "endTs": end_ts,
+                "metric": "totalDuration",
+                "aggregateGranularity": "1d",
+            },
+            timeout=15,
+        )
+        response.raise_for_status()
+        rows = response.json().get("data") or []
+    except requests.RequestException:
+        return None
+
+    return sum(int(row.get("totalDuration") or 0) for row in rows)
 
 
 # Cloud Recording (Phase 27 Slice 5) -- endpoint paths and request bodies

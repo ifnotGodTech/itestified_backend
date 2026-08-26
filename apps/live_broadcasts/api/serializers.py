@@ -1,11 +1,17 @@
+import re
+
 from rest_framework import serializers
 
 from apps.live_broadcasts.models import (
     LiveBroadcast,
     LiveBroadcastApprovalRequest,
+    LiveMinutePricing,
     LiveMinutePurchase,
+    LiveStreamingPolicy,
 )
 from apps.testimonies.models import TestimonyCategory
+
+_CURRENCY_CODE_RE = re.compile(r"^[A-Za-z]{3}$")
 
 
 class PublicLiveBroadcastSerializer(serializers.ModelSerializer):
@@ -262,3 +268,91 @@ class LiveBroadcastApprovalRequestSerializer(serializers.ModelSerializer):
 class DecideBroadcastApprovalSerializer(serializers.Serializer):
     approve = serializers.BooleanField()
     note = serializers.CharField(required=False, allow_blank=True, default="")
+
+
+class LiveStreamingPolicySerializer(serializers.ModelSerializer):
+    updated_by_email = serializers.EmailField(source="updated_by.email", read_only=True, default="")
+
+    class Meta:
+        model = LiveStreamingPolicy
+        fields = [
+            "is_enabled",
+            "max_concurrent_viewers",
+            "max_duration_minutes",
+            "shared_monthly_ceiling_minutes",
+            "default_ministry_monthly_allowance_minutes",
+            "updated_by_email",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+
+class UpdateLiveStreamingPolicySerializer(serializers.Serializer):
+    is_enabled = serializers.BooleanField()
+    max_concurrent_viewers = serializers.IntegerField(min_value=1)
+    max_duration_minutes = serializers.IntegerField(min_value=1)
+    shared_monthly_ceiling_minutes = serializers.IntegerField(min_value=1)
+    default_ministry_monthly_allowance_minutes = serializers.IntegerField(min_value=1)
+
+
+class LiveMinutePricingSerializer(serializers.ModelSerializer):
+    updated_by_email = serializers.EmailField(source="updated_by.email", read_only=True, default="")
+
+    class Meta:
+        model = LiveMinutePricing
+        fields = ["currency", "price_per_1000_minutes", "updated_by_email", "updated_at"]
+        read_only_fields = fields
+
+
+class SetLiveMinutePriceSerializer(serializers.Serializer):
+    currency = serializers.CharField(max_length=3)
+    price_per_1000_minutes = serializers.IntegerField(min_value=1)
+
+    def validate_currency(self, value: str) -> str:
+        currency = value.strip().upper()
+        if not _CURRENCY_CODE_RE.fullmatch(currency):
+            raise serializers.ValidationError("Currency must be a 3-letter code, e.g. NGN or USD.")
+        return currency
+
+
+class MinistryUsageRowSerializer(serializers.Serializer):
+    """Phase 27 Slice 9 -- one row of selectors.list_ministry_usage_for_current_month's
+    per-Ministry dicts. Mirrors PublicLiveBroadcastSerializer's own
+    ministry display-name/avatar fallback chain."""
+
+    ministry_id = serializers.SerializerMethodField()
+    ministry_name = serializers.SerializerMethodField()
+    ministry_avatar = serializers.SerializerMethodField()
+    base_allowance_minutes = serializers.IntegerField()
+    purchased_minutes = serializers.IntegerField()
+    total_allowance_minutes = serializers.IntegerField()
+    reserved_minutes = serializers.IntegerField()
+    remaining_minutes = serializers.IntegerField()
+
+    def get_ministry_id(self, obj: dict) -> int:
+        return obj["creator"].id
+
+    def get_ministry_name(self, obj: dict) -> str:
+        creator = obj["creator"]
+        creator_profile = getattr(creator, "creator_profile", None)
+        if creator_profile and creator_profile.display_name.strip():
+            return creator_profile.display_name
+        profile = getattr(creator, "profile", None)
+        if profile and profile.full_name.strip():
+            return profile.full_name
+        return creator.email
+
+    def get_ministry_avatar(self, obj: dict) -> str:
+        creator = obj["creator"]
+        creator_profile = getattr(creator, "creator_profile", None)
+        if creator_profile and creator_profile.avatar_url:
+            return creator_profile.avatar_url
+        profile = getattr(creator, "profile", None)
+        return profile.avatar if profile else ""
+
+
+class PlatformUsageSummarySerializer(serializers.Serializer):
+    year = serializers.IntegerField()
+    month = serializers.IntegerField()
+    used_minutes = serializers.IntegerField(allow_null=True)
+    shared_monthly_ceiling_minutes = serializers.IntegerField()
