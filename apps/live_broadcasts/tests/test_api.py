@@ -222,6 +222,76 @@ class AdminBroadcastMonitorApiTests(TestCase):
         self.assertIn("max_duration_minutes", body["policy"])
 
 
+class AdminEndBroadcastApiTests(TestCase):
+    def _admin(self):
+        admin = UserFactory(email="admin@example.com")
+        role = AdminRoleFactory(code=AdminRoleCode.SUPER_ADMIN)
+        AdminAssignmentFactory(user=admin, role=role)
+        return admin
+
+    def test_non_admin_cannot_end_a_broadcast(self):
+        ministry, _token = _verified_ministry()
+        category = TestimonyCategory.objects.create(name="Faith", slug="faith")
+        broadcast = LiveBroadcast.objects.create(
+            creator=ministry, title="Sunday Service", category=category, status=LiveBroadcastStatus.LIVE
+        )
+        self.client.force_login(ministry)
+        response = self.client.post(
+            reverse("admin-live-broadcast-end", kwargs={"broadcast_id": broadcast.id}),
+            {"reason": "Guideline violation."},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_reason_is_required(self):
+        ministry, _token = _verified_ministry()
+        category = TestimonyCategory.objects.create(name="Faith", slug="faith")
+        broadcast = LiveBroadcast.objects.create(
+            creator=ministry, title="Sunday Service", category=category, status=LiveBroadcastStatus.LIVE
+        )
+        self.client.force_login(self._admin())
+        response = self.client.post(
+            reverse("admin-live-broadcast-end", kwargs={"broadcast_id": broadcast.id}),
+            {"reason": ""},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    @patch("apps.live_broadcasts.services.commands.agora.ban_channel_publisher")
+    def test_admin_can_end_a_live_broadcast_with_a_reason(self, ban_mock):
+        ministry, _token = _verified_ministry()
+        category = TestimonyCategory.objects.create(name="Faith", slug="faith")
+        broadcast = LiveBroadcast.objects.create(
+            creator=ministry,
+            title="Sunday Service",
+            category=category,
+            status=LiveBroadcastStatus.LIVE,
+            agora_channel_name="itestified-live-1-abcd",
+            agora_publisher_uid=ministry.id,
+        )
+        self.client.force_login(self._admin())
+
+        response = self.client.post(
+            reverse("admin-live-broadcast-end", kwargs={"broadcast_id": broadcast.id}),
+            {"reason": "Inappropriate content."},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["status"], "ended")
+        self.assertEqual(body["ended_reason"], "admin_terminated")
+        ban_mock.assert_called_once()
+
+    def test_ending_a_missing_broadcast_returns_404(self):
+        self.client.force_login(self._admin())
+        response = self.client.post(
+            reverse("admin-live-broadcast-end", kwargs={"broadcast_id": 999999}),
+            {"reason": "Guideline violation."},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 404)
+
+
 class ViewerBrowseApiTests(TestCase):
     def test_guest_can_list_live_broadcasts(self):
         ministry, _token = _verified_ministry()

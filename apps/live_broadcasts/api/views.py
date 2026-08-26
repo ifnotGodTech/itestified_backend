@@ -27,6 +27,7 @@ from apps.live_broadcasts.services import commands
 
 from .serializers import (
     AdminActiveBroadcastSerializer,
+    AdminEndBroadcastSerializer,
     AdminScheduledBroadcastSerializer,
     AllowanceSerializer,
     CreateLiveBroadcastSerializer,
@@ -252,6 +253,32 @@ class AdminBroadcastMonitorView(APIView):
                 },
             }
         )
+
+
+class AdminBroadcastEndView(APIView):
+    """Phase 27 Slice 8 -- the admin kill switch, reachable from the
+    Slice 7 monitoring panel. Not owner-scoped like `LiveBroadcastEndView`
+    (the creator's own "End" action) -- an admin can end any Ministry's
+    active broadcast."""
+
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsActiveAdmin]
+
+    def post(self, request, broadcast_id: int):
+        serializer = AdminEndBroadcastSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        broadcast = LiveBroadcast.objects.filter(id=broadcast_id).first()
+        if broadcast is None:
+            return Response({"message": "Broadcast not found."}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            broadcast = commands.admin_end_broadcast(
+                broadcast=broadcast, actor=request.user, note=serializer.validated_data["reason"]
+            )
+        except LiveBroadcastWrongStatusError as exc:
+            return Response({"message": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except AgoraNotConfiguredError as exc:
+            return Response({"message": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        return Response(LiveBroadcastSerializer(broadcast).data, status=status.HTTP_200_OK)
 
 
 class AdminLiveBroadcastApprovalRequestListView(APIView):

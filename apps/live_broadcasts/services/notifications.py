@@ -124,6 +124,27 @@ def notify_admins_of_live_broadcast_started(broadcast: LiveBroadcast) -> int:
     return len(rows)
 
 
+def notify_creator_broadcast_admin_terminated(broadcast: LiveBroadcast) -> UserNotification:
+    """Phase 27 Slice 8 -- the creator is told their broadcast was ended
+    by an admin and why, matching the same non-generic-error principle
+    used everywhere else in this app (e.g. a rejected testimony always
+    carries its reason, see apps.testimonies)."""
+    title = "Your broadcast was ended by an admin"
+    message = f'"{broadcast.title}" was ended by an admin.'
+    note = broadcast.admin_termination_note.strip()
+    if note:
+        message += f" Reason: {note}"
+    notification = UserNotification.objects.create(
+        recipient=broadcast.creator,
+        notification_type=NotificationType.LIVE_BROADCAST_ADMIN_TERMINATED,
+        title=title,
+        message=message,
+        metadata={"broadcast_id": broadcast.id},
+    )
+    send_push_to_users(user_ids=[broadcast.creator_id], title=title, body=message)
+    return notification
+
+
 def notify_followers_of_live_broadcast(broadcast: LiveBroadcast) -> int:
     """Phase 27 Slice 6 -- one notification per follower per broadcast,
     the moment go_live() (services/commands.py) actually succeeds, not at

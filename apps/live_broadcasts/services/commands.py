@@ -32,6 +32,7 @@ from apps.live_broadcasts.services import agora
 from apps.live_broadcasts.services.notifications import (
     notify_admins_of_approval_request,
     notify_admins_of_live_broadcast_started,
+    notify_creator_broadcast_admin_terminated,
     notify_creator_broadcast_recording_ready,
     notify_creator_of_approval_decision,
     notify_followers_of_live_broadcast,
@@ -50,6 +51,13 @@ RECORDING_UID_OFFSET = 2_000_000_000
 # construction rather than merely unlikely.
 VIEWER_UID_RANGE_START = 1_000_000_000
 VIEWER_UID_RANGE_SIZE = 500_000_000
+
+# Phase 27 Slice 8 -- how long the creator's own uid is banned from
+# rejoining the channel it was just kicked from. Short enough that a
+# legitimate Ministry isn't locked out for long if this were ever used in
+# error, long enough that they can't simply rejoin and restart on the
+# spot the moment the kick lands.
+ADMIN_KICK_COOLDOWN_SECONDS = 300
 
 
 def create_live_broadcast(*, creator, title: str, category, scheduled_at=None) -> LiveBroadcast:
@@ -326,6 +334,32 @@ def end_broadcast(*, broadcast: LiveBroadcast, reason: str, actor=None) -> LiveB
 
         transaction.on_commit(lambda: poll_and_archive_recording.delay(broadcast.id))
 
+    return broadcast
+
+
+def admin_end_broadcast(*, broadcast: LiveBroadcast, actor, note: str) -> LiveBroadcast:
+    """Phase 27 Slice 8 -- the admin kill switch reachable from the Slice
+    7 monitoring panel. Kicks the creator's own publisher uid off the
+    channel first (what actually stops the stream for every viewer at
+    once), then runs the exact same shared ending path every other
+    ending goes through (end_broadcast) -- the recording still lands in
+    the creator's normal Slice 3 decision rather than being special-cased
+    out of the pipeline. Unlike a best-effort vendor call elsewhere in
+    this app, a failed kick is NOT swallowed: it must never look like the
+    broadcast was ended when the stream is actually still live."""
+    if broadcast.status != LiveBroadcastStatus.LIVE:
+        raise LiveBroadcastWrongStatusError(f"Cannot end a broadcast in status '{broadcast.status}'.")
+
+    agora.ban_channel_publisher(
+        channel_name=broadcast.agora_channel_name,
+        uid=broadcast.agora_publisher_uid,
+        ban_seconds=ADMIN_KICK_COOLDOWN_SECONDS,
+    )
+
+    broadcast = end_broadcast(broadcast=broadcast, reason=LiveBroadcastEndedReason.ADMIN_TERMINATED, actor=actor)
+    broadcast.admin_termination_note = note
+    broadcast.save(update_fields=["admin_termination_note", "updated_at"])
+    transaction.on_commit(lambda: notify_creator_broadcast_admin_terminated(broadcast))
     return broadcast
 
 

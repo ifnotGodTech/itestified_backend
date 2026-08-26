@@ -6,6 +6,7 @@ from django.utils import timezone
 
 from apps.creators.models import CreatorFollow, CreatorProfile
 from apps.live_broadcasts.exceptions import (
+    AgoraNotConfiguredError,
     InsufficientAllowanceError,
     LiveBroadcastingDisabledError,
     LiveBroadcastWrongStatusError,
@@ -374,6 +375,65 @@ class EndBroadcastTests(TestCase):
         delay_mock.assert_not_called()
 
 
+class AdminEndBroadcastTests(TestCase):
+    def setUp(self):
+        self.ministry = _verified_ministry()
+        self.category = _category()
+
+    def _live_broadcast(self):
+        broadcast = LiveBroadcast.objects.create(
+            creator=self.ministry, title="Sunday Service", category=self.category
+        )
+        broadcast.status = LiveBroadcastStatus.LIVE
+        broadcast.started_at = timezone.now()
+        broadcast.agora_channel_name = "itestified-live-1-abcd"
+        broadcast.agora_publisher_uid = self.ministry.id
+        broadcast.max_duration_minutes_applied = 30
+        broadcast.recording_status = LiveBroadcastRecordingStatus.FAILED
+        broadcast.save()
+        return broadcast
+
+    def test_cannot_admin_end_a_non_live_broadcast(self):
+        broadcast = LiveBroadcast.objects.create(
+            creator=self.ministry, title="Sunday Service", category=self.category
+        )
+        with self.assertRaises(LiveBroadcastWrongStatusError):
+            commands.admin_end_broadcast(broadcast=broadcast, actor=self.ministry, note="Guideline violation.")
+
+    @patch("apps.live_broadcasts.services.commands.agora.ban_channel_publisher")
+    def test_admin_end_kicks_the_publisher_and_ends_the_broadcast(self, ban_mock):
+        from apps.notifications.models import NotificationType, UserNotification
+
+        broadcast = self._live_broadcast()
+        admin = UserFactory(email="admin@example.com")
+
+        with self.captureOnCommitCallbacks(execute=True):
+            result = commands.admin_end_broadcast(broadcast=broadcast, actor=admin, note="Inappropriate content.")
+
+        ban_mock.assert_called_once_with(
+            channel_name="itestified-live-1-abcd", uid=self.ministry.id, ban_seconds=commands.ADMIN_KICK_COOLDOWN_SECONDS
+        )
+        self.assertEqual(result.status, LiveBroadcastStatus.ENDED)
+        self.assertEqual(result.ended_reason, LiveBroadcastEndedReason.ADMIN_TERMINATED)
+        self.assertEqual(result.admin_termination_note, "Inappropriate content.")
+
+        notification = UserNotification.objects.get(
+            recipient=self.ministry, notification_type=NotificationType.LIVE_BROADCAST_ADMIN_TERMINATED
+        )
+        self.assertIn("Inappropriate content.", notification.message)
+
+    @patch("apps.live_broadcasts.services.commands.agora.ban_channel_publisher", side_effect=AgoraNotConfiguredError())
+    def test_admin_end_does_not_end_the_broadcast_when_the_kick_fails(self, ban_mock):
+        broadcast = self._live_broadcast()
+        admin = UserFactory(email="admin@example.com")
+
+        with self.assertRaises(AgoraNotConfiguredError):
+            commands.admin_end_broadcast(broadcast=broadcast, actor=admin, note="Guideline violation.")
+
+        broadcast.refresh_from_db()
+        self.assertEqual(broadcast.status, LiveBroadcastStatus.LIVE)
+
+
 class ArchiveBroadcastRecordingTests(TestCase):
     def test_archiving_creates_a_draft_testimony_and_notifies_creator(self):
         from apps.notifications.models import NotificationType, UserNotification
@@ -631,3 +691,46 @@ class GetChannelViewerCountNotConfiguredTests(TestCase):
         from apps.live_broadcasts.services import agora
 
         self.assertIsNone(agora.get_channel_viewer_count(channel_name="itestified-live-1-abcd"))
+
+
+@override_settings(
+    AGORA_APP_ID="app-id", AGORA_APP_CERTIFICATE="cert", AGORA_CUSTOMER_ID="cid", AGORA_CUSTOMER_SECRET="secret"
+)
+class BanChannelPublisherTests(TestCase):
+    @patch("apps.live_broadcasts.services.agora.requests.post")
+    def test_posts_the_expected_kicking_rule_payload(self, post_mock):
+        from apps.live_broadcasts.services import agora
+
+        post_mock.return_value = Mock(json=lambda: {"status": "success", "id": 1})
+        agora.ban_channel_publisher(channel_name="itestified-live-1-abcd", uid=42, ban_seconds=300)
+
+        post_mock.assert_called_once()
+        called_url = post_mock.call_args.args[0]
+        called_kwargs = post_mock.call_args.kwargs
+        self.assertIn("/dev/v1/kicking-rule", called_url)
+        self.assertEqual(
+            called_kwargs["json"],
+            {
+                "appid": "app-id",
+                "cname": "itestified-live-1-abcd",
+                "uid": "42",
+                "ip": "",
+                "time": 300,
+                "privileges": ["join_channel"],
+            },
+        )
+
+    @patch("apps.live_broadcasts.services.agora.requests.post", side_effect=requests.ConnectionError("down"))
+    def test_raises_on_request_failure_rather_than_swallowing_it(self, post_mock):
+        from apps.live_broadcasts.services import agora
+
+        with self.assertRaises(requests.ConnectionError):
+            agora.ban_channel_publisher(channel_name="itestified-live-1-abcd", uid=42, ban_seconds=300)
+
+
+class BanChannelPublisherNotConfiguredTests(TestCase):
+    def test_raises_when_agora_is_not_configured(self):
+        from apps.live_broadcasts.services import agora
+
+        with self.assertRaises(AgoraNotConfiguredError):
+            agora.ban_channel_publisher(channel_name="itestified-live-1-abcd", uid=42, ban_seconds=300)

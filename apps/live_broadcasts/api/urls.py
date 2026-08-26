@@ -1,6 +1,7 @@
 from django.urls import path
 
 from .views import (
+    AdminBroadcastEndView,
     AdminBroadcastMonitorView,
     AdminLiveBroadcastApprovalDecideView,
     AdminLiveBroadcastApprovalRequestListView,
@@ -36,6 +37,7 @@ urlpatterns = [
         name="live-minute-purchase-verify",
     ),
     path("admin/monitor/", AdminBroadcastMonitorView.as_view(), name="admin-live-broadcast-monitor"),
+    path("admin/<int:broadcast_id>/end/", AdminBroadcastEndView.as_view(), name="admin-live-broadcast-end"),
     path(
         "admin/approval-requests/",
         AdminLiveBroadcastApprovalRequestListView.as_view(),

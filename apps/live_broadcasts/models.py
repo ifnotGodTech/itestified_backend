@@ -65,6 +65,11 @@ class LiveBroadcast(models.Model):
     started_at = models.DateTimeField(null=True, blank=True)
     ended_at = models.DateTimeField(null=True, blank=True)
     ended_reason = models.CharField(max_length=20, choices=LiveBroadcastEndedReason.choices, blank=True)
+    # Phase 27 Slice 8 -- only ever populated alongside
+    # ended_reason=ADMIN_TERMINATED; the admin's required, free-text
+    # explanation for the kill, surfaced back to the creator so ending a
+    # broadcast is never a silent/generic action.
+    admin_termination_note = models.TextField(blank=True)
 
     # Populated only once go_live() succeeds -- never at creation/scheduling
     # time. Unguessable suffix so a channel name can't be reconstructed from

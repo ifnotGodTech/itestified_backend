@@ -83,6 +83,48 @@ def _rest_auth_header() -> dict[str, str]:
     return {"Authorization": f"Basic {credential}"}
 
 
+def ban_channel_publisher(*, channel_name: str, uid: int, ban_seconds: int) -> None:
+    """Phase 27 Slice 8 -- admin kill switch. Calls Agora's Channel
+    Management REST API to revoke the creator's own `join_channel`
+    privilege on this specific channel for `ban_seconds` -- what Agora's
+    docs call "ban user privileges", backed by what its own examples call
+    the "kicking rule" endpoint. Since there's only ever one publisher,
+    kicking them ends the broadcast for every viewer at once; the
+    cool-down (`ban_seconds`) stops the same Ministry from simply
+    rejoining the same channel and restarting on the spot. The kicked
+    client receives Agora's own `CONNECTION_CHANGED_BANNED_BY_SERVER`
+    callback.
+
+    Endpoint verified against Agora's own docs (`POST
+    https://api.agora.io/dev/v1/kicking-rule`); the exact response shape
+    (`{"status": "success", "id": ...}`) is reconstructed from a
+    search-engine-indexed excerpt of that same page -- it renders
+    client-side and 404s to a direct fetch, the same limitation noted on
+    get_channel_viewer_count/get_participant_minutes_used above -- so
+    confirm against the Agora Console once a real project exists.
+
+    Unlike get_channel_viewer_count, this does not swallow failures: an
+    admin's kill action must surface clearly if it didn't actually work,
+    never silently report success while the stream keeps running.
+    """
+    app_id, _ = _require_token_credentials()
+    headers = {**_rest_auth_header(), "Content-Type": "application/json", "Accept": "application/json"}
+    response = requests.post(
+        f"{settings.AGORA_REST_BASE_URL.rstrip('/')}/dev/v1/kicking-rule",
+        headers=headers,
+        json={
+            "appid": app_id,
+            "cname": channel_name,
+            "uid": str(uid),
+            "ip": "",
+            "time": ban_seconds,
+            "privileges": ["join_channel"],
+        },
+        timeout=10,
+    )
+    response.raise_for_status()
+
+
 def get_participant_minutes_used(*, year: int, month: int) -> int:
     """Queries Agora's Analytics/Usage REST API for this project's total
     participant-minutes consumed in the given calendar month, across every

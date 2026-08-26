@@ -138,6 +138,14 @@ class AdminScheduledBroadcastSerializer(serializers.ModelSerializer):
         return profile.avatar if profile else ""
 
 
+class AdminEndBroadcastSerializer(serializers.Serializer):
+    """Phase 27 Slice 8 -- a reason is required every time, mirroring the
+    existing reject-with-reason validation shape used elsewhere in this
+    codebase (e.g. `apps.donations`' admin reversal reason)."""
+
+    reason = serializers.CharField(min_length=3, max_length=1000)
+
+
 class ViewerJoinCredentialSerializer(serializers.Serializer):
     app_id = serializers.CharField()
     channel_name = serializers.CharField()
