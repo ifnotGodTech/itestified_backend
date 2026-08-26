@@ -37,6 +37,7 @@ INSTALLED_APPS = [
     "apps.media_exports",
     "apps.referrals",
     "apps.live_broadcasts",
+    "apps.playlists",
 ]
 
 MIDDLEWARE = [

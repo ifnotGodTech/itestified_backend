@@ -19,4 +19,5 @@ urlpatterns = [
     path("api/v1/media-exports/", include("apps.media_exports.api.urls")),
     path("api/v1/referrals/", include("apps.referrals.api.urls")),
     path("api/v1/live-broadcasts/", include("apps.live_broadcasts.api.urls")),
+    path("api/v1/playlists/", include("apps.playlists.api.urls")),
 ]
