@@ -7,10 +7,12 @@ from .views import (
     PlaylistItemDetailView,
     PlaylistItemListView,
     PlaylistMineListView,
+    PlaylistPublicDetailView,
     PlaylistRenameView,
     PlaylistReorderView,
     PlaylistShowOwnerNameView,
     PlaylistVisibilityView,
+    UserSharedPlaylistsView,
 )
 
 urlpatterns = [
@@ -32,4 +34,6 @@ urlpatterns = [
         name="playlist-show-owner-name",
     ),
     path("<int:playlist_id>/clone/", PlaylistCloneView.as_view(), name="playlist-clone"),
+    path("<int:playlist_id>/", PlaylistPublicDetailView.as_view(), name="playlist-public-detail"),
+    path("by-user/<int:user_id>/", UserSharedPlaylistsView.as_view(), name="playlist-user-shared-list"),
 ]

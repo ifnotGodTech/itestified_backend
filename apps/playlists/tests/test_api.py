@@ -4,7 +4,13 @@ from rest_framework.authtoken.models import Token
 
 from apps.playlists.models import Playlist, PlaylistItem
 from apps.playlists.services import commands
-from apps.playlists.tests.factories import approved_testimony, category, free_user, premium_user
+from apps.playlists.tests.factories import (
+    approved_testimony,
+    category,
+    free_user,
+    premium_user,
+    unavailable_testimony,
+)
 
 
 def _token_header(user) -> dict:
@@ -262,3 +268,128 @@ class PlaylistCloneApiTests(TestCase):
         )
         self.assertEqual(response.status_code, 403)
         self.assertEqual(response.json()["code"], "premium_required")
+
+
+class PlaylistPublicDetailApiTests(TestCase):
+    def test_owner_sees_full_detail_with_unavailable_marker(self):
+        owner = premium_user()
+        testimony_category = category()
+        available = approved_testimony(category_obj=testimony_category, title="Available")
+        gone = unavailable_testimony(category_obj=testimony_category, title="Gone")
+        playlist = commands.create_playlist(owner=owner, title="List", testimony_id=available.id)
+        commands.add_item(playlist=playlist, actor=owner, testimony_id=gone.id)
+
+        response = self.client.get(
+            reverse("playlist-public-detail", kwargs={"playlist_id": playlist.id}), **_token_header(owner)
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["is_owner"])
+        self.assertEqual(body["item_count"], 2)
+        by_title = {item["title"]: item for item in body["items"]}
+        self.assertTrue(by_title["Available"]["is_available"])
+        self.assertFalse(by_title["Gone"]["is_available"])
+
+    def test_premium_non_owner_can_open_a_private_playlist_by_id(self):
+        owner = premium_user(email="owner@example.com")
+        visitor = premium_user(email="visitor@example.com")
+        testimony_category = category()
+        available = approved_testimony(category_obj=testimony_category, title="Available")
+        gone = unavailable_testimony(category_obj=testimony_category, title="Gone")
+        playlist = commands.create_playlist(owner=owner, title="List", testimony_id=available.id)
+        commands.add_item(playlist=playlist, actor=owner, testimony_id=gone.id)
+
+        response = self.client.get(
+            reverse("playlist-public-detail", kwargs={"playlist_id": playlist.id}), **_token_header(visitor)
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertFalse(body["is_owner"])
+        self.assertEqual(body["item_count"], 1)
+        self.assertEqual([item["title"] for item in body["items"]], ["Available"])
+        self.assertNotIn("is_available", body["items"][0])
+
+    def test_free_user_gets_a_locked_preview_not_the_contents(self):
+        owner = premium_user()
+        testimony = approved_testimony()
+        playlist = commands.create_playlist(owner=owner, title="Sunday Favorites", testimony_id=testimony.id)
+        visitor = free_user()
+
+        response = self.client.get(
+            reverse("playlist-public-detail", kwargs={"playlist_id": playlist.id}), **_token_header(visitor)
+        )
+
+        self.assertEqual(response.status_code, 403)
+        body = response.json()
+        self.assertTrue(body["locked"])
+        self.assertEqual(body["title"], "Sunday Favorites")
+        self.assertEqual(body["item_count"], 1)
+        self.assertNotIn("items", body)
+
+    def test_guest_gets_a_locked_preview_too(self):
+        owner = premium_user()
+        testimony = approved_testimony()
+        playlist = commands.create_playlist(owner=owner, title="Sunday Favorites", testimony_id=testimony.id)
+
+        response = self.client.get(reverse("playlist-public-detail", kwargs={"playlist_id": playlist.id}))
+
+        self.assertEqual(response.status_code, 403)
+        self.assertTrue(response.json()["locked"])
+
+    def test_missing_playlist_returns_a_genuine_404_regardless_of_who_asks(self):
+        response = self.client.get(reverse("playlist-public-detail", kwargs={"playlist_id": 999999}))
+        self.assertEqual(response.status_code, 404)
+
+    def test_owner_name_hidden_when_show_owner_name_is_off_for_a_visitor(self):
+        owner = premium_user(email="owner2@example.com")
+        visitor = premium_user(email="visitor2@example.com")
+        testimony = approved_testimony()
+        playlist = commands.create_playlist(owner=owner, title="List", testimony_id=testimony.id)
+        commands.set_show_owner_name(playlist=playlist, actor=owner, show_owner_name=False)
+
+        response = self.client.get(
+            reverse("playlist-public-detail", kwargs={"playlist_id": playlist.id}), **_token_header(visitor)
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.json()["owner_name"])
+
+
+class UserSharedPlaylistsApiTests(TestCase):
+    def test_premium_visitor_sees_only_shared_playlists(self):
+        owner = premium_user(email="owner@example.com")
+        visitor = premium_user(email="visitor@example.com")
+        testimony = approved_testimony()
+        commands.create_playlist(owner=owner, title="Private", testimony_id=testimony.id)
+        shared = commands.create_playlist(owner=owner, title="Shared", testimony_id=testimony.id)
+        commands.set_visibility(playlist=shared, actor=owner, visibility="shared")
+
+        response = self.client.get(
+            reverse("playlist-user-shared-list", kwargs={"user_id": owner.id}), **_token_header(visitor)
+        )
+
+        self.assertEqual(response.status_code, 200)
+        titles = [row["title"] for row in response.json()]
+        self.assertEqual(titles, ["Shared"])
+
+    def test_free_visitor_gets_a_locked_count_only(self):
+        owner = premium_user()
+        testimony = approved_testimony()
+        shared = commands.create_playlist(owner=owner, title="Shared", testimony_id=testimony.id)
+        commands.set_visibility(playlist=shared, actor=owner, visibility="shared")
+        visitor = free_user()
+
+        response = self.client.get(
+            reverse("playlist-user-shared-list", kwargs={"user_id": owner.id}), **_token_header(visitor)
+        )
+
+        self.assertEqual(response.status_code, 403)
+        body = response.json()
+        self.assertTrue(body["locked"])
+        self.assertEqual(body["shared_playlist_count"], 1)
+
+    def test_missing_user_returns_404(self):
+        response = self.client.get(reverse("playlist-user-shared-list", kwargs={"user_id": 999999}))
+        self.assertEqual(response.status_code, 404)

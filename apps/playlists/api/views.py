@@ -1,6 +1,6 @@
 from rest_framework import generics, status
 from rest_framework.authentication import TokenAuthentication
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -16,16 +16,22 @@ from apps.playlists.exceptions import (
     TestimonyNotFoundError,
 )
 from apps.playlists.services import commands
+from apps.subscriptions.selectors import is_user_premium
+from apps.users.models import User
 
 from .serializers import (
     AddPlaylistItemSerializer,
     ClonePlaylistSerializer,
     CreatePlaylistSerializer,
+    LockedPlaylistPreviewSerializer,
+    LockedSharedPlaylistsSerializer,
+    PlaylistPublicDetailSerializer,
     PlaylistSerializer,
     RenamePlaylistSerializer,
     ReorderPlaylistItemsSerializer,
     SetPlaylistShowOwnerNameSerializer,
     SetPlaylistVisibilitySerializer,
+    SharedPlaylistRowSerializer,
 )
 
 
@@ -225,3 +231,84 @@ class PlaylistCloneView(APIView):
         except (PlaylistPremiumRequiredError, PlaylistLimitExceededError) as exc:
             return _error_response(exc)
         return Response(PlaylistSerializer(clone).data, status=status.HTTP_201_CREATED)
+
+
+class PlaylistPublicDetailView(APIView):
+    """Phase 29 Slice 7 -- the general-purpose read path: owner, Premium
+    visitor (private or shared, doesn't matter -- see choices.py), and
+    free/guest all resolve through this one bare `/playlists/<id>/` URL,
+    exactly where Slice 6 deliberately left it free for this.
+
+    Deliberately does not override `authentication_classes` -- leaving
+    the project default (Session + Token) in place with only
+    `permission_classes = [AllowAny]` overridden is what makes
+    `request.user` resolve to the real user for a valid token and to
+    AnonymousUser for a guest with no special-casing needed, the same
+    pattern `HomeFeedView` uses and the same authentication-override bug
+    this codebase has hit twice before (Phase 17/18) that this avoids by
+    not repeating it."""
+
+    permission_classes = [AllowAny]
+
+    def get(self, request, playlist_id: int):
+        try:
+            playlist = selectors.get_playlist(playlist_id=playlist_id)
+        except PlaylistNotFoundError:
+            return _not_found("Playlist not found.")
+
+        user = request.user if request.user.is_authenticated else None
+        is_owner = user is not None and playlist.owner_id == user.id
+        show_name = playlist.show_owner_name or is_owner
+        owner_name = selectors.get_owner_display_name(playlist.owner) if show_name else None
+
+        if not is_owner and not (user is not None and is_user_premium(user)):
+            payload = {
+                "message": "Subscribe to Premium to view this playlist.",
+                "title": playlist.title,
+                "owner_name": owner_name,
+                "item_count": playlist.item_count,
+            }
+            return Response(LockedPlaylistPreviewSerializer(payload).data, status=status.HTTP_403_FORBIDDEN)
+
+        if is_owner:
+            items = selectors.build_owner_playlist_view(playlist)
+            item_count = playlist.item_count
+        else:
+            items = selectors.build_visitor_playlist_view(playlist)
+            item_count = len(items)
+
+        payload = {
+            "id": playlist.id,
+            "title": playlist.title,
+            "is_owner": is_owner,
+            "owner_name": owner_name,
+            "owner_avatar": selectors.get_owner_avatar(playlist.owner) if show_name else "",
+            "item_count": item_count,
+            "items": items,
+        }
+        return Response(PlaylistPublicDetailSerializer(payload).data)
+
+
+class UserSharedPlaylistsView(APIView):
+    """Phase 29 Slice 7 -- a profile's Playlists section, viewed by
+    someone who isn't its owner (the owner's own full library, private
+    and shared both, is `PlaylistMineListView`, a completely different
+    endpoint -- this one only ever returns shared playlists)."""
+
+    permission_classes = [AllowAny]
+
+    def get(self, request, user_id: int):
+        target_user = User.objects.filter(id=user_id).first()
+        if target_user is None:
+            return _not_found("User not found.")
+
+        user = request.user if request.user.is_authenticated else None
+        if user is not None and is_user_premium(user):
+            playlists = selectors.list_shared_playlists_for_user(target_user=target_user)
+            return Response(SharedPlaylistRowSerializer(playlists, many=True).data)
+
+        payload = {
+            "message": "Subscribe to Premium to view this profile's playlists.",
+            "shared_playlist_count": selectors.count_shared_playlists_for_user(target_user=target_user),
+        }
+        return Response(LockedSharedPlaylistsSerializer(payload).data, status=status.HTTP_403_FORBIDDEN)

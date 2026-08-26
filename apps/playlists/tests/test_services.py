@@ -10,9 +10,16 @@ from apps.playlists.exceptions import (
     PlaylistReorderMismatchError,
     TestimonyNotFoundError,
 )
+from apps.playlists import selectors
 from apps.playlists.models import Playlist, PlaylistItem
 from apps.playlists.services import commands
-from apps.playlists.tests.factories import approved_testimony, category, free_user, premium_user
+from apps.playlists.tests.factories import (
+    approved_testimony,
+    category,
+    free_user,
+    premium_user,
+    unavailable_testimony,
+)
 
 
 class CreatePlaylistTests(TestCase):
@@ -232,3 +239,59 @@ class ClonePlaylistTests(TestCase):
 
         with self.assertRaises(PlaylistLimitExceededError):
             commands.clone_playlist(source_playlist_id=source.id, actor=cloner)
+
+
+class BuildOwnerPlaylistViewTests(TestCase):
+    def test_owner_view_marks_an_unavailable_item_rather_than_hiding_it(self):
+        owner = premium_user()
+        testimony_category = category()
+        available = approved_testimony(category_obj=testimony_category, title="Available")
+        gone = unavailable_testimony(category_obj=testimony_category, title="Gone")
+        playlist = commands.create_playlist(owner=owner, title="List", testimony_id=available.id)
+        commands.add_item(playlist=playlist, actor=owner, testimony_id=gone.id)
+
+        views = selectors.build_owner_playlist_view(playlist)
+
+        self.assertEqual(len(views), 2)
+        by_title = {view["title"]: view for view in views}
+        self.assertTrue(by_title["Available"]["is_available"])
+        self.assertFalse(by_title["Gone"]["is_available"])
+
+
+class BuildVisitorPlaylistViewTests(TestCase):
+    def test_visitor_view_silently_omits_an_unavailable_item(self):
+        owner = premium_user()
+        testimony_category = category()
+        available = approved_testimony(category_obj=testimony_category, title="Available")
+        gone = unavailable_testimony(category_obj=testimony_category, title="Gone")
+        playlist = commands.create_playlist(owner=owner, title="List", testimony_id=available.id)
+        commands.add_item(playlist=playlist, actor=owner, testimony_id=gone.id)
+
+        views = selectors.build_visitor_playlist_view(playlist)
+
+        self.assertEqual(len(views), 1)
+        self.assertEqual(views[0]["title"], "Available")
+        self.assertNotIn("is_available", views[0])
+
+
+class SharedPlaylistSelectorTests(TestCase):
+    def test_only_shared_playlists_are_listed_for_a_visitor(self):
+        owner = premium_user()
+        testimony = approved_testimony()
+        private_playlist = commands.create_playlist(owner=owner, title="Private", testimony_id=testimony.id)
+        shared_playlist = commands.create_playlist(owner=owner, title="Shared", testimony_id=testimony.id)
+        commands.set_visibility(playlist=shared_playlist, actor=owner, visibility=PlaylistVisibility.SHARED)
+
+        rows = list(selectors.list_shared_playlists_for_user(target_user=owner))
+
+        self.assertEqual([row.id for row in rows], [shared_playlist.id])
+        self.assertNotIn(private_playlist.id, [row.id for row in rows])
+
+    def test_count_shared_playlists_matches_the_list(self):
+        owner = premium_user()
+        testimony = approved_testimony()
+        commands.create_playlist(owner=owner, title="Private", testimony_id=testimony.id)
+        shared_playlist = commands.create_playlist(owner=owner, title="Shared", testimony_id=testimony.id)
+        commands.set_visibility(playlist=shared_playlist, actor=owner, visibility=PlaylistVisibility.SHARED)
+
+        self.assertEqual(selectors.count_shared_playlists_for_user(target_user=owner), 1)

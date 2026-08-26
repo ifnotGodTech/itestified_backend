@@ -33,3 +33,18 @@ def approved_testimony(*, author=None, title: str = "A testimony", category_obj:
         testimony_type=TestimonyType.WRITTEN,
         status=TestimonyStatus.APPROVED,
     )
+
+
+def unavailable_testimony(
+    *, author=None, title: str = "An unavailable testimony", category_obj: TestimonyCategory | None = None
+) -> Testimony:
+    """A testimony that exists but isn't currently publicly visible --
+    same as one already in a playlist getting archived/rejected later."""
+    return Testimony.objects.create(
+        author=author or UserFactory(),
+        category=category_obj or category(),
+        title=title,
+        body="Body text.",
+        testimony_type=TestimonyType.WRITTEN,
+        status=TestimonyStatus.REJECTED,
+    )
