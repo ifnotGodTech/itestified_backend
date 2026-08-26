@@ -19,6 +19,8 @@ class NotificationType(models.TextChoices):
     LIVE_BROADCAST_STARTED = "live_broadcast_started", "Live Broadcast Started"
     LIVE_BROADCAST_ADMIN_ALERT = "live_broadcast_admin_alert", "Live Broadcast Admin Alert"
     LIVE_BROADCAST_ADMIN_TERMINATED = "live_broadcast_admin_terminated", "Live Broadcast Admin Terminated"
+    PLAYLIST_FORCED_PRIVATE = "playlist_forced_private", "Playlist Forced Private"
+    PLAYLIST_DELETED_BY_ADMIN = "playlist_deleted_by_admin", "Playlist Deleted By Admin"
 
 
 class UserNotification(models.Model):

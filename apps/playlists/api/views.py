@@ -1,9 +1,11 @@
 from rest_framework import generics, status
-from rest_framework.authentication import TokenAuthentication
+from rest_framework.authentication import SessionAuthentication, TokenAuthentication
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.authn.api.permissions import IsActiveAdmin
 from apps.playlists import selectors
 from apps.playlists.exceptions import (
     PlaylistError,
@@ -21,6 +23,9 @@ from apps.users.models import User
 
 from .serializers import (
     AddPlaylistItemSerializer,
+    AdminPlaylistDetailSerializer,
+    AdminPlaylistListSerializer,
+    AdminPlaylistTakedownSerializer,
     ClonePlaylistSerializer,
     CreatePlaylistSerializer,
     LockedPlaylistPreviewSerializer,
@@ -312,3 +317,85 @@ class UserSharedPlaylistsView(APIView):
             "shared_playlist_count": selectors.count_shared_playlists_for_user(target_user=target_user),
         }
         return Response(LockedSharedPlaylistsSerializer(payload).data, status=status.HTTP_403_FORBIDDEN)
+
+
+class AdminPlaylistPagination(PageNumberPagination):
+    page_size = 20
+    page_size_query_param = "page_size"
+    max_page_size = 100
+
+
+class AdminPlaylistListView(generics.ListAPIView):
+    """Phase 29 Slice 8 -- platform-wide visibility into user-generated
+    playlists, which otherwise has zero admin surface despite being
+    Premium-community-facing UGC."""
+
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsAuthenticated, IsActiveAdmin]
+    serializer_class = AdminPlaylistListSerializer
+    pagination_class = AdminPlaylistPagination
+
+    def get_queryset(self):
+        return selectors.list_all_playlists_for_admin(
+            search=self.request.query_params.get("q") or "",
+            visibility=self.request.query_params.get("visibility") or "",
+        )
+
+
+class AdminPlaylistDetailView(APIView):
+    """Ownership-blind by design -- an admin looking into a report needs
+    the complete, unfiltered ordered contents (Slice 8's own goal), the
+    same shape the owner's own manage screen gets, never the
+    non-owner-filtered or locked-preview shapes the public read path
+    (Slice 7) resolves to for everyone else."""
+
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsAuthenticated, IsActiveAdmin]
+
+    def get(self, request, playlist_id: int):
+        try:
+            playlist = selectors.get_playlist(playlist_id=playlist_id)
+        except PlaylistNotFoundError:
+            return _not_found("Playlist not found.")
+
+        payload = {
+            "id": playlist.id,
+            "title": playlist.title,
+            "owner_name": selectors.get_owner_display_name(playlist.owner),
+            "owner_email": playlist.owner.email,
+            "visibility": playlist.visibility,
+            "show_owner_name": playlist.show_owner_name,
+            "item_count": playlist.item_count,
+            "created_at": playlist.created_at,
+            "updated_at": playlist.updated_at,
+            "items": selectors.build_owner_playlist_view(playlist),
+        }
+        return Response(AdminPlaylistDetailSerializer(payload).data)
+
+
+class AdminPlaylistTakedownView(APIView):
+    """Phase 29 Slice 9 -- force the playlist private (a quiet
+    correction) or delete it outright, a reason required every time,
+    never a silent takedown. The owner is notified either way, matching
+    the same non-generic-error/never-silent principle used everywhere
+    else in this app's moderation flows."""
+
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsAuthenticated, IsActiveAdmin]
+
+    def post(self, request, playlist_id: int):
+        serializer = AdminPlaylistTakedownSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            playlist = selectors.get_playlist(playlist_id=playlist_id)
+        except PlaylistNotFoundError:
+            return _not_found("Playlist not found.")
+
+        action = serializer.validated_data["action"]
+        reason = serializer.validated_data["reason"]
+        if action == "force_private":
+            playlist = commands.admin_force_private(playlist=playlist, actor=request.user, reason=reason)
+            return Response(PlaylistSerializer(playlist).data)
+
+        commands.admin_delete_playlist(playlist=playlist, actor=request.user, reason=reason)
+        return Response(status=status.HTTP_204_NO_CONTENT)

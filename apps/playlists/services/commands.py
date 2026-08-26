@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from django.db import transaction
 
+from apps.notifications.services import (
+    notify_playlist_deleted_by_admin,
+    notify_playlist_forced_private,
+)
 from apps.playlists import selectors
+from apps.playlists.choices import PlaylistVisibility
 from apps.playlists.exceptions import (
     PlaylistItemAlreadyExistsError,
     PlaylistItemLimitExceededError,
@@ -180,3 +185,41 @@ def clone_playlist(*, source_playlist_id: int, actor, title: str | None = None) 
     )
     clone.item_count = len(source_items)
     return clone
+
+
+@transaction.atomic
+def admin_force_private(*, playlist: Playlist, actor, reason: str) -> Playlist:
+    """Phase 29 Slice 9 -- a quiet correction: the playlist and its
+    contents stay fully intact, it just drops off the owner's profile
+    listing. Deliberately not `set_visibility` -- that command requires
+    the actor to be the Premium owner; here the actor is an admin acting
+    on someone else's playlist, a completely different authorization
+    story, not just a different caller of the same rule."""
+    playlist.visibility = PlaylistVisibility.PRIVATE
+    playlist.save(update_fields=["visibility", "updated_at"])
+    notify_playlist_forced_private(
+        recipient=playlist.owner,
+        actor=actor,
+        playlist_title=playlist.title,
+        reason=reason,
+    )
+    return playlist
+
+
+@transaction.atomic
+def admin_delete_playlist(*, playlist: Playlist, actor, reason: str) -> None:
+    """Hard delete, same cascade guarantees as the owner's own
+    `delete_playlist` -- the underlying testimonies and any other user's
+    clone of this playlist are completely untouched. A reason is
+    required every time (2026-08-26 product decision) -- never a silent
+    takedown, matching the existing reject-testimony-with-reason
+    convention."""
+    title = playlist.title
+    owner = playlist.owner
+    playlist.delete()
+    notify_playlist_deleted_by_admin(
+        recipient=owner,
+        actor=actor,
+        playlist_title=title,
+        reason=reason,
+    )

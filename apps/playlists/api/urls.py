@@ -1,6 +1,9 @@
 from django.urls import path
 
 from .views import (
+    AdminPlaylistDetailView,
+    AdminPlaylistListView,
+    AdminPlaylistTakedownView,
     PlaylistCloneView,
     PlaylistCreateView,
     PlaylistDetailView,
@@ -36,4 +39,11 @@ urlpatterns = [
     path("<int:playlist_id>/clone/", PlaylistCloneView.as_view(), name="playlist-clone"),
     path("<int:playlist_id>/", PlaylistPublicDetailView.as_view(), name="playlist-public-detail"),
     path("by-user/<int:user_id>/", UserSharedPlaylistsView.as_view(), name="playlist-user-shared-list"),
+    path("admin/playlists/", AdminPlaylistListView.as_view(), name="admin-playlist-list"),
+    path("admin/playlists/<int:playlist_id>/", AdminPlaylistDetailView.as_view(), name="admin-playlist-detail"),
+    path(
+        "admin/playlists/<int:playlist_id>/takedown/",
+        AdminPlaylistTakedownView.as_view(),
+        name="admin-playlist-takedown",
+    ),
 ]

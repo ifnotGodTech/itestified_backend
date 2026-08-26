@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from django.db.models import Count, QuerySet
+from django.db.models import Count, Q, QuerySet
 
 from apps.playlists.choices import PlaylistVisibility
 from apps.playlists.exceptions import PlaylistNotFoundError
@@ -118,3 +118,21 @@ def count_shared_playlists_for_user(*, target_user) -> int:
     """What a free/guest visitor sees instead of the list above -- a
     count only, contents locked (2026-08-26 product decision)."""
     return Playlist.objects.filter(owner=target_user, visibility=PlaylistVisibility.SHARED).count()
+
+
+def list_all_playlists_for_admin(*, search: str = "", visibility: str = "") -> QuerySet[Playlist]:
+    """Phase 29 Slice 8 -- platform-wide, ownership-blind (unlike every
+    other selector in this module). Search mirrors AdminDonationListView's
+    own convention exactly: icontains across the fields an admin would
+    actually type, not full-text search."""
+    queryset = _playlist_queryset_with_item_count().select_related("owner", "owner__profile")
+    if visibility in {PlaylistVisibility.PRIVATE, PlaylistVisibility.SHARED}:
+        queryset = queryset.filter(visibility=visibility)
+    search = search.strip()
+    if search:
+        queryset = queryset.filter(
+            Q(title__icontains=search)
+            | Q(owner__email__icontains=search)
+            | Q(owner__profile__full_name__icontains=search)
+        )
+    return queryset.order_by("-created_at")

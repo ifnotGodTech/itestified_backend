@@ -112,3 +112,65 @@ class LockedSharedPlaylistsSerializer(serializers.Serializer):
     code = serializers.CharField(default="premium_required")
     message = serializers.CharField()
     shared_playlist_count = serializers.IntegerField()
+
+
+class AdminPlaylistListSerializer(serializers.ModelSerializer):
+    """Phase 29 Slice 8 -- the platform-wide moderation list. Real owner
+    identity always shown regardless of `show_owner_name` -- that flag
+    only ever governs what a *visitor* sees, never what an admin sees."""
+
+    owner_name = serializers.SerializerMethodField()
+    owner_email = serializers.EmailField(source="owner.email", read_only=True)
+    item_count = serializers.IntegerField(read_only=True, default=0)
+
+    class Meta:
+        model = Playlist
+        fields = [
+            "id",
+            "title",
+            "owner_name",
+            "owner_email",
+            "visibility",
+            "item_count",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+    def get_owner_name(self, playlist: Playlist) -> str:
+        from apps.playlists.selectors import get_owner_display_name
+
+        return get_owner_display_name(playlist.owner)
+
+
+class AdminPlaylistDetailSerializer(serializers.Serializer):
+    """The admin's own detail view -- complete, unfiltered ordered
+    contents (Slice 8's own goal), reusing the exact same per-item
+    availability marking the owner's own view gets (see
+    `selectors.build_owner_playlist_view`), since an admin should see
+    everything an owner would, including "no longer available" items."""
+
+    id = serializers.IntegerField()
+    title = serializers.CharField()
+    owner_name = serializers.CharField()
+    owner_email = serializers.EmailField()
+    visibility = serializers.CharField()
+    show_owner_name = serializers.BooleanField()
+    item_count = serializers.IntegerField()
+    created_at = serializers.DateTimeField()
+    updated_at = serializers.DateTimeField()
+    items = PlaylistItemViewSerializer(many=True)
+
+
+class AdminPlaylistTakedownSerializer(serializers.Serializer):
+    """Phase 29 Slice 9 -- force-private and delete are different in
+    kind (reversible correction vs. permanent removal), not two flags on
+    one action, so this is a real choice field, not a boolean."""
+
+    action = serializers.ChoiceField(choices=["force_private", "delete"])
+    reason = serializers.CharField()
+
+    def validate_reason(self, value: str) -> str:
+        trimmed = value.strip()
+        if not trimmed:
+            raise serializers.ValidationError("A reason is required.")
+        return trimmed

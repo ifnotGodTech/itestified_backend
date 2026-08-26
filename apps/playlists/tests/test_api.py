@@ -2,6 +2,7 @@ from django.test import TestCase
 from django.urls import reverse
 from rest_framework.authtoken.models import Token
 
+from apps.notifications.models import NotificationType, UserNotification
 from apps.playlists.models import Playlist, PlaylistItem
 from apps.playlists.services import commands
 from apps.playlists.tests.factories import (
@@ -11,6 +12,14 @@ from apps.playlists.tests.factories import (
     premium_user,
     unavailable_testimony,
 )
+from apps.users.choices import AdminRoleCode
+from apps.users.tests.factories import AdminAssignmentFactory, AdminRoleFactory, UserFactory
+
+
+def _admin_user():
+    admin = UserFactory()
+    AdminAssignmentFactory(user=admin, role=AdminRoleFactory(code=AdminRoleCode.MODERATOR))
+    return admin
 
 
 def _token_header(user) -> dict:
@@ -392,4 +401,198 @@ class UserSharedPlaylistsApiTests(TestCase):
 
     def test_missing_user_returns_404(self):
         response = self.client.get(reverse("playlist-user-shared-list", kwargs={"user_id": 999999}))
+        self.assertEqual(response.status_code, 404)
+
+
+class AdminPlaylistListApiTests(TestCase):
+    def test_requires_admin(self):
+        owner = premium_user()
+        testimony = approved_testimony()
+        commands.create_playlist(owner=owner, title="Not Yours To See", testimony_id=testimony.id)
+        non_admin = free_user()
+        self.client.force_login(non_admin)
+
+        response = self.client.get(reverse("admin-playlist-list"))
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_lists_every_playlist_regardless_of_owner_or_visibility(self):
+        shared_category = category()
+        owner_a = premium_user(email="owner-a@example.com")
+        owner_b = premium_user(email="owner-b@example.com")
+        commands.create_playlist(
+            owner=owner_a, title="Private One", testimony_id=approved_testimony(category_obj=shared_category).id
+        )
+        shared = commands.create_playlist(
+            owner=owner_b, title="Shared One", testimony_id=approved_testimony(category_obj=shared_category).id
+        )
+        commands.set_visibility(playlist=shared, actor=owner_b, visibility="shared")
+        self.client.force_login(_admin_user())
+
+        response = self.client.get(reverse("admin-playlist-list"))
+
+        self.assertEqual(response.status_code, 200)
+        titles = {row["title"] for row in response.json()["results"]}
+        self.assertEqual(titles, {"Private One", "Shared One"})
+
+    def test_search_matches_title_or_owner_name(self):
+        shared_category = category()
+        owner = premium_user(email="findme-owner@example.com")
+        commands.create_playlist(
+            owner=owner, title="Distinctive Title", testimony_id=approved_testimony(category_obj=shared_category).id
+        )
+        commands.create_playlist(
+            owner=premium_user(email="other@example.com"),
+            title="Other",
+            testimony_id=approved_testimony(category_obj=shared_category).id,
+        )
+        self.client.force_login(_admin_user())
+
+        by_title = self.client.get(reverse("admin-playlist-list"), {"q": "Distinctive"})
+        by_owner_email = self.client.get(reverse("admin-playlist-list"), {"q": "findme-owner"})
+
+        self.assertEqual(len(by_title.json()["results"]), 1)
+        self.assertEqual(len(by_owner_email.json()["results"]), 1)
+        self.assertEqual(by_title.json()["results"][0]["title"], "Distinctive Title")
+
+    def test_visibility_filter(self):
+        shared_category = category()
+        owner = premium_user()
+        commands.create_playlist(
+            owner=owner, title="Private One", testimony_id=approved_testimony(category_obj=shared_category).id
+        )
+        shared = commands.create_playlist(
+            owner=owner, title="Shared One", testimony_id=approved_testimony(category_obj=shared_category).id
+        )
+        commands.set_visibility(playlist=shared, actor=owner, visibility="shared")
+        self.client.force_login(_admin_user())
+
+        response = self.client.get(reverse("admin-playlist-list"), {"visibility": "shared"})
+
+        titles = {row["title"] for row in response.json()["results"]}
+        self.assertEqual(titles, {"Shared One"})
+
+
+class AdminPlaylistDetailApiTests(TestCase):
+    def test_requires_admin(self):
+        owner = premium_user()
+        playlist = commands.create_playlist(owner=owner, title="Mine", testimony_id=approved_testimony().id)
+        self.client.force_login(free_user())
+
+        response = self.client.get(reverse("admin-playlist-detail", kwargs={"playlist_id": playlist.id}))
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_shows_complete_unfiltered_contents_including_unavailable_items(self):
+        shared_category = category()
+        owner = premium_user()
+        good = approved_testimony(title="Still Good", category_obj=shared_category)
+        gone = unavailable_testimony(title="Now Gone", category_obj=shared_category)
+        playlist = commands.create_playlist(owner=owner, title="Mixed", testimony_id=good.id)
+        commands.add_item(playlist=playlist, actor=owner, testimony_id=gone.id)
+        self.client.force_login(_admin_user())
+
+        response = self.client.get(reverse("admin-playlist-detail", kwargs={"playlist_id": playlist.id}))
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["item_count"], 2)
+        items_by_title = {item["title"]: item for item in body["items"]}
+        self.assertTrue(items_by_title["Still Good"]["is_available"])
+        self.assertFalse(items_by_title["Now Gone"]["is_available"])
+
+    def test_private_playlist_is_still_fully_visible_to_admin(self):
+        owner = premium_user()
+        playlist = commands.create_playlist(owner=owner, title="Private", testimony_id=approved_testimony().id)
+        self.client.force_login(_admin_user())
+
+        response = self.client.get(reverse("admin-playlist-detail", kwargs={"playlist_id": playlist.id}))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["owner_email"], owner.email)
+
+    def test_missing_playlist_returns_404(self):
+        self.client.force_login(_admin_user())
+
+        response = self.client.get(reverse("admin-playlist-detail", kwargs={"playlist_id": 999999}))
+
+        self.assertEqual(response.status_code, 404)
+
+
+class AdminPlaylistTakedownApiTests(TestCase):
+    def test_requires_admin(self):
+        owner = premium_user()
+        playlist = commands.create_playlist(owner=owner, title="Mine", testimony_id=approved_testimony().id)
+        self.client.force_login(free_user())
+
+        response = self.client.post(
+            reverse("admin-playlist-takedown", kwargs={"playlist_id": playlist.id}),
+            {"action": "force_private", "reason": "Testing"},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_reason_is_required(self):
+        owner = premium_user()
+        playlist = commands.create_playlist(owner=owner, title="Mine", testimony_id=approved_testimony().id)
+        self.client.force_login(_admin_user())
+
+        response = self.client.post(
+            reverse("admin-playlist-takedown", kwargs={"playlist_id": playlist.id}),
+            {"action": "delete", "reason": "   "},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertTrue(Playlist.objects.filter(id=playlist.id).exists())
+
+    def test_force_private_keeps_playlist_intact_and_notifies_owner(self):
+        owner = premium_user()
+        playlist = commands.create_playlist(owner=owner, title="Sunday List", testimony_id=approved_testimony().id)
+        commands.set_visibility(playlist=playlist, actor=owner, visibility="shared")
+        admin = _admin_user()
+        self.client.force_login(admin)
+
+        response = self.client.post(
+            reverse("admin-playlist-takedown", kwargs={"playlist_id": playlist.id}),
+            {"action": "force_private", "reason": "Flagged content in item 3."},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        playlist.refresh_from_db()
+        self.assertEqual(playlist.visibility, "private")
+        self.assertEqual(PlaylistItem.objects.filter(playlist=playlist).count(), 1)
+        notification = UserNotification.objects.get(recipient=owner, notification_type=NotificationType.PLAYLIST_FORCED_PRIVATE)
+        self.assertIn("Flagged content in item 3.", notification.message)
+        self.assertEqual(notification.actor, admin)
+
+    def test_delete_hard_deletes_and_notifies_owner_leaving_testimonies_untouched(self):
+        owner = premium_user()
+        testimony = approved_testimony()
+        playlist = commands.create_playlist(owner=owner, title="Doomed List", testimony_id=testimony.id)
+        self.client.force_login(_admin_user())
+
+        response = self.client.post(
+            reverse("admin-playlist-takedown", kwargs={"playlist_id": playlist.id}),
+            {"action": "delete", "reason": "Repeated guideline violations."},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(Playlist.objects.filter(id=playlist.id).exists())
+        testimony.refresh_from_db()  # still exists -- deleting the playlist must not touch it
+        notification = UserNotification.objects.get(recipient=owner, notification_type=NotificationType.PLAYLIST_DELETED_BY_ADMIN)
+        self.assertIn("Repeated guideline violations.", notification.message)
+
+    def test_missing_playlist_returns_404(self):
+        self.client.force_login(_admin_user())
+
+        response = self.client.post(
+            reverse("admin-playlist-takedown", kwargs={"playlist_id": 999999}),
+            {"action": "delete", "reason": "N/A"},
+            content_type="application/json",
+        )
+
         self.assertEqual(response.status_code, 404)

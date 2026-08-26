@@ -139,6 +139,32 @@ def notify_testimony_rejected(*, recipient, actor, testimony_title: str, reason:
     )
 
 
+def notify_playlist_forced_private(*, recipient, actor, playlist_title: str, reason: str) -> UserNotification:
+    """Phase 29 Slice 9 -- a quiet correction, not a deletion, but still
+    a real consequence for the owner (it drops off their profile
+    immediately), so it gets the same never-silent, reason-in-message
+    treatment as notify_testimony_rejected."""
+    reason_text = reason.strip() or "No reason provided."
+    return UserNotification.objects.create(
+        recipient=recipient,
+        actor=actor,
+        notification_type=NotificationType.PLAYLIST_FORCED_PRIVATE,
+        title="Your playlist was made private",
+        message=f'"{playlist_title}" was set to private by an admin. Reason: {reason_text}',
+    )
+
+
+def notify_playlist_deleted_by_admin(*, recipient, actor, playlist_title: str, reason: str) -> UserNotification:
+    reason_text = reason.strip() or "No reason provided."
+    return UserNotification.objects.create(
+        recipient=recipient,
+        actor=actor,
+        notification_type=NotificationType.PLAYLIST_DELETED_BY_ADMIN,
+        title="Your playlist was removed",
+        message=f'"{playlist_title}" was removed by an admin. Reason: {reason_text}',
+    )
+
+
 def notify_testimony_submitted_to_admins(
     *, testimony_title: str, testimony_type: str, actor, testimony_id: Optional[int] = None
 ) -> None:
