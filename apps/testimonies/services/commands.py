@@ -10,6 +10,7 @@ from django.utils import timezone
 
 from apps.testimonies.exceptions import (
     AIJobNotRetryableError,
+    AudioDailyLimitReachedError,
     AudioPremiumRequiredError,
     AudioUploadAssetVerificationError,
     AudioUploadIntentConsumedError,
@@ -17,10 +18,17 @@ from apps.testimonies.exceptions import (
     AudioUploadIntentNotFoundError,
     TestimonyTransitionNotAllowedError,
     TestimonyTranslationNotReadyError,
+    VideoDailyLimitReachedError,
+    VideoPremiumRequiredError,
+    VideoUploadAssetVerificationError,
+    VideoUploadIntentConsumedError,
+    VideoUploadIntentExpiredError,
+    VideoUploadIntentNotFoundError,
 )
 from apps.testimonies.models import (
     AudioUploadIntent,
     AudioUploadPolicy,
+    AudioUploadPolicyHistory,
     ModerationAction,
     Testimony,
     TestimonyModerationHistory,
@@ -32,13 +40,19 @@ from apps.testimonies.models import (
     TranscriptionJobStatus,
     TranslationJob,
     TranslationJobStatus,
+    VideoUploadIntent,
+    VideoUploadPolicy,
+    VideoUploadPolicyHistory,
 )
 from apps.subscriptions.selectors import is_user_premium
 from apps.testimonies.services.media_uploads import (
     CloudinaryUploadError,
     CloudinaryUploadSignature,
+    build_cloudinary_video_thumbnail_url,
     create_direct_upload_signature,
+    delete_cloudinary_asset,
     get_cloudinary_audio_asset,
+    get_cloudinary_video_asset,
 )
 from apps.notifications.services import (
     notify_new_video_testimony_published,
@@ -59,6 +73,27 @@ AUDIO_FORMAT_CONTENT_TYPES = {
     "mp3": {"audio/mpeg", "audio/mp3"},
     "mp4": {"audio/mp4"},
 }
+# Videos take longer to upload than audio (200MB default cap vs. 50MB), so
+# the intent gets a longer window before it expires on a slow connection.
+VIDEO_UPLOAD_INTENT_LIFETIME = timedelta(minutes=30)
+VIDEO_FORMAT_CONTENT_TYPES = {
+    "mp4": {"video/mp4"},
+    "mov": {"video/quicktime"},
+    "m4v": {"video/mp4", "video/x-m4v"},
+}
+
+
+def _count_todays_submissions(*, user, testimony_type: str) -> int:
+    """Calendar-day count (not a rolling 24h window) of a user's own
+    testimonies of one media type, used for Phase 32's daily submission
+    caps. Counts every submission regardless of moderation outcome -- a
+    rejected submission still consumed a slot, which is what stops someone
+    retry-spamming the queue."""
+    return Testimony.objects.filter(
+        author=user,
+        testimony_type=testimony_type,
+        created_at__date=timezone.localdate(),
+    ).count()
 
 
 def issue_audio_upload_intent(*, user) -> tuple[AudioUploadIntent, CloudinaryUploadSignature]:
@@ -66,6 +101,10 @@ def issue_audio_upload_intent(*, user) -> tuple[AudioUploadIntent, CloudinaryUpl
         raise AudioPremiumRequiredError("Premium is required to submit an audio testimony.")
 
     policy, _ = AudioUploadPolicy.objects.get_or_create(pk=1)
+    if _count_todays_submissions(user=user, testimony_type=TestimonyType.AUDIO) >= policy.daily_limit:
+        raise AudioDailyLimitReachedError(
+            f"You've reached today's limit of {policy.daily_limit} audio submissions. Try again tomorrow."
+        )
     upload_public_id = f"audio_{uuid.uuid4().hex}"
     signature = create_direct_upload_signature(
         resource_type="audio",
@@ -155,6 +194,201 @@ def create_audio_testimony_from_upload(
         testimony_id=testimony.id,
     )
     return testimony
+
+
+def issue_video_upload_intent(*, user) -> tuple[VideoUploadIntent, CloudinaryUploadSignature]:
+    """Phase 32 -- parallel to `issue_audio_upload_intent`."""
+    if not is_user_premium(user):
+        raise VideoPremiumRequiredError("Premium is required to submit a video testimony.")
+
+    policy, _ = VideoUploadPolicy.objects.get_or_create(pk=1)
+    if _count_todays_submissions(user=user, testimony_type=TestimonyType.VIDEO) >= policy.daily_limit:
+        raise VideoDailyLimitReachedError(
+            f"You've reached today's limit of {policy.daily_limit} video submissions. Try again tomorrow."
+        )
+    upload_public_id = f"video_{uuid.uuid4().hex}"
+    signature = create_direct_upload_signature(
+        resource_type="video",
+        public_id=upload_public_id,
+    )
+    intent = VideoUploadIntent.objects.create(
+        user=user,
+        folder=signature.folder,
+        public_id=upload_public_id,
+        max_file_size_bytes=policy.max_file_size_bytes,
+        max_duration_ms=policy.max_duration_ms,
+        allowed_content_types=list(policy.allowed_content_types),
+        expires_at=timezone.now() + VIDEO_UPLOAD_INTENT_LIFETIME,
+    )
+    return intent, signature
+
+
+def _verified_video_content_type(*, asset_format: str, allowed_content_types: list[str]) -> str:
+    candidates = VIDEO_FORMAT_CONTENT_TYPES.get(asset_format, set())
+    allowed = {str(value).strip().lower() for value in allowed_content_types}
+    matches = sorted(candidates & allowed)
+    if not matches:
+        raise VideoUploadAssetVerificationError("This video format is not accepted.")
+    return matches[0]
+
+
+@transaction.atomic
+def create_video_testimony_from_upload(
+    *,
+    user,
+    upload_intent_id,
+    title: str,
+    category,
+    body: str = "",
+) -> Testimony:
+    """Phase 32 -- parallel to `create_audio_testimony_from_upload`, with
+    one addition: an asset that fails the post-upload policy check is
+    deleted from Cloudinary immediately rather than left orphaned (the
+    2026-08-26 product decision on abuse resistance -- see the Phase 32
+    plan section)."""
+    if not is_user_premium(user):
+        raise VideoPremiumRequiredError("Premium is required to submit a video testimony.")
+
+    try:
+        intent = VideoUploadIntent.objects.select_for_update().get(id=upload_intent_id)
+    except (VideoUploadIntent.DoesNotExist, ValueError, TypeError):
+        raise VideoUploadIntentNotFoundError("Video upload authorization was not found.") from None
+
+    if intent.user_id != user.id:
+        raise VideoUploadIntentNotFoundError("Video upload authorization was not found.")
+    if intent.consumed_at is not None:
+        raise VideoUploadIntentConsumedError("This video upload has already been submitted.")
+    if intent.expires_at <= timezone.now():
+        raise VideoUploadIntentExpiredError("This video upload authorization has expired.")
+
+    try:
+        asset = get_cloudinary_video_asset(public_id=intent.asset_public_id)
+    except CloudinaryUploadError as exc:
+        raise VideoUploadAssetVerificationError(str(exc)) from exc
+
+    if asset.public_id != intent.asset_public_id:
+        raise VideoUploadAssetVerificationError("The uploaded video does not match this authorization.")
+    if asset.resource_type != "video" or not asset.has_visual_track:
+        delete_cloudinary_asset(public_id=intent.asset_public_id)
+        raise VideoUploadAssetVerificationError("The uploaded asset is not a video file.")
+    if asset.file_size_bytes <= 0 or asset.file_size_bytes > intent.max_file_size_bytes:
+        delete_cloudinary_asset(public_id=intent.asset_public_id)
+        raise VideoUploadAssetVerificationError("Video exceeds the configured file-size limit.")
+    if asset.duration_ms <= 0 or asset.duration_ms > intent.max_duration_ms:
+        delete_cloudinary_asset(public_id=intent.asset_public_id)
+        raise VideoUploadAssetVerificationError("Video exceeds the configured duration limit.")
+    try:
+        _verified_video_content_type(
+            asset_format=asset.format,
+            allowed_content_types=intent.allowed_content_types,
+        )
+    except VideoUploadAssetVerificationError:
+        delete_cloudinary_asset(public_id=intent.asset_public_id)
+        raise
+
+    testimony = Testimony.objects.create(
+        author=user,
+        category=category,
+        title=title,
+        body=body,
+        testimony_type=TestimonyType.VIDEO,
+        status=TestimonyStatus.PENDING_REVIEW,
+        video_url=asset.secure_url,
+        thumbnail_url=build_cloudinary_video_thumbnail_url(asset.secure_url),
+        duration_ms=asset.duration_ms,
+    )
+    intent.consumed_at = timezone.now()
+    intent.testimony = testimony
+    intent.save(update_fields=("consumed_at", "testimony"))
+    enqueue_transcription_job(testimony=testimony)
+    notify_testimony_submitted_to_admins(
+        testimony_title=testimony.title,
+        testimony_type=testimony.testimony_type,
+        actor=user,
+        testimony_id=testimony.id,
+    )
+    return testimony
+
+
+def _update_media_upload_policy(
+    *,
+    policy,
+    history_model,
+    actor,
+    new_values: dict,
+):
+    """Shared one-row-per-changed-field update, mirroring
+    `update_live_streaming_policy` -- factored out since `AudioUploadPolicy`
+    and `VideoUploadPolicy` need the identical update shape."""
+    changed_fields = []
+    history_rows = []
+    for field_name, new_value in new_values.items():
+        old_value = getattr(policy, field_name)
+        if old_value == new_value:
+            continue
+        changed_fields.append(field_name)
+        history_rows.append(
+            history_model(
+                policy=policy,
+                field_name=field_name,
+                from_value=str(old_value),
+                to_value=str(new_value),
+                actor=actor,
+            )
+        )
+        setattr(policy, field_name, new_value)
+
+    if changed_fields:
+        policy.updated_by = actor
+        policy.save(update_fields=[*changed_fields, "updated_by", "updated_at"])
+        history_model.objects.bulk_create(history_rows)
+    return policy
+
+
+@transaction.atomic
+def update_audio_upload_policy(
+    *,
+    actor,
+    max_file_size_bytes: int,
+    max_duration_ms: int,
+    allowed_content_types: list,
+    daily_limit: int,
+) -> AudioUploadPolicy:
+    policy, _ = AudioUploadPolicy.objects.select_for_update().get_or_create(pk=1)
+    return _update_media_upload_policy(
+        policy=policy,
+        history_model=AudioUploadPolicyHistory,
+        actor=actor,
+        new_values={
+            "max_file_size_bytes": max_file_size_bytes,
+            "max_duration_ms": max_duration_ms,
+            "allowed_content_types": allowed_content_types,
+            "daily_limit": daily_limit,
+        },
+    )
+
+
+@transaction.atomic
+def update_video_upload_policy(
+    *,
+    actor,
+    max_file_size_bytes: int,
+    max_duration_ms: int,
+    allowed_content_types: list,
+    daily_limit: int,
+) -> VideoUploadPolicy:
+    policy, _ = VideoUploadPolicy.objects.select_for_update().get_or_create(pk=1)
+    return _update_media_upload_policy(
+        policy=policy,
+        history_model=VideoUploadPolicyHistory,
+        actor=actor,
+        new_values={
+            "max_file_size_bytes": max_file_size_bytes,
+            "max_duration_ms": max_duration_ms,
+            "allowed_content_types": allowed_content_types,
+            "daily_limit": daily_limit,
+        },
+    )
 
 
 def _record_history(

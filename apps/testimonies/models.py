@@ -79,13 +79,24 @@ def default_audio_content_types():
     return ["audio/aac", "audio/mp4", "audio/x-m4a", "audio/mpeg", "audio/mp3"]
 
 
+def default_video_content_types():
+    return ["video/mp4", "video/quicktime"]
+
+
 class AudioUploadPolicy(models.Model):
-    """Admin-managed limits shared by mobile audio submission clients."""
+    """Admin-managed limits shared by mobile audio submission clients.
+
+    `daily_limit` (Phase 32, 2026-08-26) retrofits a per-user daily
+    submission cap onto this already-shipped policy -- the same
+    queue-flooding risk that motivated Phase 32's new `VideoUploadPolicy`
+    daily limit applies equally here, so both media types got one rather
+    than leaving audio's gap unaddressed."""
 
     id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
     max_file_size_bytes = models.PositiveBigIntegerField(default=50 * 1024 * 1024)
     max_duration_ms = models.PositiveIntegerField(default=15 * 60 * 1000)
     allowed_content_types = models.JSONField(default=default_audio_content_types)
+    daily_limit = models.PositiveSmallIntegerField(default=5)
     updated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         null=True,
@@ -98,6 +109,85 @@ class AudioUploadPolicy(models.Model):
 
     def __str__(self) -> str:
         return "Audio upload policy"
+
+
+class AudioUploadPolicyHistory(models.Model):
+    """One row per changed field per save, mirroring
+    `LiveStreamingPolicyHistory` exactly -- added in Phase 32 to close an
+    audit gap this policy has had since Phase 28 (edits previously
+    overwrote `max_file_size_bytes`/etc. with no record of the prior
+    value)."""
+
+    policy = models.ForeignKey(AudioUploadPolicy, on_delete=models.CASCADE, related_name="history")
+    field_name = models.CharField(max_length=64)
+    from_value = models.CharField(max_length=255, blank=True)
+    to_value = models.CharField(max_length=255)
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="audio_upload_policy_history_actions",
+        null=True,
+        blank=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name_plural = "audio upload policy history"
+
+    def __str__(self) -> str:
+        return f"AudioUploadPolicyHistory<{self.field_name}:{self.from_value}->{self.to_value}>"
+
+
+class VideoUploadPolicy(models.Model):
+    """Admin-managed limits for self-service video testimony submission
+    (Phase 32), mirroring `AudioUploadPolicy`'s shape exactly rather than
+    merging the two media types into one dual-purpose model. Defaults are
+    the 2026-08-26 product decision: 200MB / 5 minutes per video, 3
+    submissions/day."""
+
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+    max_file_size_bytes = models.PositiveBigIntegerField(default=200 * 1024 * 1024)
+    max_duration_ms = models.PositiveIntegerField(default=5 * 60 * 1000)
+    allowed_content_types = models.JSONField(default=default_video_content_types)
+    daily_limit = models.PositiveSmallIntegerField(default=3)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="updated_video_policies",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self) -> str:
+        return "Video upload policy"
+
+
+class VideoUploadPolicyHistory(models.Model):
+    """One row per changed field per save, mirroring
+    `AudioUploadPolicyHistory`/`LiveStreamingPolicyHistory`."""
+
+    policy = models.ForeignKey(VideoUploadPolicy, on_delete=models.CASCADE, related_name="history")
+    field_name = models.CharField(max_length=64)
+    from_value = models.CharField(max_length=255, blank=True)
+    to_value = models.CharField(max_length=255)
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="video_upload_policy_history_actions",
+        null=True,
+        blank=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name_plural = "video upload policy history"
+
+    def __str__(self) -> str:
+        return f"VideoUploadPolicyHistory<{self.field_name}:{self.from_value}->{self.to_value}>"
 
 
 class AudioUploadIntent(models.Model):
@@ -139,6 +229,48 @@ class AudioUploadIntent(models.Model):
 
     def __str__(self) -> str:
         return f"AudioUploadIntent<{self.id}:{self.user_id}>"
+
+
+class VideoUploadIntent(models.Model):
+    """A short-lived, single-use authorization for one direct video
+    upload, mirroring `AudioUploadIntent` exactly (Phase 32)."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="video_upload_intents",
+    )
+    folder = models.CharField(max_length=255)
+    public_id = models.CharField(max_length=255, unique=True)
+    max_file_size_bytes = models.PositiveBigIntegerField()
+    max_duration_ms = models.PositiveIntegerField()
+    allowed_content_types = models.JSONField()
+    expires_at = models.DateTimeField(db_index=True)
+    consumed_at = models.DateTimeField(null=True, blank=True)
+    testimony = models.OneToOneField(
+        "testimonies.Testimony",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="video_upload_intent",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(
+                fields=("user", "consumed_at", "expires_at"),
+                name="video_intent_user_state_idx",
+            ),
+        ]
+
+    @property
+    def asset_public_id(self) -> str:
+        return f"{self.folder.rstrip('/')}/{self.public_id}" if self.folder else self.public_id
+
+    def __str__(self) -> str:
+        return f"VideoUploadIntent<{self.id}:{self.user_id}>"
 
 
 class Testimony(models.Model):

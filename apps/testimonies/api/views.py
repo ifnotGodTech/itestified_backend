@@ -19,6 +19,7 @@ from apps.testimonies.exceptions import (
     AudioUploadContractError,
     TestimonyTransitionNotAllowedError,
     TestimonyTranslationNotReadyError,
+    VideoUploadContractError,
 )
 from apps.testimonies.models import (
     Testimony,
@@ -36,6 +37,7 @@ from apps.testimonies.models import (
     TranslationJob,
     TranslationJobStatus,
     UserFollowedCategory,
+    VideoUploadPolicy,
 )
 from apps.authn.api.permissions import IsActiveAdmin
 from apps.testimonies.services.queries import home_feed_page
@@ -44,6 +46,7 @@ from apps.testimonies.services.commands import (
     approve_testimony,
     archive_testimony,
     issue_audio_upload_intent,
+    issue_video_upload_intent,
     enqueue_transcription_job,
     reject_testimony,
     remove_testimony_reaction,
@@ -52,6 +55,8 @@ from apps.testimonies.services.commands import (
     retry_translation_job,
     schedule_testimony,
     set_testimony_reaction,
+    update_audio_upload_policy,
+    update_video_upload_policy,
     upload_now_video_testimony,
 )
 from apps.notifications.services import (
@@ -87,6 +92,9 @@ from .serializers import (
     AudioTestimonyCreateSerializer,
     AudioUploadPolicySerializer,
     AdminAudioUploadPolicySerializer,
+    VideoTestimonyCreateSerializer,
+    VideoUploadPolicySerializer,
+    AdminVideoUploadPolicySerializer,
     normalize_video_source,
 )
 from apps.testimonies.services.media_uploads import CloudinaryUploadError, create_direct_upload_signature
@@ -410,7 +418,94 @@ class AdminAudioUploadPolicyView(generics.RetrieveUpdateAPIView):
         return policy
 
     def perform_update(self, serializer):
-        serializer.save(updated_by=self.request.user)
+        instance = serializer.instance
+        data = serializer.validated_data
+        policy = update_audio_upload_policy(
+            actor=self.request.user,
+            max_file_size_bytes=data.get("max_file_size_bytes", instance.max_file_size_bytes),
+            max_duration_ms=data.get("max_duration_ms", instance.max_duration_ms),
+            allowed_content_types=data.get("allowed_content_types", instance.allowed_content_types),
+            daily_limit=data.get("daily_limit", instance.daily_limit),
+        )
+        serializer.instance = policy
+
+
+class VideoUploadPolicyView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        policy, _ = VideoUploadPolicy.objects.get_or_create(pk=1)
+        return Response(VideoUploadPolicySerializer(policy).data)
+
+
+class AuthenticatedVideoUploadSignatureView(APIView):
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        try:
+            intent, signature = issue_video_upload_intent(user=request.user)
+        except VideoUploadContractError as exc:
+            return Response(
+                {"code": exc.code, "message": str(exc)},
+                status=exc.http_status,
+            )
+        except CloudinaryUploadError as exc:
+            return Response({"message": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({
+            "cloud_name": signature.cloud_name, "api_key": signature.api_key,
+            "timestamp": signature.timestamp, "folder": signature.folder,
+            "public_id": signature.public_id,
+            "signature": signature.signature,
+            "resource_type": "video",
+            "upload_resource_type": "video",
+            "upload_intent_id": str(intent.id),
+            "expires_at": intent.expires_at,
+            "policy": {
+                "max_file_size_bytes": intent.max_file_size_bytes,
+                "max_duration_ms": intent.max_duration_ms,
+                "allowed_content_types": intent.allowed_content_types,
+            },
+        })
+
+
+class AuthenticatedVideoTestimonyCreateView(generics.CreateAPIView):
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+    serializer_class = VideoTestimonyCreateSerializer
+
+    def create(self, request, *args, **kwargs):
+        try:
+            return super().create(request, *args, **kwargs)
+        except VideoUploadContractError as exc:
+            return Response(
+                {"code": exc.code, "message": str(exc)},
+                status=exc.http_status,
+            )
+
+
+class AdminVideoUploadPolicyView(generics.RetrieveUpdateAPIView):
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsActiveAdmin]
+    serializer_class = AdminVideoUploadPolicySerializer
+
+    def get_object(self):
+        policy, _ = VideoUploadPolicy.objects.select_related(
+            "updated_by", "updated_by__profile"
+        ).get_or_create(pk=1)
+        return policy
+
+    def perform_update(self, serializer):
+        instance = serializer.instance
+        data = serializer.validated_data
+        policy = update_video_upload_policy(
+            actor=self.request.user,
+            max_file_size_bytes=data.get("max_file_size_bytes", instance.max_file_size_bytes),
+            max_duration_ms=data.get("max_duration_ms", instance.max_duration_ms),
+            allowed_content_types=data.get("allowed_content_types", instance.allowed_content_types),
+            daily_limit=data.get("daily_limit", instance.daily_limit),
+        )
+        serializer.instance = policy
 
 
 class AuthenticatedMyTestimonyListView(generics.ListAPIView):

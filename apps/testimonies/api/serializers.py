@@ -19,6 +19,7 @@ from apps.testimonies.models import (
     TranscriptionJob,
     TranscriptionJobStatus,
     TranslationJob,
+    VideoUploadPolicy,
     normalize_testimony_category_name,
 )
 from apps.testimonies.services.media_uploads import (
@@ -26,7 +27,10 @@ from apps.testimonies.services.media_uploads import (
     build_cloudinary_video_thumbnail_url,
     upload_testimony_media,
 )
-from apps.testimonies.services.commands import create_audio_testimony_from_upload
+from apps.testimonies.services.commands import (
+    create_audio_testimony_from_upload,
+    create_video_testimony_from_upload,
+)
 
 SOURCE_PREFIX = "source:"
 SOURCE_CANONICAL_NAMES = {
@@ -536,10 +540,18 @@ class AudioUploadPolicySerializer(serializers.ModelSerializer):
     MAX_FILE_SIZE_BYTES = 500 * 1024 * 1024
     MIN_DURATION_MS = 1 * 60 * 1000
     MAX_DURATION_MS = 120 * 60 * 1000
+    MIN_DAILY_LIMIT = 1
+    MAX_DAILY_LIMIT = 50
 
     class Meta:
         model = AudioUploadPolicy
-        fields = ("max_file_size_bytes", "max_duration_ms", "allowed_content_types", "updated_at")
+        fields = (
+            "max_file_size_bytes",
+            "max_duration_ms",
+            "allowed_content_types",
+            "daily_limit",
+            "updated_at",
+        )
         read_only_fields = ("updated_at",)
 
     def validate_max_file_size_bytes(self, value):
@@ -550,6 +562,11 @@ class AudioUploadPolicySerializer(serializers.ModelSerializer):
     def validate_max_duration_ms(self, value):
         if not self.MIN_DURATION_MS <= value <= self.MAX_DURATION_MS:
             raise serializers.ValidationError("Maximum duration must be between 1 minute and 120 minutes.")
+        return value
+
+    def validate_daily_limit(self, value):
+        if not self.MIN_DAILY_LIMIT <= value <= self.MAX_DAILY_LIMIT:
+            raise serializers.ValidationError("Daily limit must be between 1 and 50 submissions.")
         return value
 
     def validate_allowed_content_types(self, value):
@@ -615,6 +632,118 @@ class AudioTestimonyCreateSerializer(serializers.Serializer):
 
     def create(self, validated_data):
         return create_audio_testimony_from_upload(
+            user=self.context["request"].user,
+            upload_intent_id=validated_data["upload_intent_id"],
+            title=validated_data["title"],
+            category=validated_data["category"],
+            body=validated_data.get("body", ""),
+        )
+
+
+class VideoUploadPolicySerializer(serializers.ModelSerializer):
+    SUPPORTED_CONTENT_TYPES = {
+        "video/mp4",
+        "video/quicktime",
+        "video/x-m4v",
+    }
+    MIN_FILE_SIZE_BYTES = 10 * 1024 * 1024
+    MAX_FILE_SIZE_BYTES = 2 * 1024 * 1024 * 1024
+    MIN_DURATION_MS = 30 * 1000
+    MAX_DURATION_MS = 60 * 60 * 1000
+    MIN_DAILY_LIMIT = 1
+    MAX_DAILY_LIMIT = 50
+
+    class Meta:
+        model = VideoUploadPolicy
+        fields = (
+            "max_file_size_bytes",
+            "max_duration_ms",
+            "allowed_content_types",
+            "daily_limit",
+            "updated_at",
+        )
+        read_only_fields = ("updated_at",)
+
+    def validate_max_file_size_bytes(self, value):
+        if not self.MIN_FILE_SIZE_BYTES <= value <= self.MAX_FILE_SIZE_BYTES:
+            raise serializers.ValidationError("Maximum file size must be between 10 MB and 2 GB.")
+        return value
+
+    def validate_max_duration_ms(self, value):
+        if not self.MIN_DURATION_MS <= value <= self.MAX_DURATION_MS:
+            raise serializers.ValidationError("Maximum duration must be between 30 seconds and 60 minutes.")
+        return value
+
+    def validate_daily_limit(self, value):
+        if not self.MIN_DAILY_LIMIT <= value <= self.MAX_DAILY_LIMIT:
+            raise serializers.ValidationError("Daily limit must be between 1 and 50 submissions.")
+        return value
+
+    def validate_allowed_content_types(self, value):
+        if not isinstance(value, list) or not value or any(not isinstance(item, str) or not item.strip() for item in value):
+            raise serializers.ValidationError("At least one video content type is required.")
+        normalized = {item.strip().lower() for item in value}
+        unsupported = normalized - self.SUPPORTED_CONTENT_TYPES
+        if unsupported:
+            raise serializers.ValidationError(
+                f"Unsupported video content type: {sorted(unsupported)[0]}."
+            )
+        return sorted(normalized)
+
+
+class AdminVideoUploadPolicySerializer(VideoUploadPolicySerializer):
+    updated_by_email = serializers.EmailField(source="updated_by.email", read_only=True, allow_null=True)
+    updated_by_name = serializers.SerializerMethodField()
+
+    class Meta(VideoUploadPolicySerializer.Meta):
+        fields = VideoUploadPolicySerializer.Meta.fields + (
+            "updated_by_email",
+            "updated_by_name",
+        )
+
+    def get_updated_by_name(self, obj: VideoUploadPolicy):
+        if obj.updated_by is None:
+            return None
+        profile = getattr(obj.updated_by, "profile", None)
+        if profile and profile.full_name.strip():
+            return profile.full_name
+        return obj.updated_by.email
+
+
+class VideoTestimonyCreateSerializer(serializers.Serializer):
+    CLIENT_METADATA_FIELDS = {
+        "video_url",
+        "thumbnail_url",
+        "duration_ms",
+        "file_size_bytes",
+        "content_type",
+    }
+
+    upload_intent_id = serializers.UUIDField(write_only=True)
+    title = serializers.CharField(max_length=255)
+    category_id = serializers.PrimaryKeyRelatedField(
+        source="category", queryset=TestimonyCategory.objects.filter(is_active=True)
+    )
+    video_url = serializers.URLField(read_only=True)
+    thumbnail_url = serializers.URLField(read_only=True)
+    duration_ms = serializers.IntegerField(read_only=True)
+    body = serializers.CharField(required=False, allow_blank=True, default="")
+
+    def validate_title(self, value):
+        if not value.strip():
+            raise serializers.ValidationError("Title is required.")
+        return value.strip()
+
+    def validate(self, attrs):
+        supplied_metadata = self.CLIENT_METADATA_FIELDS.intersection(self.initial_data)
+        if supplied_metadata:
+            raise serializers.ValidationError(
+                "Video URL and media metadata are verified by the server and must not be supplied."
+            )
+        return attrs
+
+    def create(self, validated_data):
+        return create_video_testimony_from_upload(
             user=self.context["request"].user,
             upload_intent_id=validated_data["upload_intent_id"],
             title=validated_data["title"],

@@ -1,6 +1,6 @@
 from django.core.cache import cache
 from django.test import TestCase
-from django.urls import NoReverseMatch, reverse
+from django.urls import reverse
 from django.utils import timezone
 from django.core.management import call_command
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -347,9 +347,13 @@ class TestimonyApiTests(TestCase):
         self.assertEqual(created.status, TestimonyStatus.PENDING_REVIEW)
         self.assertEqual(created.testimony_type, TestimonyType.WRITTEN)
 
-    def test_mobile_video_testimony_submission_route_is_not_exposed(self) -> None:
-        with self.assertRaises(NoReverseMatch):
-            reverse("testimony-submit-video")
+    def test_mobile_video_testimony_submission_route_requires_authentication(self) -> None:
+        # Phase 32 opened self-service video submission to Premium users --
+        # see apps/testimonies/tests/test_video_api.py for the full flow.
+        # This route existing and being auth-gated is the regression this
+        # test now guards, superseding the earlier "route doesn't exist" era.
+        response = self.client.post(reverse("testimony-submit-video"), {}, format="json")
+        self.assertIn(response.status_code, (401, 403))
 
     def test_slice5_my_testimonies_lists_all_statuses_for_user(self) -> None:
         owner = UserFactory(email="mine@example.com")

@@ -1,6 +1,10 @@
+import logging
 import os
 import time
 from dataclasses import dataclass
+
+
+logger = logging.getLogger(__name__)
 
 
 class CloudinaryUploadError(Exception):
@@ -32,6 +36,22 @@ class CloudinaryAudioAsset:
     @property
     def is_audio_only(self) -> bool:
         return self.width <= 0 and self.height <= 0
+
+
+@dataclass(frozen=True)
+class CloudinaryVideoAsset:
+    public_id: str
+    secure_url: str
+    resource_type: str
+    format: str
+    file_size_bytes: int
+    duration_ms: int
+    width: int
+    height: int
+
+    @property
+    def has_visual_track(self) -> bool:
+        return self.width > 0 and self.height > 0
 
 
 def require_env(name: str) -> str:
@@ -151,12 +171,16 @@ def create_direct_upload_signature(
     )
 
 
-def get_cloudinary_audio_asset(*, public_id: str) -> CloudinaryAudioAsset:
-    """Read authoritative metadata for a Cloudinary audio asset.
+def _fetch_cloudinary_media_metadata(*, public_id: str, media_label: str) -> dict:
+    """Read authoritative metadata for a Cloudinary audio or video asset.
 
-    Cloudinary stores audio under the ``video`` resource type. The Admin API
+    Cloudinary stores both under the ``video`` resource type. The Admin API
     lookup is intentionally kept at this external-service boundary so domain
-    services and tests do not depend directly on the provider SDK.
+    services and tests do not depend directly on the provider SDK. Shared by
+    `get_cloudinary_audio_asset` and `get_cloudinary_video_asset` since the
+    lookup itself doesn't differ by media type -- only the dataclass each
+    wraps the result in does, and the error wording each surfaces to the
+    submitting user (`media_label`).
     """
 
     configure_cloudinary()
@@ -179,13 +203,13 @@ def get_cloudinary_audio_asset(*, public_id: str) -> CloudinaryAudioAsset:
     except Exception as exc:  # noqa: BLE001 - Cloudinary exception types vary by SDK version.
         reason = str(exc).strip()
         if reason:
-            raise CloudinaryUploadError(f"Audio asset verification failed: {reason}") from exc
-        raise CloudinaryUploadError("Audio asset verification failed.") from exc
+            raise CloudinaryUploadError(f"{media_label.capitalize()} asset verification failed: {reason}") from exc
+        raise CloudinaryUploadError(f"{media_label.capitalize()} asset verification failed.") from exc
 
     secure_url = str(payload.get("secure_url") or "").strip()
     returned_public_id = str(payload.get("public_id") or "").strip()
     if not secure_url or not returned_public_id:
-        raise CloudinaryUploadError("Cloudinary returned incomplete audio asset metadata.")
+        raise CloudinaryUploadError(f"Cloudinary returned incomplete {media_label} asset metadata.")
 
     try:
         file_size_bytes = int(payload.get("bytes") or 0)
@@ -193,15 +217,44 @@ def get_cloudinary_audio_asset(*, public_id: str) -> CloudinaryAudioAsset:
         width = int(payload.get("width") or 0)
         height = int(payload.get("height") or 0)
     except (TypeError, ValueError) as exc:
-        raise CloudinaryUploadError("Cloudinary returned invalid audio asset metadata.") from exc
+        raise CloudinaryUploadError(f"Cloudinary returned invalid {media_label} asset metadata.") from exc
 
-    return CloudinaryAudioAsset(
-        public_id=returned_public_id,
-        secure_url=secure_url,
-        resource_type=str(payload.get("resource_type") or "").strip().lower(),
-        format=str(payload.get("format") or "").strip().lower(),
-        file_size_bytes=file_size_bytes,
-        duration_ms=duration_ms,
-        width=width,
-        height=height,
-    )
+    return {
+        "public_id": returned_public_id,
+        "secure_url": secure_url,
+        "resource_type": str(payload.get("resource_type") or "").strip().lower(),
+        "format": str(payload.get("format") or "").strip().lower(),
+        "file_size_bytes": file_size_bytes,
+        "duration_ms": duration_ms,
+        "width": width,
+        "height": height,
+    }
+
+
+def get_cloudinary_audio_asset(*, public_id: str) -> CloudinaryAudioAsset:
+    """Read authoritative metadata for a Cloudinary audio asset."""
+    return CloudinaryAudioAsset(**_fetch_cloudinary_media_metadata(public_id=public_id, media_label="audio"))
+
+
+def get_cloudinary_video_asset(*, public_id: str) -> CloudinaryVideoAsset:
+    """Read authoritative metadata for a Cloudinary video asset (Phase 32)."""
+    return CloudinaryVideoAsset(**_fetch_cloudinary_media_metadata(public_id=public_id, media_label="video"))
+
+
+def delete_cloudinary_asset(*, public_id: str, resource_type: str = "video") -> None:
+    """Best-effort cleanup for an asset that failed post-upload policy
+    verification (Phase 32's delete-and-reject requirement). Never raises --
+    a delete failure shouldn't turn an already-correct rejection response
+    into a 500; an orphaned Cloudinary asset is logged for manual cleanup
+    rather than allowed to break the submission flow."""
+
+    configure_cloudinary()
+    try:
+        from cloudinary import uploader
+    except ImportError:
+        logger.warning("cloudinary.delete_skipped_no_sdk public_id=%s", public_id)
+        return
+    try:
+        uploader.destroy(public_id, resource_type=resource_type)
+    except Exception:  # noqa: BLE001 - Cloudinary exception types vary by SDK version.
+        logger.exception("cloudinary.delete_failed public_id=%s", public_id)

@@ -6,19 +6,25 @@ from apps.common.services.media_uploads import (
     CloudinaryAudioAsset,
     CloudinaryUploadError,
     CloudinaryUploadSignature,
+    CloudinaryVideoAsset,
     configure_cloudinary,
     create_direct_upload_signature,
+    delete_cloudinary_asset,
     get_cloudinary_audio_asset,
+    get_cloudinary_video_asset,
 )
 
 __all__ = [
     "CloudinaryUploadError",
     "CloudinaryUploadSignature",
     "CloudinaryAudioAsset",
+    "CloudinaryVideoAsset",
     "CloudinaryUploadResult",
     "build_cloudinary_video_thumbnail_url",
     "create_direct_upload_signature",
+    "delete_cloudinary_asset",
     "get_cloudinary_audio_asset",
+    "get_cloudinary_video_asset",
     "upload_testimony_media",
 ]
 
