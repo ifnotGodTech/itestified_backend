@@ -2106,6 +2106,10 @@ Status: Slices 1-3 ✅ complete 2026-08-27 — design negotiated through four ro
 
 Separately (2026-08-28, found investigating the above at the admin's report): **a self-submitted (Phase 32) video testimony could never actually be approved through the dashboard at all**, unrelated to the immersive-feed bugs above -- see the note added to Phase 32's own section.
 
+Two more found and fixed 2026-08-28, from continued live use:
+- **No way left to reach a speaker's Ministry public profile from a normal testimony view.** Tapping through to it only ever existed on the old `TestimonyDetailScreen` (`testimony_detail_written_content.dart`'s author-name tap target) -- since Discovery now deepens into this immersive view instead of pushing that screen, and the immersive citation line was plain text with no tap handler, that capability was silently lost from the app's normal daily flow. Added `_Citation` in `immersive_testimony_item.dart`, mirroring the old screen's exact same gating (no tap target when `authorId` is empty).
+- **Shared testimony links opened the old `TestimonyDetailScreen` instead of the immersive view**, giving a share recipient a visibly worse experience than someone who found the same testimony browsing normally -- runs against the app's own stated sharing goal ("let the world see"). New `SingleTestimonyImmersiveScreen` fetches the one testimony by id and seeds a real, single-item immersive session via a scoped `ProviderScope` override (the same mechanism this app's own test suite already used for isolated immersive scenarios); a small host widget bridges the scoped controller's `active` flag back to a real `Navigator` pop, since `HomeShellScreen` isn't in the tree to do that itself from a direct route push. Scoped to shared links only for now -- notification taps and other in-app navigation to `TestimonyDetailScreen` are unchanged.
+
 ## Risks To Watch Early
 
 - building schema directly from UI mocks instead of real domain needs
