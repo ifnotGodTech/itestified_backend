@@ -91,6 +91,22 @@ class AuthnServiceTests(TestCase):
         self.assertEqual(user.email, "grace@example.com")
         self.assertTrue(bool(token.key))
 
+    def test_mobile_login_is_case_insensitive_on_email(self) -> None:
+        # Regression: authenticate() is the one identity lookup in this
+        # module that isn't case-insensitive by default (every other lookup
+        # here uses email__iexact) -- registration always stores the email
+        # fully lowercased, so any login attempt whose casing differed at
+        # all from that (mobile keyboards' first-letter auto-capitalization
+        # being the common real-world trigger) silently failed with
+        # "Invalid email or password." on a genuinely correct password.
+        challenge = start_registration(full_name="Case Test", email="CaseTest@Example.com")
+        verify_registration(email=challenge.email, otp=challenge.code)
+        complete_registration(email=challenge.email, password="StrongPass!1")
+
+        user, token = login_mobile_user(email="CaseTest@Example.com", password="StrongPass!1")
+        self.assertEqual(user.email, "casetest@example.com")
+        self.assertTrue(bool(token.key))
+
     @override_settings(
         GOOGLE_OAUTH_CLIENT_IDS=["android-client-id.apps.googleusercontent.com"],
         GOOGLE_OAUTH_ALLOWED_ISSUERS=["https://accounts.google.com", "accounts.google.com"],

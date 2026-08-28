@@ -126,6 +126,23 @@ class AuthnApiTests(TestCase):
         self.assertTrue(session_response.json()["must_change_password"])
         self.assertTrue(UserSession.objects.filter(user__email="admin@example.com").exists())
 
+    def test_admin_login_is_case_insensitive_on_email(self) -> None:
+        # Same regression as test_mobile_login_is_case_insensitive_on_email
+        # (test_services.py) -- login_admin_user shares the same
+        # authenticate()-isn't-case-insensitive gap. bootstrap_super_admin
+        # stores the email lowercased (like mobile registration); logging in
+        # with the original, mixed-case form used to fail.
+        _user, temporary_password = bootstrap_super_admin(
+            email="CaseAdmin@Example.com", full_name="Case Admin"
+        )
+
+        login_response = self.client.post(
+            reverse("auth-admin-login"),
+            {"email": "CaseAdmin@Example.com", "password": temporary_password},
+            content_type="application/json",
+        )
+        self.assertEqual(login_response.status_code, 200)
+
     @override_settings(
         GOOGLE_OAUTH_CLIENT_IDS=["android-client-id.apps.googleusercontent.com"],
         GOOGLE_OAUTH_ALLOWED_ISSUERS=["https://accounts.google.com", "accounts.google.com"],

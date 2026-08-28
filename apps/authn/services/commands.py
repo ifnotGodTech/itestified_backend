@@ -273,7 +273,16 @@ def complete_registration(*, email: str, password: str, referral_code: str = "")
 
 
 def login_mobile_user(*, email: str, password: str) -> tuple[User, Token]:
-    user = authenticate(email=email, password=password)
+    # Every other identity lookup in this file uses email__iexact (or lowers
+    # before storing) -- authenticate() is the one exception, since it
+    # delegates to Django's default ModelBackend, which does an exact-match
+    # lookup via get_by_natural_key, not a case-insensitive one. Registration
+    # already stores the email fully lowercased (complete_registration), so
+    # any login attempt whose email casing differs at all from how the user
+    # originally typed it at signup -- extremely common with mobile
+    # keyboards' first-letter auto-capitalization -- silently failed with
+    # "Invalid email or password." on a genuinely correct password.
+    user = authenticate(email=email.lower(), password=password)
     if user is None:
         raise AuthnError("Invalid email or password.")
 
@@ -676,7 +685,9 @@ def delete_own_account(*, user: User, current_password: str, reason: str, detail
 
 
 def login_admin_user(*, email: str, password: str) -> tuple[User, AdminAssignment]:
-    user = authenticate(email=email, password=password)
+    # Same case-sensitivity gap as login_mobile_user above -- authenticate()
+    # is the one identity lookup in this file that isn't case-insensitive.
+    user = authenticate(email=email.lower(), password=password)
     if user is None:
         raise AuthnError("Invalid email or password.")
 
