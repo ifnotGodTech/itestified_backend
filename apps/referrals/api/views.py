@@ -28,6 +28,7 @@ from apps.subscriptions.selectors import is_user_premium
 
 from .serializers import (
     AdminReferralCommissionSerializer,
+    MyReferralCommissionSerializer,
     MyReferralLinkSerializer,
     ReferralCommissionRateSerializer,
     ReferralTermsAcceptanceSerializer,
@@ -122,6 +123,49 @@ class AdminMarkReferralCommissionPaidView(APIView):
             return Response({"message": "This commission has already been marked paid."}, status=status.HTTP_400_BAD_REQUEST)
 
         return Response(AdminReferralCommissionSerializer(commission).data, status=status.HTTP_200_OK)
+
+
+class MyReferralCommissionsView(generics.ListAPIView):
+    """Phase 24 Slice 7: the referrer-facing counterpart to Slice 3's admin
+    ledger -- same paid/unpaid-totals-by-currency shape, scoped to
+    request.user instead of every referrer, mobile-only auth like Slices
+    4/5. Gated behind the same is_user_premium check as MyReferralLinkView
+    on purpose: mobile surfaces this as a second tab on that same screen
+    ("one gate, not two"), so a referrer who can't reach their link can't
+    reach their earnings either, for the same reason."""
+
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+    serializer_class = MyReferralCommissionSerializer
+    pagination_class = ReferralCommissionPagination
+
+    def get_queryset(self):
+        return (
+            ReferralCommission.objects.filter(referrer=self.request.user)
+            .select_related("referred_user__profile")
+            .order_by("-created_at")
+        )
+
+    def list(self, request, *args, **kwargs):
+        if not is_user_premium(request.user):
+            return Response(
+                {"message": "An active Premium subscription is required to view referral earnings."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        queryset = self.get_queryset()
+        paid_totals = get_referral_commission_totals_by_currency(queryset.filter(is_paid=True))
+        pending_totals = get_referral_commission_totals_by_currency(queryset.filter(is_paid=False))
+        page = self.paginate_queryset(queryset)
+        serializer = self.get_serializer(page, many=True)
+        response = self.get_paginated_response(serializer.data)
+        response.data["paid_totals"] = [
+            {"currency": row["currency"], "amount": row["total_amount"]} for row in paid_totals
+        ]
+        response.data["pending_totals"] = [
+            {"currency": row["currency"], "amount": row["total_amount"]} for row in pending_totals
+        ]
+        return response
 
 
 class MyReferralLinkView(APIView):

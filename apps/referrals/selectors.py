@@ -50,3 +50,17 @@ def has_accepted_referral_terms(user) -> bool:
 
 def get_referral_code(user) -> ReferralCode | None:
     return ReferralCode.objects.filter(user=user).first()
+
+
+def format_referred_user_label(full_name: str) -> str:
+    """First name + last initial only, e.g. "David O." -- Slice 7's
+    referrer-facing earnings view shows who was referred without exposing
+    the referred person's full name or email, mirroring how the public
+    `/r/<code>` landing page (Slice 6) never leaks the *referrer's* own
+    identity in the other direction."""
+    parts = [part for part in full_name.strip().split() if part]
+    if not parts:
+        return "A referral"
+    if len(parts) == 1:
+        return parts[0]
+    return f"{parts[0]} {parts[-1][0].upper()}."

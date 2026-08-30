@@ -3,6 +3,7 @@ from decimal import Decimal
 from rest_framework import serializers
 
 from apps.referrals.models import ReferralCommission, ReferralCommissionRate
+from apps.referrals.selectors import format_referred_user_label
 
 
 class ReferralCommissionRateSerializer(serializers.ModelSerializer):
@@ -39,6 +40,27 @@ class AdminReferralCommissionSerializer(serializers.ModelSerializer):
             "paid_by_email",
             "created_at",
         )
+
+
+class MyReferralCommissionSerializer(serializers.ModelSerializer):
+    referred_user_label = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ReferralCommission
+        fields = (
+            "id",
+            "referred_user_label",
+            "amount",
+            "currency",
+            "is_paid",
+            "paid_at",
+            "created_at",
+        )
+
+    def get_referred_user_label(self, obj) -> str:
+        referred_user = obj.referred_user
+        full_name = referred_user.profile.full_name if hasattr(referred_user, "profile") else ""
+        return format_referred_user_label(full_name)
 
 
 class MyReferralLinkSerializer(serializers.Serializer):
