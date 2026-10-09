@@ -6,10 +6,16 @@ from datetime import datetime, timedelta
 
 from django.db import transaction
 from django.db.models import F, Q
+from django.db.models.functions import Greatest
 from django.utils import timezone
 
 from apps.testimonies.exceptions import (
     AIJobNotRetryableError,
+    CommentNotFoundError,
+    CommentNotOwnedError,
+    CommentReplyDepthError,
+    CommentTestimonyNotFoundError,
+    ParentCommentNotFoundError,
     AudioDailyLimitReachedError,
     AudioPremiumRequiredError,
     AudioUploadAssetVerificationError,
@@ -31,6 +37,7 @@ from apps.testimonies.models import (
     AudioUploadPolicyHistory,
     ModerationAction,
     Testimony,
+    TestimonyComment,
     TestimonyModerationHistory,
     TestimonyReaction,
     TestimonyReactionType,
@@ -57,6 +64,7 @@ from apps.testimonies.services.media_uploads import (
 from apps.notifications.services import (
     notify_new_video_testimony_published,
     notify_testimony_approved,
+    notify_testimony_comment,
     notify_testimony_rejected,
     notify_testimony_submitted_to_admins,
 )
@@ -736,3 +744,64 @@ def remove_testimony_reaction(*, testimony: Testimony, user) -> Testimony:
         existing.delete()
     testimony.refresh_from_db(fields=["praying_for_you_count", "amen_count", "gives_me_hope_count"])
     return testimony
+
+
+def _adjust_comment_count(*, testimony_id: int, delta: int) -> None:
+    Testimony.objects.filter(id=testimony_id).update(comment_count=Greatest(F("comment_count") + delta, 0))
+
+
+def _notify_testimony_comment_safely(*, testimony: Testimony, actor) -> None:
+    # A push/notification hiccup must never fail a comment that's already saved.
+    try:
+        notify_testimony_comment(recipient=testimony.author, actor=actor, testimony_title=testimony.title)
+    except Exception:  # noqa: BLE001 - notification delivery is best-effort.
+        logger.exception("testimonies.create_testimony_comment: notification failed for testimony %s", testimony.id)
+
+
+@transaction.atomic
+def create_testimony_comment(
+    *, testimony_id: int, author, body: str, parent_comment_id: int | None = None
+) -> TestimonyComment:
+    """Adds a comment (or a one-level-deep reply) to an approved testimony,
+    bumps its comment_count in the same transaction, and notifies the
+    testimony's author once the write has committed."""
+    testimony = (
+        Testimony.objects.select_related("author")
+        .filter(id=testimony_id, status=TestimonyStatus.APPROVED, category__is_active=True)
+        .first()
+    )
+    if testimony is None:
+        raise CommentTestimonyNotFoundError("Testimony not found.")
+
+    parent_comment = None
+    if parent_comment_id is not None:
+        parent_comment = TestimonyComment.objects.filter(id=parent_comment_id, testimony_id=testimony.id).first()
+        if parent_comment is None:
+            raise ParentCommentNotFoundError("Parent comment not found.")
+        if parent_comment.parent_comment_id is not None:
+            raise CommentReplyDepthError("Only one reply level is allowed.")
+
+    comment = TestimonyComment.objects.create(
+        testimony=testimony, author=author, parent_comment=parent_comment, body=body
+    )
+    _adjust_comment_count(testimony_id=testimony.id, delta=1)
+
+    if testimony.author_id != author.id:
+        transaction.on_commit(lambda: _notify_testimony_comment_safely(testimony=testimony, actor=author))
+    return comment
+
+
+@transaction.atomic
+def delete_testimony_comment(*, comment_id: int, actor) -> None:
+    """Deletes the actor's own comment together with its replies (cascade)
+    and lowers comment_count by all of them. The comment row is locked so
+    two concurrent deletes can't both decrement the count."""
+    comment = TestimonyComment.objects.select_for_update().filter(id=comment_id).first()
+    if comment is None:
+        raise CommentNotFoundError("Comment not found.")
+    if comment.author_id != actor.id:
+        raise CommentNotOwnedError("You can only delete your own comment.")
+
+    deleted_count = TestimonyComment.objects.filter(Q(id=comment.id) | Q(parent_comment_id=comment.id)).count()
+    comment.delete()
+    _adjust_comment_count(testimony_id=comment.testimony_id, delta=-deleted_count)

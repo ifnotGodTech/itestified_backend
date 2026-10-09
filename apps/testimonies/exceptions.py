@@ -73,3 +73,23 @@ class VideoUploadIntentConsumedError(VideoUploadContractError):
 
 class VideoUploadAssetVerificationError(VideoUploadContractError):
     code = "video_upload_asset_invalid"
+
+
+class CommentTestimonyNotFoundError(Exception):
+    """The testimony doesn't exist, isn't approved, or its category is inactive."""
+
+
+class ParentCommentNotFoundError(Exception):
+    pass
+
+
+class CommentReplyDepthError(Exception):
+    """Replies are one level deep: a reply can't itself be replied to."""
+
+
+class CommentNotFoundError(Exception):
+    pass
+
+
+class CommentNotOwnedError(Exception):
+    pass

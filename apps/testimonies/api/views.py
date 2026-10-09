@@ -4,8 +4,6 @@ from rest_framework.parsers import FormParser, MultiPartParser
 from django.utils.dateparse import parse_date
 from django.db.models import F
 from django.db.models import Count
-from django.db.models import Q
-from django.db.models.functions import Greatest
 from datetime import datetime
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -17,6 +15,11 @@ from apps.subscriptions.selectors import is_user_premium
 from apps.testimonies.exceptions import (
     AIJobNotRetryableError,
     AudioUploadContractError,
+    CommentNotFoundError,
+    CommentNotOwnedError,
+    CommentReplyDepthError,
+    CommentTestimonyNotFoundError,
+    ParentCommentNotFoundError,
     TestimonyTransitionNotAllowedError,
     TestimonyTranslationNotReadyError,
     VideoUploadContractError,
@@ -43,6 +46,8 @@ from apps.authn.api.permissions import IsActiveAdmin
 from apps.testimonies.services.queries import home_feed_page
 from apps.testimonies.validators import parse_future_publish_at
 from apps.testimonies.services.commands import (
+    create_testimony_comment,
+    delete_testimony_comment,
     approve_testimony,
     archive_testimony,
     issue_audio_upload_intent,
@@ -61,7 +66,6 @@ from apps.testimonies.services.commands import (
 )
 from apps.notifications.services import (
     notify_new_video_testimony_published,
-    notify_testimony_comment,
     notify_testimony_submitted_to_admins,
 )
 
@@ -727,49 +731,21 @@ class TestimonyCommentListCreateView(generics.ListCreateAPIView):
             parent_comment__isnull=True,
         )
 
-    def perform_create(self, serializer):
-        testimony_id = self.kwargs["testimony_id"]
-        testimony = Testimony.objects.filter(
-            id=testimony_id,
-            status=TestimonyStatus.APPROVED,
-            category__is_active=True,
-        ).first()
-        if testimony is None:
-            raise ValueError("Testimony not found.")
-        parent_comment_id = serializer.validated_data.get("parent_comment_id")
-        parent_comment = None
-        if parent_comment_id is not None:
-            parent_comment = TestimonyComment.objects.filter(
-                id=parent_comment_id,
-                testimony_id=testimony.id,
-            ).first()
-            if parent_comment is None:
-                raise ValueError("Parent comment not found.")
-            if parent_comment.parent_comment_id is not None:
-                raise ValueError("Only one reply level is allowed.")
-
-        comment = serializer.save(
-            author=self.request.user,
-            testimony=testimony,
-            parent_comment=parent_comment,
-        )
-        Testimony.objects.filter(id=testimony.id).update(comment_count=F("comment_count") + 1)
-        if testimony.author_id != self.request.user.id:
-            notify_testimony_comment(
-                recipient=testimony.author,
-                actor=self.request.user,
-                testimony_title=testimony.title,
-            )
-        return comment
-
     def create(self, request, *args, **kwargs):
+        serializer = TestimonyCommentCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
         try:
-            return super().create(request, *args, **kwargs)
-        except ValueError as exc:
-            message = str(exc)
-            if message in {"Parent comment not found.", "Testimony not found."}:
-                return Response({"message": message}, status=status.HTTP_404_NOT_FOUND)
-            return Response({"message": message}, status=status.HTTP_400_BAD_REQUEST)
+            comment = create_testimony_comment(
+                testimony_id=self.kwargs["testimony_id"],
+                author=request.user,
+                body=serializer.validated_data["body"],
+                parent_comment_id=serializer.validated_data.get("parent_comment_id"),
+            )
+        except (CommentTestimonyNotFoundError, ParentCommentNotFoundError) as exc:
+            return Response({"message": str(exc)}, status=status.HTTP_404_NOT_FOUND)
+        except CommentReplyDepthError as exc:
+            return Response({"message": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(TestimonyCommentCreateSerializer(comment).data, status=status.HTTP_201_CREATED)
 
 
 class TestimonyCommentDeleteView(APIView):
@@ -777,19 +753,12 @@ class TestimonyCommentDeleteView(APIView):
     permission_classes = [IsAuthenticated]
 
     def delete(self, request, comment_id: int):
-        comment = TestimonyComment.objects.select_related("testimony").filter(id=comment_id).first()
-        if comment is None:
-            return Response({"message": "Comment not found."}, status=status.HTTP_404_NOT_FOUND)
-        if comment.author_id != request.user.id:
-            return Response({"message": "You can only delete your own comment."}, status=status.HTTP_403_FORBIDDEN)
-        testimony_id = comment.testimony_id
-        deleted_comment_count = TestimonyComment.objects.filter(
-            Q(id=comment.id) | Q(parent_comment_id=comment.id)
-        ).count()
-        comment.delete()
-        Testimony.objects.filter(id=testimony_id).update(
-            comment_count=Greatest(F("comment_count") - deleted_comment_count, 0)
-        )
+        try:
+            delete_testimony_comment(comment_id=comment_id, actor=request.user)
+        except CommentNotFoundError as exc:
+            return Response({"message": str(exc)}, status=status.HTTP_404_NOT_FOUND)
+        except CommentNotOwnedError as exc:
+            return Response({"message": str(exc)}, status=status.HTTP_403_FORBIDDEN)
         return Response({"message": "Comment deleted."}, status=status.HTTP_200_OK)
 
 

@@ -75,12 +75,14 @@ class NotificationApiTests(TestCase):
         commenter = UserFactory(email="commenter@example.com")
         commenter_token = Token.objects.create(user=commenter)
 
-        comment_response = self.client.post(
-            reverse("testimony-comment-list-create", kwargs={"testimony_id": self.approved.id}),
-            {"body": "So powerful!"},
-            content_type="application/json",
-            HTTP_AUTHORIZATION=f"Token {commenter_token.key}",
-        )
+        # The comment notification is sent once the comment's transaction commits.
+        with self.captureOnCommitCallbacks(execute=True):
+            comment_response = self.client.post(
+                reverse("testimony-comment-list-create", kwargs={"testimony_id": self.approved.id}),
+                {"body": "So powerful!"},
+                content_type="application/json",
+                HTTP_AUTHORIZATION=f"Token {commenter_token.key}",
+            )
         self.assertEqual(comment_response.status_code, 201)
 
         author_notifications = self.client.get(
@@ -91,12 +93,13 @@ class NotificationApiTests(TestCase):
         payload = author_notifications.json()
         self.assertEqual(payload["results"][0]["notification_type"], "testimony_comment")
 
-        self_comment_response = self.client.post(
-            reverse("testimony-comment-list-create", kwargs={"testimony_id": self.approved.id}),
-            {"body": "Thanks all!"},
-            content_type="application/json",
-            HTTP_AUTHORIZATION=f"Token {self.author_token.key}",
-        )
+        with self.captureOnCommitCallbacks(execute=True):
+            self_comment_response = self.client.post(
+                reverse("testimony-comment-list-create", kwargs={"testimony_id": self.approved.id}),
+                {"body": "Thanks all!"},
+                content_type="application/json",
+                HTTP_AUTHORIZATION=f"Token {self.author_token.key}",
+            )
         self.assertEqual(self_comment_response.status_code, 201)
 
         author_notifications_again = self.client.get(
