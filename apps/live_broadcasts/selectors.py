@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from django.db.models import Sum
 from django.utils import timezone
 
 from apps.creators.selectors import get_creator_profile
@@ -72,6 +73,53 @@ def reserved_minutes_this_month(*, creator, year: int, month: int) -> int:
         max_duration_minutes_applied__isnull=False,
     )
     return sum(b.max_viewers_applied * b.max_duration_minutes_applied for b in broadcasts)
+
+
+def platform_free_reserved_minutes_this_month(*, year: int, month: int) -> int:
+    """2026-09-10 refinement -- the platform-wide counterpart to
+    reserved_minutes_this_month, and what go_live() checks against
+    LiveStreamingPolicy.shared_monthly_ceiling_minutes. Per broadcast,
+    this counts (viewer cap x duration cap) MINUS
+    platform_ceiling_minutes_paid -- i.e. only the portion of each
+    broadcast's worst-case reservation that was never explicitly paid
+    for/approved to bypass this exact ceiling. This is deliberately not
+    derived from each Ministry's base-vs-purchased allowance split: a
+    Ministry with plenty of unused free allowance of their own can still
+    be the one whose broadcast tips the shared pool over, and the only
+    way to correctly exempt their payment is to record it directly on
+    that broadcast (see the model field's own docstring) rather than
+    inferring it after the fact."""
+    broadcasts = LiveBroadcast.objects.filter(
+        started_at__year=year,
+        started_at__month=month,
+        max_viewers_applied__isnull=False,
+        max_duration_minutes_applied__isnull=False,
+    )
+    return sum(
+        max(b.max_viewers_applied * b.max_duration_minutes_applied - b.platform_ceiling_minutes_paid, 0)
+        for b in broadcasts
+    )
+
+
+def ministry_available_minutes_for_ceiling_earmark(*, creator, year: int, month: int) -> int:
+    """How many of this Ministry's own purchased/approved minutes
+    (allowance.purchased_minutes) are still unspent on covering an
+    earlier broadcast's platform-ceiling shortfall this month -- so the
+    same purchased minute is never earmarked twice across two different
+    broadcasts. Purchased minutes not yet earmarked here remain fully
+    available for the Ministry's own ordinary allowance check
+    (reserved_minutes_this_month) at the same time; earmarking for the
+    shared ceiling and covering one's own allowance are two different
+    lenses on the same paid-for capacity, not a shared pool that could be
+    double-spent between them."""
+    allowance = get_or_create_month_allowance(creator=creator, year=year, month=month)
+    already_earmarked = (
+        LiveBroadcast.objects.filter(creator=creator, started_at__year=year, started_at__month=month).aggregate(
+            total=Sum("platform_ceiling_minutes_paid")
+        )["total"]
+        or 0
+    )
+    return max(allowance.purchased_minutes - already_earmarked, 0)
 
 
 def _broadcast_display_queryset():

@@ -34,6 +34,27 @@ class InsufficientAllowanceError(Exception):
         )
 
 
+class PlatformCeilingExceededError(Exception):
+    """Raised by go_live() when this broadcast's full worst-case
+    reservation would push the platform-wide FREE-tier total past
+    LiveStreamingPolicy.shared_monthly_ceiling_minutes -- distinct from
+    InsufficientAllowanceError, which is about one Ministry's own
+    allowance. Unlike that error, minutes this Ministry has already
+    purchased or been approved for are never counted toward this
+    shortfall -- see go_live()'s own comment on why paying to top up a
+    Ministry's personal allowance would otherwise do nothing to relieve
+    this specific kind of block."""
+
+    def __init__(self, *, shortfall_minutes: int, remaining_minutes: int):
+        self.shortfall_minutes = shortfall_minutes
+        self.remaining_minutes = remaining_minutes
+        super().__init__(
+            f"Shared platform streaming capacity is tight right now -- this broadcast needs "
+            f"{shortfall_minutes} more free participant-minutes than the {remaining_minutes} still available "
+            "platform-wide this month."
+        )
+
+
 class LiveMinutePurchaseNotFoundError(Exception):
     pass
 

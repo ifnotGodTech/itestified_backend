@@ -83,6 +83,20 @@ class LiveBroadcast(models.Model):
     max_viewers_applied = models.PositiveIntegerField(null=True, blank=True)
     max_duration_minutes_applied = models.PositiveIntegerField(null=True, blank=True)
 
+    # 2026-09-10 refinement -- closes the gap where every individual
+    # Ministry stays within their own allowance, but the platform-wide
+    # total still quietly exceeds Agora's real shared free-tier ceiling
+    # (LiveStreamingPolicy.shared_monthly_ceiling_minutes). Almost always
+    # 0 -- this only becomes nonzero when go_live() finds the platform-wide
+    # free pool too tight for this broadcast's full worst-case reservation
+    # and the Ministry has enough already-purchased/approved minutes to
+    # explicitly cover the gap. Recorded on the broadcast itself (not just
+    # netted into a monthly total) so a purchase can never be "spent"
+    # twice across two different broadcasts -- see
+    # selectors.platform_free_reserved_minutes_this_month's own docstring
+    # for how this is used.
+    platform_ceiling_minutes_paid = models.PositiveIntegerField(default=0)
+
     # Phase 27 Slice 5 -- Agora Cloud Recording (composite/mix mode, one
     # publisher). A recording failure never blocks go_live() itself
     # (see commands.py); FAILED here just means there's nothing to

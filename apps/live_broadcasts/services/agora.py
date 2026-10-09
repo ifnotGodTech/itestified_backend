@@ -239,12 +239,36 @@ def start_cloud_recording(
                 "streamTypes": 2,  # audio + video
                 "channelType": 1,  # live-broadcast profile
             },
+            # 2026-09-10 fix, found live-testing this app's first real
+            # broadcast: mix mode defaults to HLS output only (an .m3u8
+            # manifest referencing separate .ts segment files), which
+            # Cloudinary's upload-by-URL rejects outright ("invalid
+            # file") since it isn't a single playable video -- confirmed
+            # live. First attempt put avFileType inside recordingConfig,
+            # which Agora silently ignored (recording still succeeded,
+            # just stayed HLS-only) -- it's actually a sibling object,
+            # recordingFileConfig, confirmed against Agora's own request-
+            # body example. "hls" must stay listed alongside "mp4"
+            # (mp4-only errors); the mp4 file is what
+            # extract_recording_file_name now selects.
+            "recordingFileConfig": {
+                "avFileType": ["hls", "mp4"],
+            },
             "storageConfig": {
                 "vendor": settings.AGORA_RECORDING_STORAGE_VENDOR,
                 "region": settings.AGORA_RECORDING_STORAGE_REGION,
                 "bucket": settings.AGORA_RECORDING_STORAGE_BUCKET,
                 "accessKey": settings.AGORA_RECORDING_STORAGE_ACCESS_KEY,
                 "secretKey": settings.AGORA_RECORDING_STORAGE_SECRET_KEY,
+                # 2026-09-10 fix, found live-testing this app's first real
+                # broadcast: without this, Agora writes to the bucket
+                # root, which 403s against any bucket policy scoped to a
+                # "recordings/*"-style prefix (the natural way to grant
+                # public read to just this app's own folder rather than
+                # the whole bucket) -- confirmed live, a direct fetch of
+                # the root-level file 403'd. This must match whatever
+                # prefix the bucket's public-read policy actually grants.
+                "fileNamePrefix": ["recordings"],
             },
         },
     }
@@ -261,7 +285,20 @@ def start_cloud_recording(
     return sid
 
 
-def stop_cloud_recording(*, channel_name: str, recording_uid: int, resource_id: str, sid: str) -> None:
+def stop_cloud_recording(*, channel_name: str, recording_uid: int, resource_id: str, sid: str) -> dict:
+    """Returns the raw `serverResponse` payload -- Agora's own `stop` call
+    is the authoritative source for the finished recording's file list,
+    not a follow-up `query` call (2026-09-10 correction, found live-
+    testing this app's first real broadcast). The original design here
+    called `stop` and then polled `query_cloud_recording` with backoff,
+    on the assumption `stop` returns before the file finishes uploading.
+    That assumption was wrong: Agora's own docs state `query` (and a
+    second `stop`) return 404 once a recording session has already ended
+    -- confirmed live, every `query` attempt 404'd starting from the very
+    first one, never once succeeding, because `stop` had already ended
+    the session by definition. `stop`'s own response carries the same
+    `serverResponse.fileList` shape `query` would have -- see
+    `extract_recording_file_name`."""
     app_id, _ = _require_token_credentials()
     headers = _rest_auth_header()
     response = requests.post(
@@ -271,6 +308,38 @@ def stop_cloud_recording(*, channel_name: str, recording_uid: int, resource_id: 
         timeout=15,
     )
     response.raise_for_status()
+    return response.json().get("serverResponse") or {}
+
+
+def extract_recording_file_name(server_response: dict) -> str:
+    """Agora's exact mix-mode fileList shape couldn't be directly verified
+    against live docs while building this (see get_participant_minutes_used's
+    own note on the same doc-access limitation) -- handle both a bare
+    filename string and a fileList array of objects defensively rather
+    than assuming one shape. Shared by end_broadcast() (reading `stop`'s
+    own response) -- moved here from tasks.py's private helper once
+    `query` was dropped from the archival path.
+
+    2026-09-10 fix: with `avFileType: ["hls", "mp4"]` (see
+    start_cloud_recording), a real response's fileList is an array
+    containing BOTH the .m3u8 manifest and the .mp4 file -- confirmed
+    live that picking whichever happens to be first (the original logic
+    here) can hand Cloudinary the unplayable HLS manifest instead. When
+    multiple entries exist, the .mp4 one is preferred explicitly rather
+    than assumed to be first."""
+    file_list = server_response.get("fileList")
+    if isinstance(file_list, str) and file_list.strip():
+        return file_list.strip()
+    if isinstance(file_list, list) and file_list:
+        names = [
+            str(item.get("fileName") or "").strip() if isinstance(item, dict) else str(item).strip()
+            for item in file_list
+        ]
+        for name in names:
+            if name.lower().endswith(".mp4"):
+                return name
+        return names[0] if names else ""
+    return ""
 
 
 def get_channel_viewer_count(*, channel_name: str) -> int | None:
@@ -317,12 +386,14 @@ def get_channel_viewer_count(*, channel_name: str) -> int | None:
 
 
 def query_cloud_recording(*, resource_id: str, sid: str) -> dict:
-    """Returns the raw `serverResponse` payload. NOTE: Agora's exact
-    fileList shape for mix-mode recordings couldn't be directly verified
-    against live docs while building this (see get_participant_minutes_used's
-    own note on the same doc-access limitation) -- callers should treat
-    both a bare filename string and a fileList array defensively (see
-    services/commands.py's parsing)."""
+    """Returns the raw `serverResponse` payload -- for checking status on a
+    recording session Agora still considers ongoing. NOT used by the
+    archival flow (see stop_cloud_recording's own docstring): once `stop`
+    has already succeeded for a resource_id/sid pair, Agora's own docs
+    confirm this 404s (the session has ended), which is exactly what a
+    real broadcast on 2026-09-10 reproduced -- every attempt 404'd from
+    the first one. Kept for any future status-check use against a
+    recording still in progress, not archival."""
     app_id, _ = _require_token_credentials()
     headers = _rest_auth_header()
     response = requests.get(

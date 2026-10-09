@@ -9,6 +9,7 @@ from apps.live_broadcasts.models import (
     LiveBroadcast,
     LiveBroadcastApprovalRequest,
     LiveBroadcastStatus,
+    LiveStreamingPolicy,
     MinistryStreamingAllowance,
 )
 from apps.live_broadcasts.services.agora import PublisherCredential
@@ -85,6 +86,27 @@ class LiveBroadcastApiTests(TestCase):
         body = response.json()
         self.assertEqual(body["code"], "insufficient_allowance")
         self.assertIn("shortfall_minutes", body)
+
+    def test_go_live_blocked_by_platform_ceiling_returns_distinct_code(self):
+        # Own allowance is generous -- the block must come from the
+        # platform-wide ceiling, not the per-Ministry check (which already
+        # has its own test/code above using "insufficient_allowance").
+        LiveStreamingPolicy.objects.create(pk=1, shared_monthly_ceiling_minutes=1000)
+        ministry, token = _verified_ministry()
+        now = timezone.now()
+        MinistryStreamingAllowance.objects.create(
+            creator=ministry, year=now.year, month=now.month, base_allowance_minutes=5000, purchased_minutes=0
+        )
+        broadcast = LiveBroadcast.objects.create(creator=ministry, title="Sunday Service")
+
+        response = self.client.post(
+            reverse("live-broadcast-go-live", kwargs={"broadcast_id": broadcast.id}),
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+        self.assertEqual(response.status_code, 402)
+        body = response.json()
+        self.assertEqual(body["code"], "platform_capacity_exceeded")
+        self.assertEqual(body["shortfall_minutes"], 500)
 
     def test_allowance_endpoint_reports_remaining_minutes(self):
         ministry, token = _verified_ministry()

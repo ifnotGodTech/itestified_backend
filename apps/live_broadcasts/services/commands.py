@@ -8,6 +8,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.common.services.flutterwave import FlutterwaveGateway, FlutterwaveGatewayError
+from apps.common.services.media_uploads import upload_video_from_url
 from apps.live_broadcasts import selectors
 from apps.live_broadcasts.exceptions import (
     AgoraNotConfiguredError,
@@ -17,6 +18,7 @@ from apps.live_broadcasts.exceptions import (
     LiveBroadcastWrongStatusError,
     LiveMinutePurchaseNotFoundError,
     NotAVerifiedMinistryError,
+    PlatformCeilingExceededError,
 )
 from apps.live_broadcasts.models import (
     LiveBroadcast,
@@ -83,14 +85,24 @@ def create_live_broadcast(*, creator, title: str, category, scheduled_at=None) -
 def go_live(*, broadcast: LiveBroadcast, actor) -> agora.PublisherCredential:
     """Phase 27 Slice 4 -- the actual credential-issuance moment. Checks
     the attempt against the admin-configurable policy and the Ministry's
-    own remaining monthly allowance before ever calling Agora."""
+    own remaining monthly allowance before ever calling Agora.
+
+    2026-10-09: both checks below are read-then-write, so two locks are
+    taken first. The broadcast row is re-read under lock so a double-tap
+    can't start it twice from a stale SCHEDULED copy. The singleton policy
+    row is locked so concurrent go-lives across *all* Ministries run one
+    at a time -- otherwise two of them could each see the same remaining
+    platform-wide (or per-Ministry) minutes and both pass."""
     if broadcast.creator_id != actor.id:
         raise NotAVerifiedMinistryError("Only the broadcast's own Ministry can go live on it.")
     selectors.require_verified_ministry(actor)
+
+    policy = selectors.get_live_streaming_policy()
+    policy = LiveStreamingPolicy.objects.select_for_update().get(pk=policy.pk)
+    broadcast = LiveBroadcast.objects.select_for_update().get(pk=broadcast.pk)
     if broadcast.status != LiveBroadcastStatus.SCHEDULED:
         raise LiveBroadcastWrongStatusError(f"Cannot go live on a broadcast in status '{broadcast.status}'.")
 
-    policy = selectors.get_live_streaming_policy()
     if not policy.is_enabled:
         raise LiveBroadcastingDisabledError("Live broadcasting is temporarily unavailable.")
 
@@ -107,6 +119,31 @@ def go_live(*, broadcast: LiveBroadcast, actor) -> agora.PublisherCredential:
             remaining_minutes=max(remaining, 0),
         )
 
+    # 2026-09-10 refinement -- the check above only ever protected this one
+    # Ministry's own allowance; nothing stopped many different Ministries,
+    # each comfortably within their own allowance, from collectively
+    # pushing the platform past Agora's real shared free-tier ceiling.
+    # Paying to top up THIS Ministry's own allowance (the remedy above)
+    # does nothing to relieve that -- it's a different pool -- so this is
+    # a separate check with its own remedy: an already-purchased-or-
+    # approved minute can explicitly buy an exemption for this broadcast
+    # (ministry_available_minutes_for_ceiling_earmark), recorded on the
+    # broadcast itself so it can never be spent twice.
+    platform_free_reserved = selectors.platform_free_reserved_minutes_this_month(year=now.year, month=now.month)
+    platform_free_remaining = policy.shared_monthly_ceiling_minutes - platform_free_reserved
+    platform_shortfall = worst_case_minutes - platform_free_remaining
+    platform_ceiling_minutes_paid = 0
+    if platform_shortfall > 0:
+        available_to_earmark = selectors.ministry_available_minutes_for_ceiling_earmark(
+            creator=actor, year=now.year, month=now.month
+        )
+        if available_to_earmark < platform_shortfall:
+            raise PlatformCeilingExceededError(
+                shortfall_minutes=platform_shortfall - available_to_earmark,
+                remaining_minutes=max(platform_free_remaining, 0),
+            )
+        platform_ceiling_minutes_paid = platform_shortfall
+
     channel_name = f"itestified-live-{broadcast.id}-{secrets.token_hex(4)}"
     credential = agora.issue_publisher_credential(
         channel_name=channel_name,
@@ -120,6 +157,7 @@ def go_live(*, broadcast: LiveBroadcast, actor) -> agora.PublisherCredential:
     broadcast.agora_publisher_uid = credential.uid
     broadcast.max_viewers_applied = policy.max_concurrent_viewers
     broadcast.max_duration_minutes_applied = policy.max_duration_minutes
+    broadcast.platform_ceiling_minutes_paid = platform_ceiling_minutes_paid
 
     # Best-effort: a Cloud Recording hiccup should never block the
     # Ministry from actually broadcasting (see Phase 27 Slice 5's own
@@ -154,6 +192,7 @@ def go_live(*, broadcast: LiveBroadcast, actor) -> agora.PublisherCredential:
             "agora_publisher_uid",
             "max_viewers_applied",
             "max_duration_minutes_applied",
+            "platform_ceiling_minutes_paid",
             "recording_status",
             "agora_recording_resource_id",
             "agora_recording_sid",
@@ -318,14 +357,22 @@ def end_broadcast(*, broadcast: LiveBroadcast, reason: str, actor=None) -> LiveB
     broadcast.ended_at = timezone.now()
     broadcast.ended_reason = reason
 
+    # 2026-09-10 correction: file_name is read straight from stop's own
+    # response here, synchronously -- not from a later `query` poll (see
+    # agora.stop_cloud_recording's own docstring for why that never
+    # worked: a real broadcast's first live test showed every `query`
+    # attempt 404ing, since Agora considers the session over the moment
+    # `stop` succeeds).
+    file_name = ""
     if broadcast.recording_status == LiveBroadcastRecordingStatus.RECORDING:
         try:
-            agora.stop_cloud_recording(
+            stop_response = agora.stop_cloud_recording(
                 channel_name=broadcast.agora_channel_name,
                 recording_uid=broadcast.agora_recording_uid,
                 resource_id=broadcast.agora_recording_resource_id,
                 sid=broadcast.agora_recording_sid,
             )
+            file_name = agora.extract_recording_file_name(stop_response)
             broadcast.recording_status = LiveBroadcastRecordingStatus.STOPPING
         except Exception:  # noqa: BLE001 - ending the broadcast must succeed even if the stop call fails.
             logger.exception("live_broadcasts.end_broadcast: stop_cloud_recording failed for broadcast %s", broadcast.id)
@@ -334,9 +381,9 @@ def end_broadcast(*, broadcast: LiveBroadcast, reason: str, actor=None) -> LiveB
     broadcast.save(update_fields=["status", "ended_at", "ended_reason", "recording_status", "updated_at"])
 
     if broadcast.recording_status == LiveBroadcastRecordingStatus.STOPPING:
-        from apps.live_broadcasts.tasks import poll_and_archive_recording
+        from apps.live_broadcasts.tasks import archive_stopped_recording
 
-        transaction.on_commit(lambda: poll_and_archive_recording.delay(broadcast.id))
+        transaction.on_commit(lambda: archive_stopped_recording.delay(broadcast.id, file_name))
 
     return broadcast
 
@@ -367,14 +414,39 @@ def admin_end_broadcast(*, broadcast: LiveBroadcast, actor, note: str) -> LiveBr
     return broadcast
 
 
+def relay_recording_to_cloudinary(*, broadcast: LiveBroadcast, source_url: str) -> str:
+    """Refinement to Phase 27 Slice 5 (2026-09-08): the finished recording
+    lands on S3 only because that's a storage vendor Agora Cloud Recording
+    actually supports -- Cloudinary isn't one of Agora's destinations. S3
+    is a short-lived relay, not the testimony's permanent home; the admin
+    decided archived broadcasts should be served the same way every other
+    video testimony already is (Cloudinary), not from a second, separate
+    storage bill. `public_id` is deterministic (broadcast id, not random)
+    so a Celery retry after a transient failure overwrites the same
+    Cloudinary asset instead of leaving duplicates. Raises
+    CloudinaryUploadError on failure -- the caller (tasks.py) treats that
+    exactly like any other transient step in this pipeline (retry, then
+    mark_recording_failed once retries are exhausted). The S3 object
+    itself is left for a bucket-level lifecycle rule to expire; this app
+    has no AWS SDK dependency and doesn't delete it directly."""
+    asset = upload_video_from_url(source_url=source_url, public_id=f"live-broadcast-{broadcast.id}")
+    return asset.secure_url
+
+
 def archive_broadcast_recording(*, broadcast: LiveBroadcast, video_url: str):
-    """Phase 27 Slice 5 -- called once poll_and_archive_recording
-    (tasks.py) confirms Agora's file is written to storage. Creates the
-    DRAFT testimony Slice 3's submit-or-hold decision operates on;
-    archiving never publishes anything by itself."""
+    """Phase 27 Slice 5 -- called once archive_stopped_recording (tasks.py)
+    confirms the file (per stop's own response, see end_broadcast) is
+    relayed into Cloudinary (2026-09-08 refinement). Creates the DRAFT
+    testimony Slice 3's submit-or-hold decision operates on; archiving
+    never publishes anything by itself. Idempotent (2026-10-09): a duplicate
+    task delivery returns the already-archived testimony instead of
+    creating a second one."""
     from apps.testimonies.models import Testimony, TestimonyStatus, TestimonyType
 
     with transaction.atomic():
+        broadcast = LiveBroadcast.objects.select_for_update().get(pk=broadcast.pk)
+        if broadcast.recording_status == LiveBroadcastRecordingStatus.ARCHIVED and broadcast.archived_testimony_id:
+            return broadcast.archived_testimony
         testimony = Testimony.objects.create(
             author=broadcast.creator,
             category=broadcast.category,

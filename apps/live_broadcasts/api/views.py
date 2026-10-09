@@ -16,6 +16,7 @@ from apps.live_broadcasts.exceptions import (
     LiveMinutePricingNotConfiguredError,
     LiveMinutePurchaseNotFoundError,
     NotAVerifiedMinistryError,
+    PlatformCeilingExceededError,
 )
 from apps.live_broadcasts.models import (
     LiveBroadcast,
@@ -145,6 +146,21 @@ class LiveBroadcastGoLiveView(APIView):
                 {
                     "message": str(exc),
                     "code": "insufficient_allowance",
+                    "shortfall_minutes": exc.shortfall_minutes,
+                    "remaining_minutes": exc.remaining_minutes,
+                },
+                status=status.HTTP_402_PAYMENT_REQUIRED,
+            )
+        except PlatformCeilingExceededError as exc:
+            # Distinct code from insufficient_allowance -- this is never
+            # fixed by topping up the Ministry's own allowance (a
+            # different pool); the client should still offer the same
+            # pay-or-request-approval actions, just not word it as "your
+            # monthly allowance."
+            return Response(
+                {
+                    "message": str(exc),
+                    "code": "platform_capacity_exceeded",
                     "shortfall_minutes": exc.shortfall_minutes,
                     "remaining_minutes": exc.remaining_minutes,
                 },

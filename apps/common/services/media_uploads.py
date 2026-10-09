@@ -171,6 +171,38 @@ def create_direct_upload_signature(
     )
 
 
+def _asset_fields_from_payload(*, payload: dict, media_label: str) -> dict:
+    """Shared parsing for any Cloudinary API response describing a video-
+    resource-type asset (a Cloud Recording relay upload's response has the
+    exact same shape as an Admin API `resource` lookup) -- factored out so
+    `_fetch_cloudinary_media_metadata` and `upload_video_from_url` don't
+    duplicate this field-by-field validation."""
+
+    secure_url = str(payload.get("secure_url") or "").strip()
+    returned_public_id = str(payload.get("public_id") or "").strip()
+    if not secure_url or not returned_public_id:
+        raise CloudinaryUploadError(f"Cloudinary returned incomplete {media_label} asset metadata.")
+
+    try:
+        file_size_bytes = int(payload.get("bytes") or 0)
+        duration_ms = round(float(payload.get("duration") or 0) * 1000)
+        width = int(payload.get("width") or 0)
+        height = int(payload.get("height") or 0)
+    except (TypeError, ValueError) as exc:
+        raise CloudinaryUploadError(f"Cloudinary returned invalid {media_label} asset metadata.") from exc
+
+    return {
+        "public_id": returned_public_id,
+        "secure_url": secure_url,
+        "resource_type": str(payload.get("resource_type") or "").strip().lower(),
+        "format": str(payload.get("format") or "").strip().lower(),
+        "file_size_bytes": file_size_bytes,
+        "duration_ms": duration_ms,
+        "width": width,
+        "height": height,
+    }
+
+
 def _fetch_cloudinary_media_metadata(*, public_id: str, media_label: str) -> dict:
     """Read authoritative metadata for a Cloudinary audio or video asset.
 
@@ -206,29 +238,7 @@ def _fetch_cloudinary_media_metadata(*, public_id: str, media_label: str) -> dic
             raise CloudinaryUploadError(f"{media_label.capitalize()} asset verification failed: {reason}") from exc
         raise CloudinaryUploadError(f"{media_label.capitalize()} asset verification failed.") from exc
 
-    secure_url = str(payload.get("secure_url") or "").strip()
-    returned_public_id = str(payload.get("public_id") or "").strip()
-    if not secure_url or not returned_public_id:
-        raise CloudinaryUploadError(f"Cloudinary returned incomplete {media_label} asset metadata.")
-
-    try:
-        file_size_bytes = int(payload.get("bytes") or 0)
-        duration_ms = round(float(payload.get("duration") or 0) * 1000)
-        width = int(payload.get("width") or 0)
-        height = int(payload.get("height") or 0)
-    except (TypeError, ValueError) as exc:
-        raise CloudinaryUploadError(f"Cloudinary returned invalid {media_label} asset metadata.") from exc
-
-    return {
-        "public_id": returned_public_id,
-        "secure_url": secure_url,
-        "resource_type": str(payload.get("resource_type") or "").strip().lower(),
-        "format": str(payload.get("format") or "").strip().lower(),
-        "file_size_bytes": file_size_bytes,
-        "duration_ms": duration_ms,
-        "width": width,
-        "height": height,
-    }
+    return _asset_fields_from_payload(payload=payload, media_label=media_label)
 
 
 def get_cloudinary_audio_asset(*, public_id: str) -> CloudinaryAudioAsset:
@@ -239,6 +249,49 @@ def get_cloudinary_audio_asset(*, public_id: str) -> CloudinaryAudioAsset:
 def get_cloudinary_video_asset(*, public_id: str) -> CloudinaryVideoAsset:
     """Read authoritative metadata for a Cloudinary video asset (Phase 32)."""
     return CloudinaryVideoAsset(**_fetch_cloudinary_media_metadata(public_id=public_id, media_label="video"))
+
+
+def upload_video_from_url(*, source_url: str, public_id: str) -> CloudinaryVideoAsset:
+    """Re-hosts a remote video into Cloudinary by URL (Phase 27's live-
+    broadcast recordings, which land on S3 first only because Agora Cloud
+    Recording has no Cloudinary destination among its supported storage
+    vendors -- S3 is a short-lived relay, this is what makes Cloudinary the
+    testimony's real, permanent home, same as every other video testimony).
+
+    `public_id` is deliberately caller-supplied and deterministic (derived
+    from the broadcast id, not a random one) so a retried call after a
+    transient failure overwrites the same asset instead of leaving orphaned
+    duplicates behind -- `overwrite=True` makes that safe.
+    """
+
+    configure_cloudinary()
+    try:
+        from cloudinary import uploader
+    except ImportError as exc:
+        raise CloudinaryUploadError("cloudinary package is not installed.") from exc
+
+    folder = (
+        os.environ.get("CLOUDINARY_LIVE_BROADCAST_RECORDING_FOLDER", "").strip()
+        or os.environ.get("CLOUDINARY_UPLOAD_FOLDER", "").strip()
+        or "itestified/live-broadcasts/recordings"
+    )
+
+    try:
+        payload = uploader.upload(
+            source_url,
+            resource_type="video",
+            type="upload",
+            folder=folder,
+            public_id=public_id,
+            overwrite=True,
+        )
+    except Exception as exc:  # noqa: BLE001 - Cloudinary exception types vary by SDK version.
+        reason = str(exc).strip()
+        if reason:
+            raise CloudinaryUploadError(f"Recording relay upload failed: {reason}") from exc
+        raise CloudinaryUploadError("Recording relay upload failed.") from exc
+
+    return CloudinaryVideoAsset(**_asset_fields_from_payload(payload=payload, media_label="video"))
 
 
 def delete_cloudinary_asset(*, public_id: str, resource_type: str = "video") -> None:

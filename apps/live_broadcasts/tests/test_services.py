@@ -11,6 +11,7 @@ from apps.live_broadcasts.exceptions import (
     LiveBroadcastingDisabledError,
     LiveBroadcastWrongStatusError,
     NotAVerifiedMinistryError,
+    PlatformCeilingExceededError,
 )
 from apps.live_broadcasts.models import (
     LiveBroadcast,
@@ -25,7 +26,7 @@ from apps.live_broadcasts.models import (
     LiveStreamingPolicyHistory,
     MinistryStreamingAllowance,
 )
-from apps.live_broadcasts.services import commands
+from apps.live_broadcasts.services import agora, commands
 from apps.live_broadcasts.services.agora import PublisherCredential
 from apps.testimonies.models import TestimonyCategory
 from apps.users.tests.factories import UserFactory
@@ -111,6 +112,24 @@ class GoLiveTests(TestCase):
         with self.assertRaises(LiveBroadcastWrongStatusError):
             commands.go_live(broadcast=self.broadcast, actor=self.ministry)
 
+    @patch("apps.live_broadcasts.services.commands.agora.issue_publisher_credential")
+    def test_stale_copy_of_an_already_live_broadcast_cannot_go_live_again(self, issue_mock):
+        # Regression (2026-10-09): a double-tap sends two requests that each
+        # loaded the broadcast while it was still SCHEDULED. go_live must
+        # re-read the row under lock rather than trust the caller's copy.
+        # Allowance covers two broadcasts so only the status check can stop it.
+        now = timezone.now()
+        MinistryStreamingAllowance.objects.create(
+            creator=self.ministry, year=now.year, month=now.month, base_allowance_minutes=200, purchased_minutes=3000
+        )
+        issue_mock.side_effect = lambda **kwargs: _fake_credential(channel_name=kwargs["channel_name"])
+        stale_copy = LiveBroadcast.objects.get(pk=self.broadcast.pk)
+
+        commands.go_live(broadcast=self.broadcast, actor=self.ministry)
+        with self.assertRaises(LiveBroadcastWrongStatusError):
+            commands.go_live(broadcast=stale_copy, actor=self.ministry)
+        issue_mock.assert_called_once()
+
     def test_disabled_policy_blocks_go_live(self):
         LiveStreamingPolicy.objects.create(pk=1, is_enabled=False)
         with self.assertRaises(LiveBroadcastingDisabledError):
@@ -158,6 +177,127 @@ class GoLiveTests(TestCase):
         third = LiveBroadcast.objects.create(creator=self.ministry, title="Friday Service", category=self.broadcast.category)
         with self.assertRaises(InsufficientAllowanceError):
             commands.go_live(broadcast=third, actor=self.ministry)
+
+
+class GoLivePlatformCeilingTests(TestCase):
+    """2026-09-10 refinement -- every Ministry can stay within their own
+    MinistryStreamingAllowance while the platform-wide total still quietly
+    exceeds Agora's real shared free-tier ceiling. These tests are scoped
+    to that specific gap, distinct from GoLiveTests' per-Ministry-only
+    checks above."""
+
+    def setUp(self):
+        self.ministry = _verified_ministry()
+        self.category = _category()
+        # Tight ceiling (default worst case is 50 x 30 = 1,500) so a single
+        # broadcast is enough to explore both sides of it without needing
+        # many fixture broadcasts.
+        LiveStreamingPolicy.objects.create(pk=1, shared_monthly_ceiling_minutes=1000)
+        self.broadcast = LiveBroadcast.objects.create(
+            creator=self.ministry, title="Sunday Service", category=self.category
+        )
+
+    def _generous_own_allowance(self, creator=None, purchased_minutes=0):
+        now = timezone.now()
+        MinistryStreamingAllowance.objects.create(
+            creator=creator or self.ministry,
+            year=now.year,
+            month=now.month,
+            base_allowance_minutes=5000,
+            purchased_minutes=purchased_minutes,
+        )
+
+    @patch("apps.live_broadcasts.services.commands.agora.issue_publisher_credential")
+    def test_blocked_when_platform_ceiling_too_tight_and_nothing_purchased(self, issue_mock):
+        # Own allowance is nowhere close to the bottleneck -- proves this
+        # is a platform-wide check, not a repeat of the per-Ministry one.
+        self._generous_own_allowance()
+        with self.assertRaises(PlatformCeilingExceededError) as ctx:
+            commands.go_live(broadcast=self.broadcast, actor=self.ministry)
+        self.assertEqual(ctx.exception.shortfall_minutes, 1500 - 1000)
+        self.assertEqual(ctx.exception.remaining_minutes, 1000)
+        issue_mock.assert_not_called()
+
+    @patch("apps.live_broadcasts.services.commands.agora.issue_publisher_credential")
+    def test_blocked_by_another_ministrys_usage_not_its_own_allowance(self, issue_mock):
+        issue_mock.return_value = _fake_credential()
+        # Roomier ceiling than setUp's -- big enough for one broadcast
+        # (1,500) with some headroom (500) left over, but not two.
+        LiveStreamingPolicy.objects.filter(pk=1).update(shared_monthly_ceiling_minutes=2000)
+        other_ministry = _verified_ministry(email="other-ministry@example.com")
+        self._generous_own_allowance(creator=other_ministry)
+        other_broadcast = LiveBroadcast.objects.create(
+            creator=other_ministry, title="Midweek Service", category=self.category
+        )
+        # Uses 1,500 of the 2,000-minute ceiling, leaving only 500.
+        commands.go_live(broadcast=other_broadcast, actor=other_ministry)
+
+        self._generous_own_allowance()
+        with self.assertRaises(PlatformCeilingExceededError) as ctx:
+            commands.go_live(broadcast=self.broadcast, actor=self.ministry)
+        self.assertEqual(ctx.exception.shortfall_minutes, 1000)
+        self.assertEqual(ctx.exception.remaining_minutes, 500)
+
+    @patch("apps.live_broadcasts.services.commands.agora.issue_publisher_credential")
+    def test_purchased_minutes_earmark_and_exempt_the_broadcast_from_the_ceiling(self, issue_mock):
+        issue_mock.return_value = _fake_credential()
+        # Own base allowance alone would already cover this broadcast --
+        # the earmark must still kick in because the *platform* ceiling,
+        # not this Ministry's allowance, is what's actually blocking it.
+        self._generous_own_allowance(purchased_minutes=500)
+
+        commands.go_live(broadcast=self.broadcast, actor=self.ministry)
+
+        self.broadcast.refresh_from_db()
+        self.assertEqual(self.broadcast.status, LiveBroadcastStatus.LIVE)
+        # Shortfall was 1500 - 1000 = 500, exactly covered by the 500
+        # purchased minutes -- nothing left over to earmark.
+        self.assertEqual(self.broadcast.platform_ceiling_minutes_paid, 500)
+
+    @patch("apps.live_broadcasts.services.commands.agora.issue_publisher_credential")
+    def test_partial_purchased_minutes_still_report_the_remaining_shortfall(self, issue_mock):
+        issue_mock.return_value = _fake_credential()
+        self._generous_own_allowance(purchased_minutes=200)
+
+        with self.assertRaises(PlatformCeilingExceededError) as ctx:
+            commands.go_live(broadcast=self.broadcast, actor=self.ministry)
+        # Needed 500 to cover the shortfall, only had 200 -- 300 still short.
+        self.assertEqual(ctx.exception.shortfall_minutes, 300)
+        issue_mock.assert_not_called()
+
+    @patch("apps.live_broadcasts.services.commands.agora.issue_publisher_credential")
+    def test_an_earlier_broadcasts_earmark_cannot_be_spent_twice(self, issue_mock):
+        issue_mock.return_value = _fake_credential()
+        self._generous_own_allowance(purchased_minutes=500)
+
+        # First broadcast spends the full 500 purchased minutes earmarking
+        # its own shortfall against the (now-exhausted) 1,000-minute ceiling.
+        commands.go_live(broadcast=self.broadcast, actor=self.ministry)
+
+        second = LiveBroadcast.objects.create(
+            creator=self.ministry, title="Evening Service", category=self.category
+        )
+        # No purchased minutes left to earmark, and the platform ceiling is
+        # already fully spent by the first broadcast -- must fail, not
+        # silently reuse the same 500 minutes again.
+        with self.assertRaises(PlatformCeilingExceededError):
+            commands.go_live(broadcast=second, actor=self.ministry)
+
+    def test_platform_free_reserved_minutes_excludes_the_paid_portion(self):
+        from apps.live_broadcasts import selectors
+
+        now = timezone.now()
+        self.broadcast.status = LiveBroadcastStatus.LIVE
+        self.broadcast.started_at = now
+        self.broadcast.max_viewers_applied = 50
+        self.broadcast.max_duration_minutes_applied = 30
+        self.broadcast.platform_ceiling_minutes_paid = 500
+        self.broadcast.save()
+
+        # 1,500 worst-case minus the 500 that was explicitly paid for.
+        self.assertEqual(
+            selectors.platform_free_reserved_minutes_this_month(year=now.year, month=now.month), 1000
+        )
 
 
 class NotifyFollowersOfLiveBroadcastTests(TestCase):
@@ -352,9 +492,14 @@ class EndBroadcastTests(TestCase):
         with self.assertRaises(LiveBroadcastWrongStatusError):
             commands.end_broadcast(broadcast=broadcast, reason=LiveBroadcastEndedReason.CREATOR_ENDED)
 
-    @patch("apps.live_broadcasts.tasks.poll_and_archive_recording.delay")
+    @patch("apps.live_broadcasts.tasks.archive_stopped_recording.delay")
     @patch("apps.live_broadcasts.services.commands.agora.stop_cloud_recording")
-    def test_ending_a_recording_broadcast_stops_recording_and_enqueues_polling(self, stop_mock, delay_mock):
+    def test_ending_a_recording_broadcast_stops_recording_and_enqueues_archival(self, stop_mock, delay_mock):
+        # 2026-09-10 correction: end_broadcast() now reads the file name
+        # straight from stop's own response (see stop_cloud_recording's
+        # docstring for why the old query-poll design never worked), so
+        # the mock must return a realistic serverResponse shape.
+        stop_mock.return_value = {"fileList": "recordings/sunday.mp4"}
         broadcast = self._live_broadcast()
         with self.captureOnCommitCallbacks(execute=True):
             commands.end_broadcast(broadcast=broadcast, reason=LiveBroadcastEndedReason.CREATOR_ENDED)
@@ -364,9 +509,9 @@ class EndBroadcastTests(TestCase):
         self.assertEqual(broadcast.ended_reason, LiveBroadcastEndedReason.CREATOR_ENDED)
         self.assertEqual(broadcast.recording_status, LiveBroadcastRecordingStatus.STOPPING)
         stop_mock.assert_called_once()
-        delay_mock.assert_called_once_with(broadcast.id)
+        delay_mock.assert_called_once_with(broadcast.id, "recordings/sunday.mp4")
 
-    @patch("apps.live_broadcasts.tasks.poll_and_archive_recording.delay")
+    @patch("apps.live_broadcasts.tasks.archive_stopped_recording.delay")
     def test_ending_a_broadcast_with_no_recording_does_not_enqueue_polling(self, delay_mock):
         broadcast = self._live_broadcast(recording_status=LiveBroadcastRecordingStatus.FAILED)
         commands.end_broadcast(broadcast=broadcast, reason=LiveBroadcastEndedReason.DROPPED)
@@ -464,6 +609,60 @@ class ArchiveBroadcastRecordingTests(TestCase):
                 recipient=ministry, notification_type=NotificationType.LIVE_BROADCAST_RECORDING_READY
             ).exists()
         )
+
+    def test_archiving_twice_creates_only_one_testimony(self):
+        # Regression (2026-10-09): a duplicate Celery delivery of
+        # archive_stopped_recording must not create a second DRAFT testimony.
+        from apps.testimonies.models import Testimony
+
+        ministry = _verified_ministry()
+        broadcast = LiveBroadcast.objects.create(creator=ministry, title="Sunday Service", category=_category())
+        stale_copy = LiveBroadcast.objects.get(pk=broadcast.pk)
+
+        first = commands.archive_broadcast_recording(broadcast=broadcast, video_url="https://cdn.example/a.mp4")
+        second = commands.archive_broadcast_recording(broadcast=stale_copy, video_url="https://cdn.example/a.mp4")
+
+        self.assertEqual(first.id, second.id)
+        self.assertEqual(Testimony.objects.filter(author=ministry).count(), 1)
+
+
+class ExtractRecordingFileNameTests(TestCase):
+    """2026-09-10 fix -- with avFileType: ["hls", "mp4"] a real fileList
+    contains both the .m3u8 manifest and the .mp4 file; picking whichever
+    is first (the original logic) can hand Cloudinary the unplayable HLS
+    manifest instead, which was confirmed live to fail with Cloudinary's
+    own "invalid file" error."""
+
+    def test_bare_string_response(self):
+        self.assertEqual(
+            agora.extract_recording_file_name({"fileList": "recordings/sunday.m3u8"}),
+            "recordings/sunday.m3u8",
+        )
+
+    def test_prefers_mp4_when_hls_listed_first(self):
+        response = {
+            "fileList": [
+                {"fileName": "recordings/sunday.m3u8"},
+                {"fileName": "recordings/sunday.mp4"},
+            ]
+        }
+        self.assertEqual(agora.extract_recording_file_name(response), "recordings/sunday.mp4")
+
+    def test_prefers_mp4_when_mp4_listed_first(self):
+        response = {
+            "fileList": [
+                {"fileName": "recordings/sunday.mp4"},
+                {"fileName": "recordings/sunday.m3u8"},
+            ]
+        }
+        self.assertEqual(agora.extract_recording_file_name(response), "recordings/sunday.mp4")
+
+    def test_falls_back_to_first_entry_when_no_mp4_present(self):
+        response = {"fileList": [{"fileName": "recordings/sunday.m3u8"}]}
+        self.assertEqual(agora.extract_recording_file_name(response), "recordings/sunday.m3u8")
+
+    def test_empty_response_returns_empty_string(self):
+        self.assertEqual(agora.extract_recording_file_name({}), "")
 
 
 class ReconcileStaleLiveBroadcastsTests(TestCase):

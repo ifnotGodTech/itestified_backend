@@ -7,6 +7,7 @@ from apps.common.services.media_uploads import (
     CloudinaryUploadError,
     create_direct_upload_signature,
     get_cloudinary_audio_asset,
+    upload_video_from_url,
 )
 
 
@@ -128,3 +129,79 @@ class GetCloudinaryAudioAssetTests(TestCase):
             get_cloudinary_audio_asset(public_id="audio_123")
 
         configure_mock.assert_called_once_with()
+
+
+class UploadVideoFromUrlTests(TestCase):
+    """Phase 27's live-broadcast recording relay: Agora Cloud Recording can
+    only write to S3-class storage, so the finished file is re-hosted into
+    Cloudinary by URL rather than served straight from S3."""
+
+    @mock.patch("apps.common.services.media_uploads.configure_cloudinary")
+    @mock.patch("cloudinary.uploader.upload")
+    def test_uploads_by_url_with_deterministic_public_id_and_default_folder(
+        self, upload_mock, configure_mock
+    ) -> None:
+        upload_mock.return_value = {
+            "public_id": "itestified/live-broadcasts/recordings/live-broadcast-42",
+            "secure_url": "https://res.cloudinary.com/demo/video/upload/live-broadcast-42.mp4",
+            "resource_type": "video",
+            "format": "mp4",
+            "bytes": 40_000_000,
+            "duration": 1800.0,
+            "width": 1280,
+            "height": 720,
+        }
+
+        with mock.patch.dict(os.environ, {}, clear=True):
+            result = upload_video_from_url(
+                source_url="https://bucket.example.com/recordings/broadcast-42.mp4",
+                public_id="live-broadcast-42",
+            )
+
+        configure_mock.assert_called_once_with()
+        upload_mock.assert_called_once_with(
+            "https://bucket.example.com/recordings/broadcast-42.mp4",
+            resource_type="video",
+            type="upload",
+            folder="itestified/live-broadcasts/recordings",
+            public_id="live-broadcast-42",
+            overwrite=True,
+        )
+        self.assertEqual(
+            result.secure_url, "https://res.cloudinary.com/demo/video/upload/live-broadcast-42.mp4"
+        )
+        self.assertEqual(result.duration_ms, 1_800_000)
+        self.assertTrue(result.has_visual_track)
+
+    @mock.patch("apps.common.services.media_uploads.configure_cloudinary")
+    @mock.patch("cloudinary.uploader.upload")
+    def test_folder_env_override_wins(self, upload_mock, configure_mock) -> None:
+        upload_mock.return_value = {
+            "public_id": "custom/live-recordings/live-broadcast-1",
+            "secure_url": "https://res.cloudinary.com/demo/video/upload/live-broadcast-1.mp4",
+            "resource_type": "video",
+            "format": "mp4",
+            "bytes": 1,
+            "duration": 1,
+        }
+        env = {"CLOUDINARY_LIVE_BROADCAST_RECORDING_FOLDER": "custom/live-recordings"}
+
+        with mock.patch.dict(os.environ, env, clear=True):
+            upload_video_from_url(source_url="https://bucket.example.com/x.mp4", public_id="live-broadcast-1")
+
+        upload_mock.assert_called_once_with(
+            "https://bucket.example.com/x.mp4",
+            resource_type="video",
+            type="upload",
+            folder="custom/live-recordings",
+            public_id="live-broadcast-1",
+            overwrite=True,
+        )
+
+    @mock.patch("apps.common.services.media_uploads.configure_cloudinary")
+    @mock.patch("cloudinary.uploader.upload")
+    def test_provider_failure_is_wrapped(self, upload_mock, configure_mock) -> None:
+        upload_mock.side_effect = Exception("timeout")
+
+        with self.assertRaisesRegex(CloudinaryUploadError, "Recording relay upload failed: timeout"):
+            upload_video_from_url(source_url="https://bucket.example.com/x.mp4", public_id="live-broadcast-1")
