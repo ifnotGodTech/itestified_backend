@@ -12,7 +12,7 @@ This repo now includes a Render Blueprint at [`/render.yaml`](/Users/mac/Documen
    - `itestified-db` (Postgres)
 4. Fill the `sync: false` env vars in Render dashboard:
    - `ADMIN_ENTRY_CODE`
-   - `EMAIL_HOST`, `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD`
+   - `BREVO_API_KEY`, `BREVO_FROM_EMAIL` (email is sent via Brevo's HTTP API; `EMAIL_PROVIDER=brevo` is set by the Blueprint)
    - `DEFAULT_FROM_EMAIL`, `SUPPORT_EMAIL`
    - `GOOGLE_OAUTH_CLIENT_IDS`
    - Cloudinary keys/URL for server-side video uploads

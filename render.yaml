@@ -60,28 +60,12 @@ services:
           property: port
       - key: ADMIN_ENTRY_CODE
         sync: false
-      - key: EMAIL_HOST
-        sync: false
-      - key: EMAIL_PORT
-        value: "587"
-      - key: EMAIL_HOST_USER
-        sync: false
-      - key: EMAIL_HOST_PASSWORD
-        sync: false
-      - key: EMAIL_USE_TLS
-        value: true
-      - key: EMAIL_USE_SSL
-        value: false
       - key: DEFAULT_FROM_EMAIL
         sync: false
       - key: SUPPORT_EMAIL
         sync: false
       - key: EMAIL_PROVIDER
-        value: smtp
-      - key: RESEND_API_KEY
-        sync: false
-      - key: RESEND_FROM_EMAIL
-        sync: false
+        value: brevo
       - key: BREVO_API_KEY
         sync: false
       - key: BREVO_FROM_EMAIL
@@ -273,28 +257,12 @@ services:
           property: port
       - key: ADMIN_ENTRY_CODE
         sync: false
-      - key: EMAIL_HOST
-        sync: false
-      - key: EMAIL_PORT
-        value: "587"
-      - key: EMAIL_HOST_USER
-        sync: false
-      - key: EMAIL_HOST_PASSWORD
-        sync: false
-      - key: EMAIL_USE_TLS
-        value: true
-      - key: EMAIL_USE_SSL
-        value: false
       - key: DEFAULT_FROM_EMAIL
         sync: false
       - key: SUPPORT_EMAIL
         sync: false
       - key: EMAIL_PROVIDER
-        value: smtp
-      - key: RESEND_API_KEY
-        sync: false
-      - key: RESEND_FROM_EMAIL
-        sync: false
+        value: brevo
       - key: BREVO_API_KEY
         sync: false
       - key: BREVO_FROM_EMAIL

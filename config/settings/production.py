@@ -42,19 +42,11 @@ SECURE_HSTS_PRELOAD = True
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 USE_X_FORWARDED_HOST = get_bool("DJANGO_USE_X_FORWARDED_HOST", True)
 ADMIN_ENTRY_CODE = os.environ["ADMIN_ENTRY_CODE"]
-EMAIL_BACKEND = os.environ.get("EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend")
-EMAIL_HOST = os.environ["EMAIL_HOST"]
-EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "587"))
-EMAIL_HOST_USER = os.environ["EMAIL_HOST_USER"]
-EMAIL_HOST_PASSWORD = os.environ["EMAIL_HOST_PASSWORD"]
-EMAIL_USE_TLS = get_bool("EMAIL_USE_TLS", True)
-EMAIL_USE_SSL = get_bool("EMAIL_USE_SSL", False)
-EMAIL_TIMEOUT = int(os.environ.get("EMAIL_TIMEOUT", "10"))
+# Email goes out through Brevo's HTTP API (apps/common/services/email.py),
+# not SMTP, so no EMAIL_HOST* variables are required here.
 DEFAULT_FROM_EMAIL = os.environ["DEFAULT_FROM_EMAIL"]
 SUPPORT_EMAIL = os.environ["SUPPORT_EMAIL"]
-EMAIL_PROVIDER = os.environ.get("EMAIL_PROVIDER", "smtp")
-RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
-RESEND_FROM_EMAIL = os.environ.get("RESEND_FROM_EMAIL", DEFAULT_FROM_EMAIL)
+EMAIL_PROVIDER = os.environ.get("EMAIL_PROVIDER", "brevo")
 BREVO_API_KEY = os.environ.get("BREVO_API_KEY", "")
 BREVO_FROM_EMAIL = os.environ.get("BREVO_FROM_EMAIL", DEFAULT_FROM_EMAIL)
 # Policy lock: OTP hints must never be exposed in production responses.

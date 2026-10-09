@@ -146,9 +146,9 @@ EMAIL_USE_SSL = get_bool("EMAIL_USE_SSL", False)
 EMAIL_TIMEOUT = int(os.environ.get("EMAIL_TIMEOUT", "10"))
 DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "iTestified <no-reply@itestified.app>")
 SUPPORT_EMAIL = os.environ.get("SUPPORT_EMAIL", "support@itestified.app")
+# "brevo" in production; "smtp" means Django's EMAIL_BACKEND above (local
+# development and tests). See apps/common/services/email.py.
 EMAIL_PROVIDER = os.environ.get("EMAIL_PROVIDER", "smtp")
-RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
-RESEND_FROM_EMAIL = os.environ.get("RESEND_FROM_EMAIL", DEFAULT_FROM_EMAIL)
 BREVO_API_KEY = os.environ.get("BREVO_API_KEY", "")
 BREVO_FROM_EMAIL = os.environ.get("BREVO_FROM_EMAIL", DEFAULT_FROM_EMAIL)
 

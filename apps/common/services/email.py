@@ -4,7 +4,6 @@ from django.core.mail import EmailMultiAlternatives, get_connection
 
 from apps.common.exceptions import EmailProviderNotConfiguredError
 
-RESEND_EMAIL_API_URL = "https://api.resend.com/emails"
 BREVO_EMAIL_API_URL = "https://api.brevo.com/v3/smtp/email"
 
 
@@ -24,35 +23,19 @@ def send_email(
     from_email: str,
     to_email: str,
 ) -> None:
-    """Send an email via the configured EMAIL_PROVIDER (resend, brevo, or SMTP fallback).
+    """Send an email via the configured EMAIL_PROVIDER.
 
-    Raises EmailProviderNotConfiguredError if the selected provider is missing
-    its API key, or the provider's/SMTP's own exception on delivery failure.
+    "brevo" (the live provider) sends through Brevo's HTTP API. "smtp" sends
+    through Django's EMAIL_BACKEND -- used by local development and tests
+    (console/locmem backends), not production.
+
+    Raises EmailProviderNotConfiguredError for an unknown provider or a
+    missing Brevo API key, or the provider's own exception on delivery failure.
     """
     provider = getattr(settings, "EMAIL_PROVIDER", "smtp").lower()
 
-    if provider == "resend":
-        api_key = getattr(settings, "RESEND_API_KEY", "")
-        if not api_key:
-            raise EmailProviderNotConfiguredError("Resend API key is not configured.")
-        response = requests.post(
-            RESEND_EMAIL_API_URL,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-                "User-Agent": "itestified-backend",
-            },
-            json={
-                "from": getattr(settings, "RESEND_FROM_EMAIL", from_email),
-                "to": [to_email],
-                "subject": subject,
-                "text": text_message,
-                "html": html_message,
-            },
-            timeout=getattr(settings, "EMAIL_TIMEOUT", 10),
-        )
-        response.raise_for_status()
-        return
+    if provider not in ("brevo", "smtp"):
+        raise EmailProviderNotConfiguredError(f"Unknown EMAIL_PROVIDER '{provider}'; expected 'brevo' or 'smtp'.")
 
     if provider == "brevo":
         api_key = getattr(settings, "BREVO_API_KEY", "")

@@ -337,43 +337,27 @@ class AuthnServiceTests(TestCase):
         self.assertIsNone(unknown)
         self.assertEqual(len(mail.outbox), 1)
 
-    @override_settings(
-        EMAIL_PROVIDER="resend",
-        RESEND_API_KEY="re_test",
-        RESEND_FROM_EMAIL="iTestified <onboarding@example.com>",
-        DEFAULT_FROM_EMAIL="iTestified <no-reply@example.com>",
-    )
     @patch("apps.common.services.email.requests.post")
-    def test_start_password_reset_can_send_email_with_resend_provider(self, mock_post) -> None:
-        user = UserFactory(email="resend-reset@example.com")
-        response = Mock()
-        response.raise_for_status.return_value = None
-        mock_post.return_value = response
+    def test_unknown_email_provider_fails_loudly_instead_of_falling_back_to_smtp(self, mock_post) -> None:
+        # Resend was removed 2026-10-09. A leftover EMAIL_PROVIDER=resend, or a
+        # typo, must surface as a delivery error rather than silently sending
+        # through the Django SMTP backend.
+        for provider in ("resend", "sendgrid"):
+            with self.subTest(provider=provider), override_settings(EMAIL_PROVIDER=provider):
+                user = UserFactory(email=f"{provider}-provider@example.com")
+                with self.assertRaises(EmailDeliveryError):
+                    start_password_reset(email=user.email)
+        mock_post.assert_not_called()
+        self.assertEqual(len(mail.outbox), 0)
 
-        challenge = start_password_reset(email=user.email)
-
-        self.assertIsNotNone(challenge)
-        mock_post.assert_called_once()
-        _url, kwargs = mock_post.call_args
-        self.assertEqual(kwargs["headers"]["Authorization"], "Bearer re_test")
-        self.assertEqual(kwargs["json"]["from"], "iTestified <onboarding@example.com>")
-        self.assertEqual(kwargs["json"]["to"], [user.email])
-        self.assertIn(challenge.code, kwargs["json"]["text"])
-
-    @override_settings(
-        EMAIL_PROVIDER="resend",
-        RESEND_API_KEY="re_test",
-        RESEND_FROM_EMAIL="iTestified <onboarding@example.com>",
-    )
+    @override_settings(EMAIL_PROVIDER="brevo", BREVO_API_KEY="")
     @patch("apps.common.services.email.requests.post")
-    def test_start_password_reset_raises_delivery_error_when_resend_fails(self, mock_post) -> None:
-        user = UserFactory(email="resend-failure@example.com")
-        response = Mock()
-        response.raise_for_status.side_effect = RuntimeError("resend failed")
-        mock_post.return_value = response
+    def test_brevo_without_api_key_raises_delivery_error(self, mock_post) -> None:
+        user = UserFactory(email="brevo-no-key@example.com")
 
         with self.assertRaises(EmailDeliveryError):
             start_password_reset(email=user.email)
+        mock_post.assert_not_called()
 
     @override_settings(
         EMAIL_PROVIDER="brevo",
