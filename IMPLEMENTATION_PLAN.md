@@ -11,16 +11,46 @@ It should be used together with:
 
 ## Status
 
-Current state, updated 2026-08-24:
+Snapshot as of 2026-10-09. **Each phase's own `Status:` line is the source of truth.** This table only says *whether* a phase is done; what shipped, what was live-verified, and any follow-ups live in that phase's section. When a phase's status changes, update its own `Status:` line and its one row here, and nothing else. (This replaced a narrative summary that drifted out of sync with the per-phase lines four times between 2026-08-15 and 2026-10-09.)
 
-- **Completed**: Phase 0 (Domain Discovery And Contract Lock), Phase 1 (Project Bootstrap And Infrastructure), Phase 2 (Identity, Auth, And Admin Access), Phase 3 (Testimonies Core Domain), Phase 4 (Moderation And Review Workflows), Phase 5 (Donations And Giving), Phase 6 (Notifications And User Activity), Phase 7 (Content Management Domains), Phase 10 (App Release & Version Management), Phase 12 (Scripture Of The Day Notifications), Phase 13 (Profile Support & Community Content), Phase 14 (Self-Service Account Security — Change Password & Delete Account), Phase 15 (Testimony Reactions), Phase 16 (Personalized "For You" Feed), Phase 17 (Scripture Streak — all 4 slices completed 2026-07-30; the Slice 3 reminder push ships with a known, documented open gap around per-user timezone, sending at one fixed UTC time instead), Phase 18 (Profile Identity & Reflection "Your Journey" — all 3 slices completed 2026-07-30; Shared stays mock data until Phase 11 ships a real share sheet), Phase 19 (Testimony Type & Pull-Quote Polish — all 3 slices completed 2026-07-31), Phase 27 (Live Testimony Broadcasts — all nine sub-slices completed 2026-08-26, see its own Background/Status notes for what's live-verified vs. still pending real Agora credentials) — see each phase's own dated `Status:` line and any post-completion review/fix/refinement entries below it for exact scope, what was live-tested, and what (if anything) remains an open follow-up.
-- **In progress**: Phase 11 (Testimony Sharing — Slices 1-3 implemented 2026-08-03/04, see its own `Status:` line; Slice 4/iOS blocked on the Apple Developer account question).
-- **Completed 2026-08-16**: Phase 20 (Immersive Home Feed — all 7 slices done and confirmed on a real Android emulator, see its own `Status:` line).
-- **Completed 2026-08-18**: Phase 21 (Premium Subscriptions & Billing Foundation — all 6 slices done: 1-3 backend+mobile 2026-08-05, 4 admin dashboard 2026-08-07, 5 admin pricing 2026-08-15, 6 mobile Premium status badges 2026-08-18, see its own `Status:` line).
-- **Completed 2026-08-17**: Phase 22 (AI Transcription & Translation — all 5 slices done: 1-4 backend+mobile 2026-08-17, 5 admin dashboard 2026-08-17; see its own `Status:` line for the outstanding `OPENAI_API_KEY`/Render-sync caveats).
-- **In progress**: Phase 23 (Creator & Ministry Profiles — Slices 1-7 completed 2026-08-18 (backend + Ministry setup/photo + follow), see its own `Status:` line; mobile Slices 8-9 not started).
-- **Completed 2026-08-24**: Phase 28 (all backend, mobile, dashboard/admin, real-provider, Android background-playback, regression, and authenticated-E2E gates passed; see the phase status and `PHASE_28_REMEDIATION_REVIEW.md` for the exact results and the separate live-Gemini follow-up).
-- **Not started**: Phase 8 (Reviews, Analytics, And Operational Admin Features), Phase 9 (Integration Hardening And Client Wiring Support), Phase 24 (Referral Program — Attribution + Manual Month-End Payout), Phase 26 (Multi-Currency & Multi-Region Expansion), Phase 30 (Exclusive Testimonies & Interviews), Phase 31 (Priority Moderation & Publishing) — Phases 21-27 proposed 2026-08-04 from the Christian Testimony Platform Business Blueprint (now saved verbatim as `BUSINESS_BLUEPRINT.md`); Phases 28-31 added 2026-08-16/17 after a full alignment review found these blueprint features had no corresponding phase at all; Phase 32 added 2026-08-17 after confirming video upload has never had a user-facing (non-admin) path; Phase 33 added 2026-08-27 from a design discussion about testimony-watching friction. See each phase's own `Background:` note for sequencing rationale and open product/legal questions. Phase 29 (Playlists & Testimony Collections) completed 2026-08-26, Phase 32 (Self-Service Video Testimony Upload, Premium) completed 2026-08-27, Phase 33 (Immersive Discovery) fully completed 2026-08-27 (all 3 slices) — see each phase's own Status line. Correction 2026-08-27: this line previously listed Phase 25 (Offline Download) as not started; that was stale — Phase 25's own section has read ✅ Completed since 2026-08-24. Trust each phase's own Status line over this summary if the two ever disagree.
+| Phase | Name | Status | Open follow-up (detail in the phase) |
+|---|---|---|---|
+| 0 | Domain Discovery And Contract Lock | ✅ Complete | |
+| 1 | Project Bootstrap And Infrastructure | ✅ Complete | |
+| 2 | Identity, Auth, And Admin Access | ✅ Complete | |
+| 3 | Testimonies Core Domain | ✅ Complete | |
+| 4 | Moderation And Review Workflows | ✅ Complete | |
+| 5 | Donations And Giving | ✅ Complete | |
+| 6 | Notifications And User Activity | ✅ Complete | iOS push needs the Apple Developer account / APNs key |
+| 7 | Content Management Domains | ✅ Complete | |
+| 8 | Reviews, Analytics, And Operational Admin Features | ⬜ Not started | dashboard Reviews / Analytics / Team Management screens are still hardcoded mocks |
+| 9 | Integration Hardening And Client Wiring Support | ⬜ Not started | |
+| 10 | App Release & Version Management | ✅ Complete | |
+| 11 | Testimony Sharing | 🟡 Slices 1-3 done | Slice 4 (iOS Universal Links) blocked on the Apple Developer account |
+| 12 | Scripture Of The Day Notifications | ✅ Complete | |
+| 13 | Profile Support & Community Content | ✅ Complete | |
+| 14 | Self-Service Account Security | ✅ Complete | |
+| 15 | Testimony Reactions | ✅ Complete | |
+| 16 | Personalized "For You" Feed | ✅ Complete | |
+| 17 | Scripture Streak | ✅ Complete | reminder push sends at one fixed UTC time (no per-user timezone) |
+| 18 | Profile Identity & Reflection ("Your Journey") | ✅ Complete | |
+| 19 | Testimony Type & Pull-Quote Polish | ✅ Complete | |
+| 20 | Immersive Home Feed | ✅ Complete | |
+| 21 | Premium Subscriptions & Billing Foundation | ✅ Complete | |
+| 22 | AI Transcription & Translation | ✅ Complete | no AI provider key configured yet, so no real transcript has been generated |
+| 23 | Creator & Ministry Profiles | ✅ Complete | |
+| 24 | Referral Program | ✅ Complete | |
+| 25 | Offline Download (Premium) | ✅ Complete | needs Render's Celery worker set up to work in production |
+| 26 | Multi-Currency & Multi-Region Expansion | ⏸ Deferred | revisit on real demand for non-NGN/USD subscribers |
+| 27 | Live Testimony Broadcasts | ✅ Complete | |
+| 28 | Audio Testimonies | ✅ Complete | |
+| 29 | Playlists & Testimony Collections | ✅ Complete | |
+| 30 | Exclusive Testimonies & Interviews | ⬜ Not started | blocked on who can mark content exclusive |
+| 31 | Priority Moderation & Publishing | ⬜ Not started | |
+| 32 | Self-Service Video Testimony Upload (Premium) | ✅ Complete | |
+| 33 | Immersive Discovery | ✅ Complete | |
+
+Test baseline: as of 2026-10-09 the full backend suite passes with 0 failures. Older entries below cite "the pre-existing 21 `apps.authn` failures" (live Brevo calls from tests). That was accurate when written, but the baseline no longer exists, so any new failure is a real one.
 
 Known open items, tracked but not blocking any phase's completion (see the referenced phase for detail):
 - iOS push notifications need the Apple Developer account / APNs key resolved (Phase 6); Android push is confirmed working end-to-end on a real device.
@@ -100,21 +130,9 @@ Important constraint:
 
 ## Phase Status
 
-- Phase 0: Completed
-- Phase 1: Completed
-- Phase 2: Completed
-- Phase 3: Completed
-- Phase 4: Completed (Slices 1-11 implemented)
-- Phase 5: Completed (Slices 1-7 implemented)
-- Phase 6: Completed (Slices 1-7 implemented)
-- Phase 7: Completed (Slices 1-8 implemented)
-- Phase 8: Not started
-- Phase 9: Not started
+See the table in `## Status` at the top of this file. It's the only phase summary, so there's just one place to keep in sync with each phase's own `Status:` line. (A second Phases 0-9 list used to live here; it was removed 2026-10-09 after it drifted too, listing Phase 6 as 7 slices when it shipped 12.)
 
-Corrected 2026-08-15 (audit found this list had gone stale against the narrative `## Status` section above — Phase 5-7 were marked "In progress" here despite being complete and integrated). This list only tracks Phases 0-9; Phases 10-27 status lives solely in the narrative `## Status` section above and each phase's own dated `Status:` line — do not duplicate it here, to avoid the same drift recurring.
-
-Current focus:
-- see the narrative `## Status` section above for what's actually in progress (Phases 11, 20, 21 as of 2026-08-15); Phase 8 is next once those finish.
+Current focus: no phase is in progress. Phase 8 (Reviews, Analytics, And Operational Admin Features) is the next unstarted phase in the original sequence; Phases 30 and 31 are also unstarted, and Phase 11 Slice 4 is blocked externally.
 
 ## Product Understanding
 
@@ -1444,7 +1462,9 @@ Test:
 - amount/currency correctness at every step, with an explicit regression test — this exact class of bug already broke Phase 5's donation flow once, undetected until a later review
 - the entitlement check behaves correctly through every state transition, including the `past_due` grace period
 
-Status: In progress -- Slice 1 (subscribe) and Slice 3 (manage/cancel) fully implemented end-to-end 2026-08-05, backend and mobile both wired, tested, committed, and pushed to `origin/main` on both repos. New `apps.subscriptions` app (`Subscription`/`SubscriptionStatusHistory`/`SubscriptionEventLog` models, a DB-level partial `UniqueConstraint` enforcing one non-terminal subscription per user, `subscribe`/`cancel_subscription`/webhook-driven `apply_charge_callback`/`apply_cancellation_callback` service commands, `is_user_premium`/`get_current_subscription` selectors for later phases to reuse, admin list/detail views mirroring Donations). `FlutterwaveGateway` relocated from `apps.donations` to `apps.common.services` since it's now genuinely shared, and extended with Payment Plans support. Flutterwave supports only one webhook URL per account, so donation and subscription webhook events both route through the existing `/api/v1/donations/provider/callback/` endpoint, dispatched internally by event type. Mobile: a redesigned Plans screen (Free vs. Premium comparison, NGN/USD currency switch) and a single state-aware "My Subscription" entry point in Profile, both wired to the real endpoints via a new `features/subscriptions` data/domain layer (Riverpod + repository/usecase pattern mirroring Giving), plus a `SubscriptionCheckoutScreen` reusing Giving's Flutterwave WebView pattern (polling `GET /mine/` after return instead of a `/verify/` call, since activation is webhook-only).
+Status: ✅ Completed 2026-08-18 -- all 6 slices done (1-3 backend+mobile 2026-08-05/06, 4 admin dashboard 2026-08-07, 5 admin pricing 2026-08-15, 6 Premium status badges 2026-08-18); see each slice's own entry above. This line read "In progress" until 2026-10-09; the original 2026-08-05 note follows for history.
+
+Original 2026-08-05 status note: Slice 1 (subscribe) and Slice 3 (manage/cancel) fully implemented end-to-end 2026-08-05, backend and mobile both wired, tested, committed, and pushed to `origin/main` on both repos. New `apps.subscriptions` app (`Subscription`/`SubscriptionStatusHistory`/`SubscriptionEventLog` models, a DB-level partial `UniqueConstraint` enforcing one non-terminal subscription per user, `subscribe`/`cancel_subscription`/webhook-driven `apply_charge_callback`/`apply_cancellation_callback` service commands, `is_user_premium`/`get_current_subscription` selectors for later phases to reuse, admin list/detail views mirroring Donations). `FlutterwaveGateway` relocated from `apps.donations` to `apps.common.services` since it's now genuinely shared, and extended with Payment Plans support. Flutterwave supports only one webhook URL per account, so donation and subscription webhook events both route through the existing `/api/v1/donations/provider/callback/` endpoint, dispatched internally by event type. Mobile: a redesigned Plans screen (Free vs. Premium comparison, NGN/USD currency switch) and a single state-aware "My Subscription" entry point in Profile, both wired to the real endpoints via a new `features/subscriptions` data/domain layer (Riverpod + repository/usecase pattern mirroring Giving), plus a `SubscriptionCheckoutScreen` reusing Giving's Flutterwave WebView pattern (polling `GET /mine/` after return instead of a `/verify/` call, since activation is webhook-only).
 
 Verified 2026-08-05/06: 43 backend tests + 20 mobile tests (widget + controller level), all new and all passing, cover webhook idempotency, amount/currency conversion, every state transition (including the `past_due` grace period and the `cancel_at_period_end` scheduling below), the DB uniqueness constraint, and permission/auth boundaries. Full `apps.donations` + `apps.subscriptions` backend suites pass (73/73); a full backend regression run turned up no new failures outside the pre-existing, already-tracked `apps.authn`/`apps.users` Brevo-dependent test failures noted above (confirmed via `git stash` that they fail identically without any Phase 21 changes present). The full mobile suite (~385 tests) was also run end-to-end: the only failures (6-8, count varies run to run) are pre-existing and unrelated -- `responsive_release_gate_test.dart` and a handful of others call the live `itestified-backend.onrender.com` backend directly instead of a mock, so they're flaky by network dependency, not by anything touched here. None of the new subscriptions/Plans/My Subscription tests failed in any of the three full-suite runs used to check this.
 
