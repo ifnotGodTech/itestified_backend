@@ -2207,53 +2207,77 @@ Build:
   - one shared **study pack**: a SQLite file with the lexicon entries (keyed by extended Strong's number) and the concordance index (Strong's number → verse, indexed), shared by every version since it's built from the original-language text
   - each pack is gzip-compressed for download. Rough sizes, to be confirmed when first built: ~5–10 MB per version pack, ~10–20 MB for the study pack.
 - **Building packs:** a repeatable backend management command (`build_bible_packs`) reads pinned dataset files (BSB text + translation tables, the KJV tagged text, STEPBible TAGNT/TAHOT/TBESG/TBESH, each pinned by source URL + checksum, not committed to the repo). It writes the SQLite packs and prints a coverage report. BSB alignment means placing the translation tables' English phrases into the verse text in order, which is the riskiest data step. The build fails loudly below an agreed alignment-coverage threshold rather than shipping silently broken word taps.
-- **Hosting:** packs live in object storage with a CDN-friendly public URL. Default choice: the existing S3 bucket under its own prefix, kept out of the Agora relay prefix's expiry lifecycle rule. Cloudinary's raw-file size limits on lower plans make it a poor fit for files this size. A second management command (`publish_bible_pack`) uploads a built pack and registers it in the manifest below.
+- **Hosting:** packs live in object storage with a CDN-friendly public URL. Default choice: the existing S3 bucket under its own prefix, kept out of the Agora relay prefix's expiry lifecycle rule. Cloudinary's raw-file size limits on lower plans make it a poor fit for files this size. Uploading uses the AWS CLI. A second management command, `publish_bible_pack`, then downloads the public URL back, confirms size and sha256 match the built file, and only then registers it in the manifest below. No AWS SDK dependency is added to the backend.
 - **Backend: a manifest only.** A small new `apps.bible` app following `backend/AGENTS.md`, holding one row per downloadable pack:
   - code, display name, description line, attribution/licence text
   - kind (version or study), whether it supports word study, online-only flag (for later licensed versions)
   - file URL, size in bytes, sha256 checksum, data version
   - enabled and default flags
 
-  Plus one public, read-only, HTTP-cacheable endpoint, `GET /api/v1/bible/packs/`. That's a handful of rows in total, not Scripture text.
+  Plus one public, read-only, HTTP-cacheable endpoint, `GET /api/v1/bible/packs/`, and the admin endpoints in Slice 8. That's 3 rows at launch, not Scripture text (see the database footprint note under Sub-slices).
 - **Mobile:** a new `features/bible` feature (clean architecture per `mobile/AGENTS.md`), with `sqflite` added as a dependency. Hive is a key-value store and can't run the indexed "every verse with G25" query the concordance needs. The feature includes:
   - a pack downloader with a progress bar. It verifies the sha256 before use, never opens a partially downloaded or mismatched file, retries cleanly, and notices when the manifest's data version is newer than the one on the phone.
   - the reader, the selection menu ("Look up", Copy, Share), the word-study sheet, and the concordance, all querying the local SQLite packs
   - reading position and chosen version saved on the phone (no account sync, per the 2026-10-09 discussion)
 - **Attribution:** a "Sources & credits" entry in the Bible tab naming the BSB (public domain), KJV, and STEPBible data (CC BY 4.0, Tyndale House), as the CC BY licence requires. The text comes from each pack's attribution field.
 
-Sub-slices:
+Sub-slices (each lists the backend, mobile, and dashboard work it ships):
+
+**Database footprint for the whole phase:** one small `BiblePack` table holding one row per downloadable file. At launch that's 3 rows (BSB, KJV, the shared study pack), each with a URL, size, checksum, and flags. No Scripture text, word links, lexicon, or concordance data is ever stored in Postgres; all of it lives in the pack files in object storage and on readers' phones.
 
 #### Mobile User Flows
 - **Slice 1 — Download a Bible and read a chapter** — Goal: Anyone, guest or registered, can open the Bible tab, get a Bible onto their phone, and read Scripture comfortably.
-  - **First open:** with nothing downloaded yet, the tab shows a one-time download screen with the default version (BSB) and the study pack. It gives the combined size, a "best on Wi-Fi" note, and a progress bar, then opens John 1.
-  - **Reading:** later opens go straight to the last chapter read. The reader shows verse numbers, the chapter title, and the current version. It has adjustable text size, the app's dark and light themes, and previous/next chapter controls, and works fully offline.
-  - Also includes the tab change (see Decisions above):
-    - The bottom bar's Category tab becomes **Bible**.
-    - The Search screen gains a **category chip row** of active categories from the backend.
-    - Tapping a chip opens that category's testimonies from the backend's paginated `GET /testimonies/?category=<slug>` filter, replacing today's client-side text match over the first 20 feed items. The existing Video/Audio/Written tabs are kept.
-    - The **Follow / Following** button moves into that category screen's header, with the same guest sign-in prompt as today.
-    - The **guest Home header gains a search button.** Today only the registered header has one, so without it guests would lose all access to categories.
-    - Category browsing stays within two taps of Home for both guests and registered users.
-    - The old `CategoryScreen` list and its slug text-match browse path are deleted, not left as dead code.
-- **Slice 2 — Go to any book, chapter, or reference** — Goal: A reader can get anywhere in the Bible in a couple of taps. A book picker (Old/New Testament, the 66 books in canonical order) leads to a chapter grid. A "Go to reference" field accepts typed references such as "Jn 3:16", "1 Cor 13", or "Psalm 23", and lands on and briefly highlights the verse.
-- **Slice 3 — Switch version, downloading it if needed** — Goal: A reader can switch between BSB and KJV without losing their place. The version sheet lists every enabled version with its full name, a "Word study" badge where supported, and whether it's on the phone. A version not yet downloaded shows its size and a Download action with progress; once downloaded it opens straight away. Switching keeps the same chapter and scroll position (anchored to the top visible verse), and the choice is remembered.
-- **Slice 4 — Manage downloaded Bibles** — Goal: A reader can see what's on their phone, free up space, and get data updates. A "Downloaded Bibles" screen (from the version sheet) lists each downloaded pack with its size and a Delete action. The version being read and the study pack can't be deleted while they're the only ones left. When the manifest has a newer data version for a pack, an "Update available" action re-downloads it, and the old copy stays in use until the new one is verified.
-- **Slice 5 — Select text and study the original word** — Goal: A reader can select a word in the text and see what it means in the original Hebrew or Greek. The selection menu adds **Look up** beside Copy and Share. The word-study sheet shows:
-  - the original word and transliteration
-  - the Strong's number
-  - the parsed form in plain words (e.g. "Verb · aorist · active · indicative · 3rd person singular")
-  - the brief lexicon definition
-  - how the word is translated in this version
-  - "Used N times →"
-  Selecting a phrase that spans several original words ("eternal life") lists each underlying word to pick from. A selection with no linked original word, such as punctuation or a word the translators supplied, says so plainly instead of guessing. Everything is answered from the local packs, offline.
-- **Slice 6 — See everywhere a word is used (concordance)** — Goal: A reader can follow one original word through the whole Bible. From the word-study sheet, "Used N times" opens a concordance list for that Strong's number, grouped by book with a count per book. Each row shows the reference and the verse in the current version, with the matching English word emphasised. Tapping a row opens the reader at that verse, highlighted. The list is paged and filterable by book. Not by Old/New Testament: a Greek word only occurs in the New Testament and a Hebrew word only in the Old, so that filter would never narrow anything (caught while drawing the mock).
+  - **Backend:**
+    - **`apps.bible` app:** the `BiblePack` model and migration with the fields listed under Build, kind version/study, and a partial `UniqueConstraint` allowing exactly one default version pack. A selector for enabled packs. A public, read-only, paginated, HTTP-cacheable `GET /api/v1/bible/packs/`.
+    - **`build_bible_packs` command:** builds the BSB **version pack** (verse text and attribution only, at this slice) from the pinned BSB source, and is reproducible (same input gives the same checksum).
+    - **`publish_bible_pack` command:** after the file is uploaded to the S3 `bible-packs/` prefix with the AWS CLI, it downloads the public URL back, confirms its size and sha256 match the local file, and only then creates or updates the manifest row. A bad upload is never registered, and no AWS SDK dependency is added.
+    - **Categories:** no new endpoints. The existing `GET /testimonies/categories/`, `GET /testimonies/?category=<slug>` (paginated), and `POST/DELETE /testimonies/categories/<id>/follow/` already cover the relocated category screens. Their tests are re-checked as a regression gate.
+  - **Mobile:**
+    - **First open:** with nothing downloaded, the tab shows a one-time download screen for the default version. It gives the size, a "best on Wi-Fi" note, and a progress bar. The downloader verifies the sha256 before use and never opens a partial or mismatched file, then opens John 1.
+    - **Reading:** later opens go straight to the last chapter read. The reader shows verse numbers, the chapter title, and the current version. It has adjustable text size, dark and light themes, and previous/next chapter controls, and works fully offline. `sqflite` and the Literata/Noto Serif font assets are added.
+    - **Tab change** (see Decisions):
+      - The Category tab becomes **Bible**.
+      - Search gains a **category chip row** of active categories.
+      - A chip opens that category's testimonies from `GET /testimonies/?category=<slug>`, replacing the client-side text match over the first 20 feed items. Video/Audio/Written tabs are kept.
+      - **Follow / Following** moves into that screen's header, with the same guest sign-in prompt.
+      - The **guest Home header gains a search button**.
+      - Categories stay within two taps of Home for guests and registered users.
+      - The old `CategoryScreen` and its slug text-match path are deleted.
+- **Slice 2 — Go to any book, chapter, or reference** — Goal: A reader can get anywhere in the Bible in a couple of taps.
+  - **Backend:** none. Navigation reads the downloaded pack.
+  - **Mobile:** a book picker (Old/New Testament, the 66 books in canonical order) leading to a chapter grid. A **reference parser** (book names, common abbreviations, numbered books like "1 Cor" / "I Corinthians", chapter-only and verse-range forms), reused by Slice 7. A "Go to reference" field accepts "Jn 3:16", "1 Cor 13", or "Psalm 23", and lands on and briefly highlights the verse.
+- **Slice 3 — Switch version, downloading it if needed** — Goal: A reader can switch between BSB and KJV without losing their place.
+  - **Backend:** `build_bible_packs` gains the **KJV version pack** (text and attribution), published and registered through the same `publish_bible_pack` step as a new manifest row. Which KJV source is used depends on the open KJV tagging decision (see Status). Plain KJV text is public domain either way, so this slice isn't blocked by it.
+  - **Mobile:** the version sheet lists every enabled version with its full name, a "Word study" badge where supported, and whether it's on the phone. A version not yet downloaded shows its size and a Download action with progress; once downloaded it opens straight away. Switching keeps the same chapter and scroll position (anchored to the top visible verse), and the choice is remembered on the phone.
+- **Slice 4 — Manage downloaded Bibles** — Goal: A reader can see what's on their phone, free up space, and get data updates.
+  - **Backend:** none new. Publishing a rebuilt pack bumps that row's data version (already part of `publish_bible_pack`), and that is what tells phones an update exists.
+  - **Mobile:** a "Downloaded Bibles" screen (from the version sheet) lists each downloaded pack with its size and a Delete action. The version being read can't be deleted while it's the only one left. When the manifest's data version is newer than the phone's, an "Update available" action re-downloads it, and the old copy stays in use until the new one is verified.
+- **Slice 5 — Select text and study the original word** — Goal: A reader can select a word in the text and see what it means in the original Hebrew or Greek.
+  - **Backend (pack build, still no database tables):**
+    - **Word links:** `build_bible_packs` adds per-verse word links (character offsets, Strong's number, morphology code) to the **BSB pack**, placing the translation tables' English phrases into the verse text in order. It prints a coverage report and fails below the agreed threshold. The KJV pack gets word links too if the KJV tagging decision allows.
+    - **Study pack:** a new pack holding the lexicon (STEPBible TBESG/TBESH, keyed by extended Strong's number), a morphology-code → plain-words table, and the concordance index (Strong's number → verse, indexed, with total counts).
+    - **Publishing:** both are published as new data versions, which exercises Slice 4's update path for anyone who already downloaded the text-only BSB pack in Slice 1.
+  - **Mobile:**
+    - **Selection menu:** adds **Look up** beside Copy and Share.
+    - **Word-study sheet:** shows the original word and transliteration, the Strong's number, the parsed form in plain words ("Verb · aorist · active · indicative · 3rd person singular"), the brief definition, how the word is translated in this version, and "Used N times →".
+    - **Phrases:** a selection spanning several original words ("eternal life") lists each underlying word to pick from.
+    - **No linked word:** a selection with no linked original word, such as punctuation or a word the translators supplied, says so plainly instead of guessing.
+    - **Downloads:** the study pack joins the first-run download, and readers who already have a Bible are offered it the first time they tap Look up. Everything is answered from the local packs, offline.
+- **Slice 6 — See everywhere a word is used (concordance)** — Goal: A reader can follow one original word through the whole Bible.
+  - **Backend:** the study pack gains per-book counts per Strong's number (for the grouped headers and book filter), published as a new data version.
+  - **Mobile:** from the word-study sheet, "Used N times" opens a concordance list for that Strong's number, grouped by book with a count per book. Each row shows the reference and the verse in the current version, with the matching English word emphasised. Tapping a row opens the reader at that verse, highlighted. The list is paged and filterable by book. Not by Old/New Testament: a Greek word only occurs in the New Testament and a Hebrew word only in the Old, so that filter would never narrow anything (caught while drawing the mock).
 - **Slice 7 — Open Scripture in context from elsewhere in the app** — Goal: Scripture across iTestified leads into the Bible.
-  - Scripture of the Day's card gets "Read in context", which opens the reader at that verse. `ScriptureOfTheDay.bible_text` is free text today, so this needs a reference parser shared with Slice 2's "Go to reference", and it degrades gracefully when the text doesn't parse.
-  - Verse references written inside testimony text (e.g. "John 3:16", "Phil 4:13") become tappable links showing the verse with "Open in Bible".
-  - With no Bible downloaded yet, both show what they can (Scripture of the Day already carries its verse text) plus a "Download a Bible to read the full chapter" prompt that leads into Slice 1's download screen.
+  - **Backend:** none. `ScriptureOfTheDay.bible_text` (free text, e.g. "John 3:16") and testimony bodies are parsed on the phone with Slice 2's reference parser, so no schema change is needed.
+  - **Mobile:**
+    - Scripture of the Day's card gets "Read in context", which opens the reader at that verse and degrades gracefully when the text doesn't parse.
+    - Verse references inside testimony text ("John 3:16", "Phil 4:13") become tappable links showing the verse with "Open in Bible".
+    - With no Bible downloaded yet, both show what they can (Scripture of the Day already carries its verse text) plus a "Download a Bible to read the full chapter" prompt into Slice 1's download screen.
 
 #### Admin Flows
-- **Slice 8 — Admin manages which Bibles readers can download** — Goal: Admin controls the version list readers see, ready for more versions later. A dashboard settings page lists every published pack with its size, data version, and licence/attribution text. It has an enable/disable toggle and sets which version is the default for new readers. Mirrors the App Version / Pricing settings pattern (a small settings panel, not a growable collection). Building and uploading packs stays a management-command step, since it's a release-time data operation, not an admin action. A newly published data version shows here as the current one, and readers see "Update available".
+- **Slice 8 — Admin manages which Bibles readers can download** — Goal: Admin controls the version list readers see, ready for more versions later.
+  - **Backend:** admin endpoints (session auth + `IsActiveAdmin`, like the other admin settings APIs) to list all packs and to change a pack's enabled flag or make a version the default. Each is a service command in `transaction.atomic()`, with `select_for_update()` so two admins can't leave zero or two defaults. Each change is recorded in a small `BiblePackChangeHistory` audit table (who, what, when). Two guards: the last enabled version can't be disabled, and the study pack can't be disabled while any word-study version is enabled.
+  - **Dashboard:** a settings page listing every pack with its size, data version, licence/attribution text, enabled toggle, and default choice. Built to the mobile work's UX quality bar rather than copying an older settings screen, with a confirmation before disabling a version readers may have downloaded. Next.js proxy routes, component tests, and the E2E admin gate per this plan's Mandatory Cross-Client Test Gate.
+  - Building and uploading packs stays a release-time management-command step, not a dashboard action.
 
 Test:
 - pack build: reproducible (same inputs give the same pack checksum). The coverage report states the share of BSB words with a word-study link, and the build refuses to complete below the agreed threshold.
