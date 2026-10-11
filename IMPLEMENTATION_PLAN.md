@@ -49,6 +49,7 @@ Snapshot as of 2026-10-09. **Each phase's own `Status:` line is the source of tr
 | 31 | Priority Moderation & Publishing | ⬜ Not started | |
 | 32 | Self-Service Video Testimony Upload (Premium) | ✅ Complete | |
 | 33 | Immersive Discovery | ✅ Complete | |
+| 34 | Bible Reader & Word Study | ⬜ Not started | design approved; KJV tagging-licence check open |
 
 Test baseline: as of 2026-10-09 the full backend suite passes with 0 failures. Older entries below cite "the pre-existing 21 `apps.authn` failures" (live Brevo calls from tests). That was accurate when written, but the baseline no longer exists, so any new failure is a real one.
 
@@ -2175,6 +2176,94 @@ Two more found and fixed 2026-08-28, from continued live use:
   - Follow-up the same day: a single-item session meant swiping past the shared testimony had nowhere to go. New `SeededHomeFeedController` starts already "loaded" with just the shared testimony (no initial fetch) and lets the immersive screen's existing near-end `loadMore()` trigger pull in the same real, endless feed anyone browsing normally gets -- deduping a fetched page against what's already showing, since the shared testimony is a real, approved testimony very likely to reappear in the feed's own first page.
 
 ✅ Added 2026-08-29, direct admin request: **the iTestified mark now shows on every in-app video, not only branded Cloudinary exports.** Re-encoding every playback through Cloudinary was ruled out -- it depends on the same `itestified-celery-worker` pipeline whose health is still unconfirmed (see the still-open offline-download report above) and would add real cost for something a UI overlay achieves instantly. New `VideoLogoWatermark` (`lib/core/widgets/video_logo_watermark.dart`) is a small `AppLogo.icon` in a semi-opaque black chip, matching the immersive mute button's own legibility treatment over arbitrary video content, positioned north-west to mirror the export's own `gravity: north_west` corner placement. Wired into the two real "watching" surfaces: `ImmersiveVideoMedia` (covers Discovery, shared-link, and playlist immersive playback -- all three reuse this one widget) and `TestimonyVideoPlayer` (the older testimony-detail screen's player). Deliberately left off `home_discover_cards.dart`'s muted autoplay preview cards (top-left is already occupied by the "PLAYING" badge, and a thumbnail-sized preview isn't really "watching") and `video_testimony_screen.dart`'s own pre-submission recording preview (a local unpublished draft, not consumption). Test coverage: `test/core/widgets/video_logo_watermark_test.dart` confirms the widget renders; the underlying player widgets have no existing `VideoPlayerController` mocking in this codebase's test suite to hook into, consistent with how `ImmersiveVideoMedia`/`TestimonyVideoPlayer` were already untested at that level before this change.
+
+### Phase 34: Bible Reader & Word Study
+
+Background: proposed by the admin 2026-10-09 and researched the same day. A Bible in the app serves the blueprint's "searchable archive" vision and its "community over passive viewing" principle: readers move from a testimony or the Scripture of the Day straight into Scripture and study it, rather than leaving for another app. Decisions locked with the admin on 2026-10-09:
+- **Free for everyone**, including guests. Reading and word study are not Premium, consistent with the blueprint's "Free users can read".
+- **English only** for now. Yoruba and Hausa (Biblica, CC BY-SA 4.0 on eBible.org) are a later phase.
+- **"Highlight" means select text to look it up**, Bible-study style. Saved highlights, colours, notes, and bookmarks are out of scope.
+- **Launch versions: BSB and KJV.** Licensed versions (NIV, ESV, …) come later. API.Bible's free plan is non-commercial only, and NIV isn't commercially available there. ESV's API is non-commercial only. YouVersion Platform (beta, free, ~1,487 versions including NIV) is the most promising route, but its terms for a subscription app weren't verifiable on 2026-10-09 and must be confirmed first.
+- **It gets its own bottom-nav tab.** The bar already has five slots (Home, Category, +, Favorites, Profile), so one existing tab has to move: Category, decided below.
+
+Research findings this phase depends on (sources in the 2026-10-09 discussion):
+- Word-level lookup needs every English word linked to the Hebrew/Greek word behind it (a Strong's number). Most modern versions are not published with that linking, so **tap-a-word study only works on tagged versions**. Both launch versions qualify:
+  - **BSB** (Berean Standard Bible) is public domain since 2023-04-30, commercial use included. Its published "translation tables" (xlsx/tsv) link every original word to its BSB English words and Strong's number.
+  - **KJV** text is public domain, and Strong's-tagged editions exist. The specific tagging dataset's licence must be verified before it's built into a pack. Fallback if none checks out: KJV reads normally and offers the verse-level "Original words in this verse" list (built from the version-independent tagging below) instead of exact word tapping.
+- **Lexicon:** STEPBible data (Tyndale House, Cambridge), CC BY 4.0, attribution required. TBESG/TBESH are brief Greek/Hebrew lexicons keyed by extended Strong's numbers; TAGNT/TAHOT are the word-by-word tagged Greek NT and Hebrew OT with morphology. OpenScriptures Hebrew Bible is also CC BY 4.0.
+- **Concordance:** built ourselves from the tagged original-language text. It's version-independent ("every verse where G25 occurs"), so it needs no extra licence.
+
+Decisions from the concept-mock review (2026-10-09, admin approved the design):
+- **Bible replaces the Category tab** (option A of three). The bar becomes Home, Bible, +, Favorites, Profile. Rejected: B, Bible replacing Favorites with Favorites moved into Profile; and C, six tabs, too crowded at 360dp with the + button off-centre. Categories move to a chip row on the Search screen. Today's Category tab browses by a client-side text match over the ~20 newest testimonies (see the 2026-10-09 review), so the move is also when category browsing is rebuilt on the backend's real paginated `?category=` filter. See Slice 1.
+- **Reading typeface: Literata** (open-source, OFL, designed for long-form reading), bundled as a font asset for Scripture text only. The UI keeps the system sans, and Greek/Hebrew use a Noto Serif face with full polytonic Greek and pointed Hebrew coverage. This is a deliberate, scoped exception to Phase 19's "no new fonts" rule: Scripture reading is the one surface where a reading-optimised face earns its place.
+- **Bibles are downloaded to the phone, not stored in our database** (admin decision 2026-10-09, after seeing that a database import would add an estimated 80–100 MB of static reference data to Postgres). Readers download the versions they want, like YouVersion's offline Bibles. Our database only holds the small list of what's available.
+  - Benefits: the database stays lean; reading, word study, and the concordance all work fully offline once downloaded (good for patchy mobile data in the Nigeria-first rollout); and lookups are instant because they never hit the server.
+  - Costs, accepted: a brand-new reader needs a connection once before the first chapter, and data fixes ship as a new pack the app re-downloads.
+  - Licensed versions added later (e.g. NIV) usually can't be stored on the device under publisher terms. A version like that would be marked online-only in the version list and read from its provider, with no download button. The design leaves room for it; no such version is in scope here.
+
+Build:
+- **Packs** (built by us, hosted as files, never in Postgres):
+  - one **version pack** per Bible version: a SQLite file with every verse's text plus its word links (character offsets into the verse text, Strong's number, morphology code), and the version's attribution text
+  - one shared **study pack**: a SQLite file with the lexicon entries (keyed by extended Strong's number) and the concordance index (Strong's number → verse, indexed), shared by every version since it's built from the original-language text
+  - each pack is gzip-compressed for download. Rough sizes, to be confirmed when first built: ~5–10 MB per version pack, ~10–20 MB for the study pack.
+- **Building packs:** a repeatable backend management command (`build_bible_packs`) reads pinned dataset files (BSB text + translation tables, the KJV tagged text, STEPBible TAGNT/TAHOT/TBESG/TBESH, each pinned by source URL + checksum, not committed to the repo). It writes the SQLite packs and prints a coverage report. BSB alignment means placing the translation tables' English phrases into the verse text in order, which is the riskiest data step. The build fails loudly below an agreed alignment-coverage threshold rather than shipping silently broken word taps.
+- **Hosting:** packs live in object storage with a CDN-friendly public URL. Default choice: the existing S3 bucket under its own prefix, kept out of the Agora relay prefix's expiry lifecycle rule. Cloudinary's raw-file size limits on lower plans make it a poor fit for files this size. A second management command (`publish_bible_pack`) uploads a built pack and registers it in the manifest below.
+- **Backend: a manifest only.** A small new `apps.bible` app following `backend/AGENTS.md`, holding one row per downloadable pack:
+  - code, display name, description line, attribution/licence text
+  - kind (version or study), whether it supports word study, online-only flag (for later licensed versions)
+  - file URL, size in bytes, sha256 checksum, data version
+  - enabled and default flags
+
+  Plus one public, read-only, HTTP-cacheable endpoint, `GET /api/v1/bible/packs/`. That's a handful of rows in total, not Scripture text.
+- **Mobile:** a new `features/bible` feature (clean architecture per `mobile/AGENTS.md`), with `sqflite` added as a dependency. Hive is a key-value store and can't run the indexed "every verse with G25" query the concordance needs. The feature includes:
+  - a pack downloader with a progress bar. It verifies the sha256 before use, never opens a partially downloaded or mismatched file, retries cleanly, and notices when the manifest's data version is newer than the one on the phone.
+  - the reader, the selection menu ("Look up", Copy, Share), the word-study sheet, and the concordance, all querying the local SQLite packs
+  - reading position and chosen version saved on the phone (no account sync, per the 2026-10-09 discussion)
+- **Attribution:** a "Sources & credits" entry in the Bible tab naming the BSB (public domain), KJV, and STEPBible data (CC BY 4.0, Tyndale House), as the CC BY licence requires. The text comes from each pack's attribution field.
+
+Sub-slices:
+
+#### Mobile User Flows
+- **Slice 1 — Download a Bible and read a chapter** — Goal: Anyone, guest or registered, can open the Bible tab, get a Bible onto their phone, and read Scripture comfortably.
+  - **First open:** with nothing downloaded yet, the tab shows a one-time download screen with the default version (BSB) and the study pack. It gives the combined size, a "best on Wi-Fi" note, and a progress bar, then opens John 1.
+  - **Reading:** later opens go straight to the last chapter read. The reader shows verse numbers, the chapter title, and the current version. It has adjustable text size, the app's dark and light themes, and previous/next chapter controls, and works fully offline.
+  - Also includes the tab change (see Decisions above):
+    - The bottom bar's Category tab becomes **Bible**.
+    - The Search screen gains a **category chip row** of active categories from the backend.
+    - Tapping a chip opens that category's testimonies from the backend's paginated `GET /testimonies/?category=<slug>` filter, replacing today's client-side text match over the first 20 feed items. The existing Video/Audio/Written tabs are kept.
+    - The **Follow / Following** button moves into that category screen's header, with the same guest sign-in prompt as today.
+    - The **guest Home header gains a search button.** Today only the registered header has one, so without it guests would lose all access to categories.
+    - Category browsing stays within two taps of Home for both guests and registered users.
+    - The old `CategoryScreen` list and its slug text-match browse path are deleted, not left as dead code.
+- **Slice 2 — Go to any book, chapter, or reference** — Goal: A reader can get anywhere in the Bible in a couple of taps. A book picker (Old/New Testament, the 66 books in canonical order) leads to a chapter grid. A "Go to reference" field accepts typed references such as "Jn 3:16", "1 Cor 13", or "Psalm 23", and lands on and briefly highlights the verse.
+- **Slice 3 — Switch version, downloading it if needed** — Goal: A reader can switch between BSB and KJV without losing their place. The version sheet lists every enabled version with its full name, a "Word study" badge where supported, and whether it's on the phone. A version not yet downloaded shows its size and a Download action with progress; once downloaded it opens straight away. Switching keeps the same chapter and scroll position (anchored to the top visible verse), and the choice is remembered.
+- **Slice 4 — Manage downloaded Bibles** — Goal: A reader can see what's on their phone, free up space, and get data updates. A "Downloaded Bibles" screen (from the version sheet) lists each downloaded pack with its size and a Delete action. The version being read and the study pack can't be deleted while they're the only ones left. When the manifest has a newer data version for a pack, an "Update available" action re-downloads it, and the old copy stays in use until the new one is verified.
+- **Slice 5 — Select text and study the original word** — Goal: A reader can select a word in the text and see what it means in the original Hebrew or Greek. The selection menu adds **Look up** beside Copy and Share. The word-study sheet shows:
+  - the original word and transliteration
+  - the Strong's number
+  - the parsed form in plain words (e.g. "Verb · aorist · active · indicative · 3rd person singular")
+  - the brief lexicon definition
+  - how the word is translated in this version
+  - "Used N times →"
+  Selecting a phrase that spans several original words ("eternal life") lists each underlying word to pick from. A selection with no linked original word, such as punctuation or a word the translators supplied, says so plainly instead of guessing. Everything is answered from the local packs, offline.
+- **Slice 6 — See everywhere a word is used (concordance)** — Goal: A reader can follow one original word through the whole Bible. From the word-study sheet, "Used N times" opens a concordance list for that Strong's number, grouped by book with a count per book. Each row shows the reference and the verse in the current version, with the matching English word emphasised. Tapping a row opens the reader at that verse, highlighted. The list is paged and filterable by book. Not by Old/New Testament: a Greek word only occurs in the New Testament and a Hebrew word only in the Old, so that filter would never narrow anything (caught while drawing the mock).
+- **Slice 7 — Open Scripture in context from elsewhere in the app** — Goal: Scripture across iTestified leads into the Bible.
+  - Scripture of the Day's card gets "Read in context", which opens the reader at that verse. `ScriptureOfTheDay.bible_text` is free text today, so this needs a reference parser shared with Slice 2's "Go to reference", and it degrades gracefully when the text doesn't parse.
+  - Verse references written inside testimony text (e.g. "John 3:16", "Phil 4:13") become tappable links showing the verse with "Open in Bible".
+  - With no Bible downloaded yet, both show what they can (Scripture of the Day already carries its verse text) plus a "Download a Bible to read the full chapter" prompt that leads into Slice 1's download screen.
+
+#### Admin Flows
+- **Slice 8 — Admin manages which Bibles readers can download** — Goal: Admin controls the version list readers see, ready for more versions later. A dashboard settings page lists every published pack with its size, data version, and licence/attribution text. It has an enable/disable toggle and sets which version is the default for new readers. Mirrors the App Version / Pricing settings pattern (a small settings panel, not a growable collection). Building and uploading packs stays a management-command step, since it's a release-time data operation, not an admin action. A newly published data version shows here as the current one, and readers see "Update available".
+
+Test:
+- pack build: reproducible (same inputs give the same pack checksum). The coverage report states the share of BSB words with a word-study link, and the build refuses to complete below the agreed threshold.
+- pack content: verse text matches the source exactly, and token offsets slice to the right English words. Spot-check John 3:16 BSB: "loved" → G25 ἀγαπάω, "eternal" → G166, "life" → G2222. Concordance counts per Strong's number match the tagged source data.
+- manifest API: lists only enabled packs, with correct size/checksum/data version and exactly one default version. A non-admin can't change it.
+- downloader: a corrupted or truncated download (checksum mismatch) is rejected and never opened; an interrupted download retries cleanly; an update keeps the old pack in use until the new one verifies.
+- reference parser: common abbreviations, numbered books ("1 Cor", "1 Corinthians", "I Corinthians"), chapter-only and verse-range forms, and graceful failure for text that isn't a reference.
+- mobile: the adaptive gate at 360/393/600dp for the download screen, reader, sheets, and the new bottom bar. Reading, word study, and the concordance work in airplane mode after download. Switching version keeps the visible verse. A selection with no linked word shows the plain "no original word" message.
+
+Status: not started — drafted 2026-10-09 from the admin's feature request and same-day licensing/data research. A concept mock (published Artifact "iTestified Bible Concept", https://claude.ai/artifact/CQKxkWte3fYUUKvPRqpWL9, the established review-before-build pattern) was approved by the admin 2026-10-09, along with the Bible-replaces-Category tab decision. The same day the storage design changed from a Postgres import to downloadable on-device packs (see Decisions); the download and Downloaded Bibles screens were added to the mock for review. Still open: the KJV tagging-dataset licence check, needed before KJV word study (Slices 5-6).
 
 ## Risks To Watch Early
 
