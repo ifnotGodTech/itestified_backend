@@ -49,7 +49,7 @@ Snapshot as of 2026-10-09. **Each phase's own `Status:` line is the source of tr
 | 31 | Priority Moderation & Publishing | ⬜ Not started | |
 | 32 | Self-Service Video Testimony Upload (Premium) | ✅ Complete | |
 | 33 | Immersive Discovery | ✅ Complete | |
-| 34 | Bible Reader & Word Study | ⬜ Not started | design approved; KJV tagging-licence check open |
+| 34 | Bible Reader & Word Study | 🟡 Slice 1 of 8 done | production pack not yet uploaded/published; KJV tagging decision open |
 
 Test baseline: as of 2026-10-09 the full backend suite passes with 0 failures. Older entries below cite "the pre-existing 21 `apps.authn` failures" (live Brevo calls from tests). That was accurate when written, but the baseline no longer exists, so any new failure is a real one.
 
@@ -2243,6 +2243,37 @@ Sub-slices (each lists the backend, mobile, and dashboard work it ships):
       - The **guest Home header gains a search button**.
       - Categories stay within two taps of Home for guests and registered users.
       - The old `CategoryScreen` and its slug text-match path are deleted.
+  - ✅ **Implemented 2026-10-11 (backend + mobile), live-verified on an Android emulator against the local backend and Postgres.**
+    - **Backend:**
+      - New `apps.bible` app:
+        - `BiblePack` with DB-level rules: one default, the default must be an enabled version, a downloadable pack needs a file.
+        - Public, cacheable, paginated `GET /api/v1/bible/packs/` (`Cache-Control: public, max-age=300`).
+        - `build_bible_packs`: downloads the pinned BSB text, checks its sha256 pin, and writes a reproducible gzip SQLite pack. Two separate builds gave the same checksum.
+        - `publish_bible_pack`: downloads the uploaded copy back and refuses unless size and sha256 match. Live check: a truncated upload was refused, and re-publishing the same file reported "Unchanged" with no data-version bump.
+      - The real BSB pack is **1.5 MB** compressed (4.3 MB on the phone), far under the 5–10 MB estimate.
+      - **Real-data finding:** the BSB lists 16 verses with no text on purpose (Matthew 17:21, John 5:4, Acts 8:37 …, verses absent from the earliest manuscripts). The builder now skips them and records them in the pack's `omitted_verses` meta. Readers see the numbering skip, as in print. A ceiling of 40 still fails a broken source.
+      - **One addition the plan didn't list:** a `type=video|audio|written` filter on the existing `GET /testimonies/` (an invalid value returns a clear 400). Without it, the category screen's tabs would have had to filter one loaded page on the phone, bringing back the "only the newest 20" problem.
+      - Tests: 28 new in `apps.bible` and 4 in `apps.testimonies` (`test_list_filters.py`). Full backend suite 985/985 before the type filter; `apps.testimonies` 229/229 after.
+    - **Mobile:**
+      - **New `features/bible`:**
+        - The downloader verifies size + sha256 and unpacks in a background isolate only after the checksum matches. It confirms the file identifies as the expected pack in format 1. A partial, corrupted or mislabelled file is never opened, and cancel cleans up.
+        - Reader in Literata, with text size, a Sources & credits sheet, and previous/next across book boundaries (hidden at Genesis 1 / Revelation 22). It reopens at the last chapter.
+        - The tab is built on first visit only, so app launch doesn't fetch the download list.
+        - New dependencies: `sqflite`, `crypto`, and `sqflite_common_ffi` (dev). The Literata variable font is bundled with its OFL licence.
+      - **Categories moved to Search:**
+        - "Browse by category" chips open a new `CategoryTestimoniesScreen`, with Follow in its header and Videos/Audio/Text tabs paging from `?category=&type=`.
+        - Search lost its category-only mode (`showSearchField` / `showAllTab` / `screenTitle` removed), and the old `CategoryScreen` was deleted.
+        - The guest Home header gained a search button. Its subtitle was shortened to "Browsing as a guest" so it isn't cut off beside the new button.
+      - **Accessibility bug found and fixed:** the Home header's icon buttons had no spoken label, and the AppBar title merged them into one "Guest Mode…" node, so TalkBack couldn't reach search separately. The header's icon buttons now take a label, and both search buttons use it, each as its own node.
+      - Tests: 8 repository tests (real SQLite via ffi: install/read, corrupted download, mislabelled pack, newer format, cancel, server error, manifest parsing, preferences), 12 controller, 9 widget (360/393/600dp, no overflow), 3 category-paging. `category_flow_test` was rewritten for the new route; it had been failing on the old onboarding taps and now passes.
+      - Full mobile suite 630 passed / 6 failed. The 6 are the pre-existing failures already tracked here (3 responsive-gate tests, login / create-account / forgot-password flows), all failing at the onboarding "Continue" tap, before any Phase 34 code. `flutter analyze` is clean.
+    - **Live check (emulator, local backend, local pack server):** the first open showed the real manifest (BSB · 1.4 MB). Download → John 1 → next chapter → John 2. Then Wi-Fi and data off, app force-stopped and relaunched: it reopened at John 2 with no network. Search chips → Healing → the backend logged `GET /testimonies/?category=healing&type=video&page=1`.
+    - **Not yet done for production:**
+      1. Render's deploy runs migration `bible.0001`.
+      2. Build the BSB pack and upload it with the AWS CLI to the S3 `bible-packs/` prefix (outside the Agora relay's expiry rule), served as `application/gzip` with no `Content-Encoding`.
+      3. Run `publish_bible_pack <file> --url <public url> --default` on Render.
+
+      Until then, the production Bible tab shows "No Bible is available to download yet." The local database's BSB row points at a LAN test server and is local-only.
 - **Slice 2 — Go to any book, chapter, or reference** — Goal: A reader can get anywhere in the Bible in a couple of taps.
   - **Backend:** none. Navigation reads the downloaded pack.
   - **Mobile:** a book picker (Old/New Testament, the 66 books in canonical order) leading to a chapter grid. A **reference parser** (book names, common abbreviations, numbered books like "1 Cor" / "I Corinthians", chapter-only and verse-range forms), reused by Slice 7. A "Go to reference" field accepts "Jn 3:16", "1 Cor 13", or "Psalm 23", and lands on and briefly highlights the verse.

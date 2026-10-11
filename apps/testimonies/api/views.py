@@ -9,6 +9,7 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.exceptions import ValidationError
 from rest_framework.views import APIView
 
 from apps.subscriptions.selectors import is_user_premium
@@ -210,8 +211,15 @@ class PublicTestimonyListView(generics.ListAPIView):
         category_slug = (self.request.query_params.get("category") or "").strip()
         search_text = (self.request.query_params.get("search") or "").strip()
         ministry_only = (self.request.query_params.get("ministry_only") or "").strip().lower() == "true"
+        # Phase 34 Slice 1 -- the category screen pages each Video / Audio /
+        # Written tab from here rather than filtering one loaded page.
+        testimony_type = (self.request.query_params.get("type") or "").strip().lower()
+        if testimony_type and testimony_type not in TestimonyType.values:
+            raise ValidationError({"type": [f"Must be one of: {', '.join(TestimonyType.values)}."]})
         if category_slug:
             queryset = queryset.filter(category__slug=category_slug)
+        if testimony_type:
+            queryset = queryset.filter(testimony_type=testimony_type)
         if search_text:
             queryset = queryset.filter(title__icontains=search_text)
         if ministry_only:
