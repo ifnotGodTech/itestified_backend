@@ -74,3 +74,26 @@ def verify_published_copy(*, pack: PackFile, url: str) -> None:
             f"{url} serves {size} bytes (sha256 {digest.hexdigest()}), but the built pack is "
             f"{pack.size_bytes} bytes (sha256 {pack.sha256}). Re-upload the file, then publish again."
         )
+
+
+def fetch_published_pack(*, url: str, expected_sha256: str, workdir: Path) -> PackFile:
+    """For publishing on a server that doesn't have the built file: downloads
+    `url` into `workdir`, refuses it unless its sha256 is the one the local
+    build printed, then reads its metadata from the downloaded copy itself."""
+    target = workdir / "published.sqlite.gz"
+    try:
+        with requests.get(url, stream=True, timeout=PUBLISHED_DOWNLOAD_TIMEOUT_SECONDS) as response:
+            response.raise_for_status()
+            with target.open("wb") as handle:
+                for chunk in response.iter_content(chunk_size=1024 * 1024):
+                    handle.write(chunk)
+    except requests.RequestException as exc:
+        raise BiblePackVerificationError(f"Couldn't download {url}: {exc}") from exc
+
+    actual = sha256_of_file(target)
+    if actual != expected_sha256.strip().lower():
+        raise BiblePackVerificationError(
+            f"{url} has sha256 {actual}, but the built pack is {expected_sha256.strip().lower()}. "
+            "Re-upload the file, then publish again."
+        )
+    return read_pack_file(target)

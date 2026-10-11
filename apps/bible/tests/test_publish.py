@@ -136,3 +136,48 @@ class BiblePackConstraintTests(TestCase):
     def test_a_downloadable_pack_needs_a_file_url(self):
         with transaction.atomic(), self.assertRaises(IntegrityError):
             self._pack("bsb", file_url="")
+
+
+class PublishByChecksumTests(TestCase):
+    """Publishing on a server that doesn't have the built file (Render):
+    the operator passes the checksum the local build printed instead."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self._tmp.name)
+        self.pack = build_test_pack(self.dir / "v1")
+        self.sha256 = sha256_of_file(self.pack)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _publish(self, *args: str, served: bytes | None = None) -> str:
+        out = StringIO()
+        body = self.pack.read_bytes() if served is None else served
+        with mock.patch("apps.bible.services.pack_files.requests.get", return_value=_serving(body)):
+            call_command("publish_bible_pack", "--url", PACK_URL, *args, stdout=out)
+        return out.getvalue()
+
+    def test_registers_from_the_uploaded_copy_when_its_checksum_matches(self):
+        output = self._publish("--sha256", self.sha256, "--default")
+
+        pack = BiblePack.objects.get(code="bsb")
+        self.assertIn("Registered BSB", output)
+        self.assertEqual(pack.sha256, self.sha256)
+        self.assertEqual(pack.size_bytes, self.pack.stat().st_size)
+        self.assertEqual(pack.name, "Berean Standard Bible")  # read from the file itself
+        self.assertTrue(pack.is_default)
+
+    def test_a_copy_that_does_not_match_the_given_checksum_is_refused(self):
+        with self.assertRaisesMessage(CommandError, "Re-upload the file"):
+            self._publish("--sha256", self.sha256, served=self.pack.read_bytes()[:-10])
+        self.assertFalse(BiblePack.objects.exists())
+
+    def test_needs_either_a_local_file_or_a_checksum(self):
+        with self.assertRaisesMessage(CommandError, "--sha256"):
+            self._publish()
+        self.assertFalse(BiblePack.objects.exists())
+
+    def test_the_checksum_is_compared_case_insensitively(self):
+        self._publish("--sha256", self.sha256.upper(), "--enable")
+        self.assertTrue(BiblePack.objects.get(code="bsb").is_enabled)
