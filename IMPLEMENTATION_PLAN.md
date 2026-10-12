@@ -49,7 +49,7 @@ Snapshot as of 2026-10-09. **Each phase's own `Status:` line is the source of tr
 | 31 | Priority Moderation & Publishing | ⬜ Not started | |
 | 32 | Self-Service Video Testimony Upload (Premium) | ✅ Complete | |
 | 33 | Immersive Discovery | ✅ Complete | |
-| 34 | Bible Reader & Word Study | 🟡 Slices 1–3 of 8 done (1 live in production) | KJV pack built; production publish pending (Slice 3 rollout steps) |
+| 34 | Bible Reader & Word Study | 🟡 Slices 1–3 of 8 done (1 and 3 live in production) | Next: Slice 4 (manage downloaded Bibles) |
 
 Test baseline: as of 2026-10-09 the full backend suite passes with 0 failures. Older entries below cite "the pre-existing 21 `apps.authn` failures" (live Brevo calls from tests). That was accurate when written, but the baseline no longer exists, so any new failure is a real one.
 
@@ -2307,7 +2307,7 @@ Sub-slices (each lists the backend, mobile, and dashboard work it ships):
 - **Slice 3 — Switch version, downloading it if needed** — Goal: A reader can switch between BSB and KJV without losing their place.
   - **Backend:** `build_bible_packs` gains the **KJV version pack** (text and attribution), published and registered through the same `publish_bible_pack` step as a new manifest row. Which KJV source is used depends on the open KJV tagging decision (see Status). Plain KJV text is public domain either way, so this slice isn't blocked by it.
   - **Mobile:** the version sheet lists every enabled version with its full name, a "Word study" badge where supported, and whether it's on the phone. A version not yet downloaded shows its size and a Download action with progress; once downloaded it opens straight away. Switching keeps the same chapter and scroll position (anchored to the top visible verse), and the choice is remembered on the phone.
-  - ✅ **Implemented 2026-10-12 (backend + mobile).** The production KJV publish is still to do (steps below).
+  - ✅ **Implemented 2026-10-12 (backend + mobile), KJV live in production the same day** (see Production rollout below).
     - **Backend (pack build only, no schema change):**
       - The KJV source is pinned: eBible's `eng-kjv2006_usfm.zip` by URL + sha256, with the GPL/CrossWire attribution in `VERSIONS["kjv"]`.
       - A new USFM reader, `services/usfm_text.py`:
@@ -2342,10 +2342,12 @@ Sub-slices (each lists the backend, mobile, and dashboard work it ships):
           - 2 heading widget tests;
           - 1 repository test reading a real headings table through ffi.
         - Full mobile suite 687 passed / 6 failed: the same 6 pre-existing onboarding-step failures. `flutter analyze` is clean.
-    - **Production rollout (same path as BSB in Slice 1):**
-      1. Upload `kjv-2d769670e21c.sqlite.gz` to the S3 `bible-packs/` prefix. The existing `PublicReadBiblePacks` statement already covers it.
-      2. Check the public URL returns 200.
-      3. Add ` && python manage.py publish_bible_pack --url <url> --sha256 <full sha> --enable` (no `--default`; BSB stays the default) to the Render Build Command once, then remove it.
+    - ✅ **Production rollout, done 2026-10-12 (same path as BSB in Slice 1):**
+      - Verified from outside afterwards: production `GET /api/v1/bible/packs/` lists KJV (data version 1, not default) beside BSB (still default). The S3 copy returns 200, is byte-identical (1,531,634 bytes, sha256 `2d769670…8271`), and has no `x-amz-expiration`.
+      - Steps followed:
+        1. Upload `kjv-2d769670e21c.sqlite.gz` to the S3 `bible-packs/` prefix. The existing `PublicReadBiblePacks` statement already covers it.
+        2. Check the public URL returns 200.
+        3. Add ` && python manage.py publish_bible_pack --url <url> --sha256 <full sha> --enable` (no `--default`; BSB stays the default) to the Render Build Command once, then remove it.
 - **Slice 4 — Manage downloaded Bibles** — Goal: A reader can see what's on their phone, free up space, and get data updates.
   - **Backend:** none new. Publishing a rebuilt pack bumps that row's data version (already part of `publish_bible_pack`), and that is what tells phones an update exists.
   - **Mobile:** a "Downloaded Bibles" screen (from the version sheet) lists each downloaded pack with its size and a Delete action. The version being read can't be deleted while it's the only one left. When the manifest's data version is newer than the phone's, an "Update available" action re-downloads it, and the old copy stays in use until the new one is verified.
