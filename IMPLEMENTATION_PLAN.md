@@ -49,7 +49,7 @@ Snapshot as of 2026-10-09. **Each phase's own `Status:` line is the source of tr
 | 31 | Priority Moderation & Publishing | ⬜ Not started | |
 | 32 | Self-Service Video Testimony Upload (Premium) | ✅ Complete | |
 | 33 | Immersive Discovery | ✅ Complete | |
-| 34 | Bible Reader & Word Study | 🟡 Slice 1 of 8 done (live in production) | KJV tagging decision open |
+| 34 | Bible Reader & Word Study | 🟡 Slices 1–2 of 8 done (1 live in production) | KJV tagging decision open (needed for Slice 3) |
 
 Test baseline: as of 2026-10-09 the full backend suite passes with 0 failures. Older entries below cite "the pre-existing 21 `apps.authn` failures" (live Brevo calls from tests). That was accurate when written, but the baseline no longer exists, so any new failure is a real one.
 
@@ -2284,6 +2284,25 @@ Sub-slices (each lists the backend, mobile, and dashboard work it ships):
 - **Slice 2 — Go to any book, chapter, or reference** — Goal: A reader can get anywhere in the Bible in a couple of taps.
   - **Backend:** none. Navigation reads the downloaded pack.
   - **Mobile:** a book picker (Old/New Testament, the 66 books in canonical order) leading to a chapter grid. A **reference parser** (book names, common abbreviations, numbered books like "1 Cor" / "I Corinthians", chapter-only and verse-range forms), reused by Slice 7. A "Go to reference" field accepts "Jn 3:16", "1 Cor 13", or "Psalm 23", and lands on and briefly highlights the verse.
+  - ✅ **Implemented 2026-10-12 (mobile only, as planned; no backend change), live-verified on an Android emulator with the real BSB pack downloaded from production.**
+    - **Reference parser** in `lib/core/bible/` (core, so Slice 7 can reuse it without a feature-to-feature import):
+      - `bible_canon.dart` holds the 66 books with their aliases and chapter counts; the counts were checked against the real BSB pack's `books` table.
+      - `parseBibleReference()` accepts: "Jn 3:16", "John 3.16", "1 Cor 13", "1Cor 13:4-7", "I Corinthians 13", "II Kings", "First Peter", "Psalm 23", "Song of Songs", "Gen 1:1-2:3", and unambiguous name starts such as "Philip" or "Deuter".
+      - Single-chapter books read a lone number as the verse ("Jude 3"). Roman numerals need a space, so "Isaiah" isn't read as "I saiah".
+      - A missing chapter is reported as such ("John has 21 chapters."); anything else is "unrecognized".
+    - **"Choose a passage" screen:**
+      - Opened by tapping the reader's chapter chip, which now shows a ⌄.
+      - The reference field shows a live "Go to Psalms 119:176" button as you type, or a plain reason it can't.
+      - Old/New Testament switch, and books expand into a chapter grid. It opens on the current book with the current chapter marked.
+    - **The reader:**
+      - Jumping to a verse scrolls it into view and tints it for ~2.4 s. Long chapters are built lazily, so it jumps to an estimated position and then aligns precisely once the verse exists. The highlight respects reduce-motion.
+      - A verse the translation doesn't contain (e.g. one of the 16 the BSB leaves out) just opens the chapter.
+    - **Found and fixed while checking on device:**
+      - (a) The header gave the chapter chip only half the free row, so "Psalms 119" was cut to "Psalm…". The title now takes the free space and the chip hugs its text.
+      - (b) Light-mode chapter squares had the same colour as the page, so they used the surface colour instead.
+      - (c) `flutter run` / incremental `flutter build apk` twice installed stale Dart code during this check. After `flutter clean` the build was correct. Worth remembering for future device checks.
+    - **Tests:** 32 parser cases, 10 picker/jump widget tests (360/393/600dp, keyboard Go, out-of-range chapter, close, far-verse jump + highlight fade) and a controller case. Full mobile suite 672 passed / 6 failed (the same 6 pre-existing onboarding-step failures). `flutter analyze` is clean.
+    - **Live check:** typing "Ps 119:176" offered "Go to Psalms 119:176". It landed on the highlighted last verse of the Bible's longest chapter.
 - **Slice 3 — Switch version, downloading it if needed** — Goal: A reader can switch between BSB and KJV without losing their place.
   - **Backend:** `build_bible_packs` gains the **KJV version pack** (text and attribution), published and registered through the same `publish_bible_pack` step as a new manifest row. Which KJV source is used depends on the open KJV tagging decision (see Status). Plain KJV text is public domain either way, so this slice isn't blocked by it.
   - **Mobile:** the version sheet lists every enabled version with its full name, a "Word study" badge where supported, and whether it's on the phone. A version not yet downloaded shows its size and a Download action with progress; once downloaded it opens straight away. Switching keeps the same chapter and scroll position (anchored to the top visible verse), and the choice is remembered on the phone.
