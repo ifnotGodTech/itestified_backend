@@ -49,7 +49,7 @@ Snapshot as of 2026-10-09. **Each phase's own `Status:` line is the source of tr
 | 31 | Priority Moderation & Publishing | ⬜ Not started | |
 | 32 | Self-Service Video Testimony Upload (Premium) | ✅ Complete | |
 | 33 | Immersive Discovery | ✅ Complete | |
-| 34 | Bible Reader & Word Study | 🟡 Slice 1 of 8 done | production pack not yet uploaded/published; KJV tagging decision open |
+| 34 | Bible Reader & Word Study | 🟡 Slice 1 of 8 done (live in production) | KJV tagging decision open |
 
 Test baseline: as of 2026-10-09 the full backend suite passes with 0 failures. Older entries below cite "the pre-existing 21 `apps.authn` failures" (live Brevo calls from tests). That was accurate when written, but the baseline no longer exists, so any new failure is a real one.
 
@@ -2268,12 +2268,19 @@ Sub-slices (each lists the backend, mobile, and dashboard work it ships):
       - Tests: 8 repository tests (real SQLite via ffi: install/read, corrupted download, mislabelled pack, newer format, cancel, server error, manifest parsing, preferences), 12 controller, 9 widget (360/393/600dp, no overflow), 3 category-paging. `category_flow_test` was rewritten for the new route; it had been failing on the old onboarding taps and now passes.
       - Full mobile suite 630 passed / 6 failed. The 6 are the pre-existing failures already tracked here (3 responsive-gate tests, login / create-account / forgot-password flows), all failing at the onboarding "Continue" tap, before any Phase 34 code. `flutter analyze` is clean.
     - **Live check (emulator, local backend, local pack server):** the first open showed the real manifest (BSB · 1.4 MB). Download → John 1 → next chapter → John 2. Then Wi-Fi and data off, app force-stopped and relaunched: it reopened at John 2 with no network. Search chips → Healing → the backend logged `GET /testimonies/?category=healing&type=video&page=1`.
-    - **Not yet done for production:**
-      1. Render's deploy runs migration `bible.0001`.
-      2. Build the BSB pack and upload it with the AWS CLI to the S3 `bible-packs/` prefix (outside the Agora relay's expiry rule), served as `application/gzip` with no `Content-Encoding`.
-      3. Run `publish_bible_pack <file> --url <public url> --default` on Render.
-
-      Until then, the production Bible tab shows "No Bible is available to download yet." The local database's BSB row points at a LAN test server and is local-only.
+    - ✅ **Live in production 2026-10-12:**
+      - Render deployed migration `bible.0001`.
+      - The BSB pack (sha256 `c3737462…`, 1,519,708 bytes) was uploaded to the existing S3 bucket under `bible-packs/`.
+      - The bucket policy gained a `PublicReadBiblePacks` statement allowing `s3:GetObject` on `bible-packs/*` only, alongside the existing `recordings/*` statement.
+      - The upload was verified from outside: HTTP 200, byte-identical, no `Content-Encoding`, no `x-amz-expiration`, so no lifecycle rule applies.
+      - **Publishing on Render's free plan:** there's no Shell, so `publish_bible_pack` gained a `--sha256` mode. It downloads the uploaded copy, refuses it unless the checksum matches, and reads the metadata from the file itself. It ran once from a temporary addition to the dashboard Build Command (after `migrate`), which was then removed.
+      - Verified end to end: production `GET /api/v1/bible/packs/` lists BSB as the default. A freshly cleared install against the live backend downloaded the pack from S3 and opened John 1.
+      - **To publish a corrected pack later:**
+        1. Rebuild with `build_bible_packs`.
+        2. Upload under a new checksum-named key (e.g. `bsb-<sha12>.sqlite.gz`).
+        3. Run the same `publish_bible_pack --url … --sha256 …` once. Drop `--default` if the admin has since chosen another default.
+        4. Phones then see the data version bump (Slice 4).
+    - **Note for the 6 pre-existing mobile test failures:** onboarding's first button now reads **Next** (not "Continue") and the last screen offers "Continue as a guest" in the top bar. That's why those 6 tests fail at their first tap; they need their onboarding steps updated (or `continueAsGuest()` used directly, as `category_flow_test` now does).
 - **Slice 2 — Go to any book, chapter, or reference** — Goal: A reader can get anywhere in the Bible in a couple of taps.
   - **Backend:** none. Navigation reads the downloaded pack.
   - **Mobile:** a book picker (Old/New Testament, the 66 books in canonical order) leading to a chapter grid. A **reference parser** (book names, common abbreviations, numbered books like "1 Cor" / "I Corinthians", chapter-only and verse-range forms), reused by Slice 7. A "Go to reference" field accepts "Jn 3:16", "1 Cor 13", or "Psalm 23", and lands on and briefly highlights the verse.
