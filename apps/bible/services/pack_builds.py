@@ -39,10 +39,21 @@ class Verse(NamedTuple):
     text: str
 
 
+class Heading(NamedTuple):
+    """Text printed above a verse that isn't part of it: a psalm title
+    ("A Psalm of David.") or a section heading (Psalm 119's "א ALEPH.")."""
+
+    book_id: int
+    chapter: int
+    before_verse: int
+    text: str
+
+
 class ParsedText(NamedTuple):
     verses: list[Verse]
     # "Book C:V" references the translation deliberately leaves empty.
     omitted: list[str]
+    headings: list[Heading] = []
 
 
 def sha256_of_file(path: Path) -> str:
@@ -106,7 +117,15 @@ def parse_verse_text(path: Path) -> ParsedText:
             verses.append(Verse(*key, text))
         else:
             omitted.append(f"{CANON[book_id - 1].name} {key[1]}:{key[2]}")
+    return finish_parsed_text(verses, omitted)
 
+
+def finish_parsed_text(
+    verses: list[Verse], omitted: list[str], headings: list[Heading] | None = None
+) -> ParsedText:
+    """Shared completeness rules for every source format: all 66 books
+    present, and no more omitted verses than a translation plausibly makes.
+    Returns the verses in canonical order."""
     present_books = {verse.book_id for verse in verses}
     missing = [book.name for index, book in enumerate(CANON, start=1) if index not in present_books]
     if missing:
@@ -116,7 +135,19 @@ def parse_verse_text(path: Path) -> ParsedText:
             f"{len(omitted)} empty verses (more than {MAX_OMITTED_VERSES}); the source looks broken."
         )
     verses.sort(key=lambda verse: (verse.book_id, verse.chapter, verse.verse))
-    return ParsedText(verses=verses, omitted=omitted)
+    ordered_headings = sorted(headings or [], key=lambda h: (h.book_id, h.chapter, h.before_verse))
+    return ParsedText(verses=verses, omitted=omitted, headings=ordered_headings)
+
+
+def parse_source(definition: VersionDefinition, path: Path) -> ParsedText:
+    """Parses a downloaded source in the layout its version definition names."""
+    if definition.text_format == "usfm_zip":
+        from apps.bible.services.usfm_text import parse_usfm_zip
+
+        return parse_usfm_zip(path)
+    if definition.text_format == "verse_lines":
+        return parse_verse_text(path)
+    raise BibleSourceFormatError(f"Unknown text format {definition.text_format!r}.")
 
 
 def write_version_pack(*, definition: VersionDefinition, parsed: ParsedText, source_sha256: str, out_dir: Path) -> Path:
@@ -174,6 +205,31 @@ def write_version_pack(*, definition: VersionDefinition, parsed: ParsedText, sou
                 ],
             )
             connection.executemany("INSERT INTO verses VALUES (?, ?, ?, ?)", verses)
+            # Only versions with headings get the table, so a version without
+            # any (the BSB) still rebuilds byte-for-byte as before; readers
+            # treat a missing table as "no headings".
+            if parsed.headings:
+                connection.execute(
+                    """
+                    CREATE TABLE headings (
+                        book_id INTEGER NOT NULL REFERENCES books(id),
+                        chapter INTEGER NOT NULL,
+                        before_verse INTEGER NOT NULL,
+                        position INTEGER NOT NULL,
+                        text TEXT NOT NULL,
+                        PRIMARY KEY (book_id, chapter, before_verse, position)
+                    ) WITHOUT ROWID
+                    """
+                )
+            # Several headings can precede one verse; `position` keeps their order.
+            positions: dict[tuple[int, int, int], int] = {}
+            heading_rows = []
+            for heading in parsed.headings:
+                key = (heading.book_id, heading.chapter, heading.before_verse)
+                positions[key] = positions.get(key, -1) + 1
+                heading_rows.append((*key, positions[key], heading.text))
+            if heading_rows:
+                connection.executemany("INSERT INTO headings VALUES (?, ?, ?, ?, ?)", heading_rows)
             connection.commit()
             connection.execute("VACUUM")
         finally:

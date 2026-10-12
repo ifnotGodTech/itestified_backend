@@ -49,7 +49,7 @@ Snapshot as of 2026-10-09. **Each phase's own `Status:` line is the source of tr
 | 31 | Priority Moderation & Publishing | ⬜ Not started | |
 | 32 | Self-Service Video Testimony Upload (Premium) | ✅ Complete | |
 | 33 | Immersive Discovery | ✅ Complete | |
-| 34 | Bible Reader & Word Study | 🟡 Slices 1–2 of 8 done (1 live in production) | KJV tagging decision open (needed for Slice 3) |
+| 34 | Bible Reader & Word Study | 🟡 Slices 1–3 of 8 done (1 live in production) | KJV pack built; production publish pending (Slice 3 rollout steps) |
 
 Test baseline: as of 2026-10-09 the full backend suite passes with 0 failures. Older entries below cite "the pre-existing 21 `apps.authn` failures" (live Brevo calls from tests). That was accurate when written, but the baseline no longer exists, so any new failure is a real one.
 
@@ -2190,6 +2190,7 @@ Research findings this phase depends on (sources in the 2026-10-09 discussion):
 - Word-level lookup needs every English word linked to the Hebrew/Greek word behind it (a Strong's number). Most modern versions are not published with that linking, so **tap-a-word study only works on tagged versions**. Both launch versions qualify:
   - **BSB** (Berean Standard Bible) is public domain since 2023-04-30, commercial use included. Its published "translation tables" (xlsx/tsv) link every original word to its BSB English words and Strong's number.
   - **KJV** text is public domain, and Strong's-tagged editions exist. The specific tagging dataset's licence must be verified before it's built into a pack. Fallback if none checks out: KJV reads normally and offers the verse-level "Original words in this verse" list (built from the version-independent tagging below) instead of exact word tapping.
+    - **Decided 2026-10-12 (admin chose option 1):** use CrossWire's Strong's-tagged KJV as published by eBible.org (`eng-kjv2006_usfm.zip`, USFM with `\w word|strong="G0025"\w*` markup). The KJV text is public domain (outside the UK's Crown patent). The Strong's tagging is CrossWire's work under the GPL, so the KJV pack is shared under the GPL with CrossWire and eBible credited in its attribution. This gives KJV exact word tapping in Slice 5, like BSB.
 - **Lexicon:** STEPBible data (Tyndale House, Cambridge), CC BY 4.0, attribution required. TBESG/TBESH are brief Greek/Hebrew lexicons keyed by extended Strong's numbers; TAGNT/TAHOT are the word-by-word tagged Greek NT and Hebrew OT with morphology. OpenScriptures Hebrew Bible is also CC BY 4.0.
 - **Concordance:** built ourselves from the tagged original-language text. It's version-independent ("every verse where G25 occurs"), so it needs no extra licence.
 
@@ -2306,12 +2307,51 @@ Sub-slices (each lists the backend, mobile, and dashboard work it ships):
 - **Slice 3 — Switch version, downloading it if needed** — Goal: A reader can switch between BSB and KJV without losing their place.
   - **Backend:** `build_bible_packs` gains the **KJV version pack** (text and attribution), published and registered through the same `publish_bible_pack` step as a new manifest row. Which KJV source is used depends on the open KJV tagging decision (see Status). Plain KJV text is public domain either way, so this slice isn't blocked by it.
   - **Mobile:** the version sheet lists every enabled version with its full name, a "Word study" badge where supported, and whether it's on the phone. A version not yet downloaded shows its size and a Download action with progress; once downloaded it opens straight away. Switching keeps the same chapter and scroll position (anchored to the top visible verse), and the choice is remembered on the phone.
+  - ✅ **Implemented 2026-10-12 (backend + mobile).** The production KJV publish is still to do (steps below).
+    - **Backend (pack build only, no schema change):**
+      - The KJV source is pinned: eBible's `eng-kjv2006_usfm.zip` by URL + sha256, with the GPL/CrossWire attribution in `VERSIONS["kjv"]`.
+      - A new USFM reader, `services/usfm_text.py`:
+        - keeps the words of `\w …|strong=…\w*` and drops notes, cross-references and other markers;
+        - follows `\id` / `\c` / `\v`, joining continuation lines onto the open verse;
+        - keeps section headings and psalm titles (`\d`, `\s1` …) as headings before the next verse.
+      - Headings left at the end of a book keep their place after the last verse. These are the KJV's epistle subscriptions, e.g. "Written to the Romans from Corinthus…".
+      - Packs gain an optional `headings` table (book, chapter, before_verse, position, text). It's written only when a version has headings, so the BSB pack still builds byte-identical (`c3737462…`), with no needless re-download.
+      - **Real KJV build:**
+        - 31,102 verses, none omitted, 152 headings (138 psalm titles + 14 subscriptions), no stray markup;
+        - **1.5 MB** compressed (1,531,634 bytes, sha256 `2d769670e21c…`);
+        - reproducible: two builds gave the same checksum;
+        - spot-checked: John 3:16, Psalm 23 with its title, the Romans 16 subscription.
+      - Tests: 12 new USFM parser and KJV build tests on a synthetic 66-book zip. Full backend suite 1005/1005.
+    - **Mobile:**
+      - **Version sheet:** opened from the reader's version chip, which now shows a swap icon.
+        - It lists each manifest version, plus any version on the phone that's no longer offered, with name, description, "On this phone" or the download size, and a Word study tag where supported.
+        - Tapping a version not yet downloaded downloads it in place, with progress and cancel, then switches to it and closes the sheet.
+        - The download carries on if the sheet is closed.
+        - Offline, the sheet still lists the Bibles on the phone, with a Retry note.
+      - **Keeping your place:**
+        - The reader reports its top visible verse after each scroll.
+        - On a switch, the new version opens at the same chapter and quietly scrolls to that verse, with no highlight.
+        - If the other version leaves that verse out, it scrolls to the nearest verse before it.
+        - The chosen version is remembered on the phone.
+      - **Headings:** the KJV's psalm titles show in italics above their verse, and subscriptions after the last verse. A pack without a headings table (BSB) reads exactly as before.
+      - **Tests:**
+        - New:
+          - 4 versions-controller cases (study pack hidden, download+switch, failure stays put, cancel is quiet);
+          - 3 keep-my-place cases (same verse, nearest-verse fallback, a different chapter is ignored);
+          - 5 sheet widget tests (download and switch at 360/393/600dp, switching back with no download, offline);
+          - 2 heading widget tests;
+          - 1 repository test reading a real headings table through ffi.
+        - Full mobile suite 687 passed / 6 failed: the same 6 pre-existing onboarding-step failures. `flutter analyze` is clean.
+    - **Production rollout (same path as BSB in Slice 1):**
+      1. Upload `kjv-2d769670e21c.sqlite.gz` to the S3 `bible-packs/` prefix. The existing `PublicReadBiblePacks` statement already covers it.
+      2. Check the public URL returns 200.
+      3. Add ` && python manage.py publish_bible_pack --url <url> --sha256 <full sha> --enable` (no `--default`; BSB stays the default) to the Render Build Command once, then remove it.
 - **Slice 4 — Manage downloaded Bibles** — Goal: A reader can see what's on their phone, free up space, and get data updates.
   - **Backend:** none new. Publishing a rebuilt pack bumps that row's data version (already part of `publish_bible_pack`), and that is what tells phones an update exists.
   - **Mobile:** a "Downloaded Bibles" screen (from the version sheet) lists each downloaded pack with its size and a Delete action. The version being read can't be deleted while it's the only one left. When the manifest's data version is newer than the phone's, an "Update available" action re-downloads it, and the old copy stays in use until the new one is verified.
 - **Slice 5 — Select text and study the original word** — Goal: A reader can select a word in the text and see what it means in the original Hebrew or Greek.
   - **Backend (pack build, still no database tables):**
-    - **Word links:** `build_bible_packs` adds per-verse word links (character offsets, Strong's number, morphology code) to the **BSB pack**, placing the translation tables' English phrases into the verse text in order. It prints a coverage report and fails below the agreed threshold. The KJV pack gets word links too if the KJV tagging decision allows.
+    - **Word links:** `build_bible_packs` adds per-verse word links (character offsets, Strong's number, morphology code) to the **BSB pack**, placing the translation tables' English phrases into the verse text in order. It prints a coverage report and fails below the agreed threshold. The KJV pack gets word links too, from the CrossWire Strong's tags already in its USFM source (decided 2026-10-12, GPL, credited).
     - **Study pack:** a new pack holding the lexicon (STEPBible TBESG/TBESH, keyed by extended Strong's number), a morphology-code → plain-words table, and the concordance index (Strong's number → verse, indexed, with total counts).
     - **Publishing:** both are published as new data versions, which exercises Slice 4's update path for anyone who already downloaded the text-only BSB pack in Slice 1.
   - **Mobile:**

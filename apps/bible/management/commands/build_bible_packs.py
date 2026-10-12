@@ -3,7 +3,7 @@ from pathlib import Path
 from django.core.management.base import BaseCommand, CommandError
 
 from apps.bible.exceptions import BiblePackError
-from apps.bible.services.pack_builds import fetch_source, parse_verse_text, sha256_of_file, write_version_pack
+from apps.bible.services.pack_builds import fetch_source, parse_source, sha256_of_file, write_version_pack
 from apps.bible.sources import SOURCES, VERSIONS
 
 DEFAULT_SOURCES_DIR = Path.home() / ".cache" / "itestified-bible-sources"
@@ -41,7 +41,7 @@ class Command(BaseCommand):
             dataset = SOURCES[definition.text_source]
             try:
                 source_path = fetch_source(dataset, sources_dir)
-                parsed = parse_verse_text(source_path)
+                parsed = parse_source(definition, source_path)
                 pack_path = write_version_pack(
                     definition=definition, parsed=parsed, source_sha256=dataset.sha256, out_dir=out_dir
                 )

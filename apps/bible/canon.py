@@ -85,6 +85,26 @@ CANON: tuple[CanonBook, ...] = (
     CanonBook("Rev", "Revelation", "NT"),
 )
 
+# Standard USFM book codes, in the same canonical order as CANON.
+USFM_CODES: tuple[str, ...] = (
+    "GEN", "EXO", "LEV", "NUM", "DEU", "JOS", "JDG", "RUT", "1SA", "2SA",
+    "1KI", "2KI", "1CH", "2CH", "EZR", "NEH", "EST", "JOB", "PSA", "PRO",
+    "ECC", "SNG", "ISA", "JER", "LAM", "EZK", "DAN", "HOS", "JOL", "AMO",
+    "OBA", "JON", "MIC", "NAM", "HAB", "ZEP", "HAG", "ZEC", "MAL", "MAT",
+    "MRK", "LUK", "JHN", "ACT", "ROM", "1CO", "2CO", "GAL", "EPH", "PHP",
+    "COL", "1TH", "2TH", "1TI", "2TI", "TIT", "PHM", "HEB", "JAS", "1PE",
+    "2PE", "1JN", "2JN", "3JN", "JUD", "REV",
+)
+assert len(USFM_CODES) == len(CANON)
+
+_BOOK_ID_BY_USFM = {code: index for index, code in enumerate(USFM_CODES, start=1)}
+
+
+def book_id_for_usfm_code(code: str) -> int | None:
+    """1-based canonical book id for a USFM book code ("JHN" -> 43)."""
+    return _BOOK_ID_BY_USFM.get(code.strip().upper())
+
+
 # Source datasets name a few books differently from our display names.
 _SOURCE_NAME_ALIASES = {"Psalm": "Psalms"}
 
