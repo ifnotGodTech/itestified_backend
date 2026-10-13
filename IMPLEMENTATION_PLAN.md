@@ -49,7 +49,7 @@ Snapshot as of 2026-10-09. **Each phase's own `Status:` line is the source of tr
 | 31 | Priority Moderation & Publishing | ⬜ Not started | |
 | 32 | Self-Service Video Testimony Upload (Premium) | ✅ Complete | |
 | 33 | Immersive Discovery | ✅ Complete | |
-| 34 | Bible Reader & Word Study | 🟡 Slices 1–5 of 8 done (packs for 1, 3 and 5 live in production; 4 is mobile-only) | Next: Slice 6 (concordance) |
+| 34 | Bible Reader & Word Study | 🟡 Slices 1–6 of 8 done (packs for 1, 3 and 5 live in production; 4 and 6 are mobile-only) | Next: Slice 7 (open Scripture in context from elsewhere in the app) |
 
 Test baseline: as of 2026-10-09 the full backend suite passes with 0 failures. Older entries below cite "the pre-existing 21 `apps.authn` failures" (live Brevo calls from tests). That was accurate when written, but the baseline no longer exists, so any new failure is a real one.
 
@@ -2468,6 +2468,28 @@ Sub-slices (each lists the backend, mobile, and dashboard work it ships):
 - **Slice 6 — See everywhere a word is used (concordance)** — Goal: A reader can follow one original word through the whole Bible.
   - **Backend:** the study pack gains per-book counts per Strong's number (for the grouped headers and book filter), published as a new data version.
   - **Mobile:** from the word-study sheet, "Used N times" opens a concordance list for that Strong's number, grouped by book with a count per book. Each row shows the reference and the verse in the current version, with the matching English word emphasised. Tapping a row opens the reader at that verse, highlighted. The list is paged and filterable by book. Not by Old/New Testament: a Greek word only occurs in the New Testament and a Hebrew word only in the Old, so that filter would never narrow anything (caught while drawing the mock).
+  - ✅ **Implemented 2026-10-13 (mobile only).** Live-verified on an Android emulator with the real packs, served from a local backend that holds the same files as production.
+    - **Deviation from the plan, on purpose: no backend change.** The plan had the study pack gain a per-book counts table.
+      - Measured on the real pack, the counts come straight from Slice 5's `(strongs, book_id, chapter, verse)` index, read from the index alone: 8.8 ms for the Bible's most frequent word (G3588 "the", 19,889 uses), 0.8 ms for G25. A page of 40 verses takes about 0.5 ms.
+      - A table would have added nothing readers see, and publishing it would have made every reader re-download the 10.8 MB study pack.
+      - So `GetConcordance` computes the counts on the phone.
+    - **Mobile:**
+      - The word sheet's count became the mock's "See all 143 uses" button.
+      - It opens `BibleConcordanceScreen`, laid out as the mock:
+        - the header "ἀγαπάω · agapaō" and "G25 · 143 uses · shown in BSB";
+        - book chips ("All books", then each book in canonical order);
+        - verses grouped under "JOHN · 37"-style headers, the verse text in the reader's version with the words that translate it emphasised (from that version's `word_links`), and the verse you came from tinted "· you are here";
+        - pages of 40, loaded as you scroll.
+        - A verse the version leaves out says so instead of leaving a gap.
+      - Choosing a verse closes the concordance and the sheet, and the reader opens there, highlighted.
+      - Highlights come from each version's own links, so the KJV shows its own words: the counts and verses come from the shared word-study pack, the text from the version.
+      - Data: `concordanceBooks` / `concordanceVerses` read the study pack's index, and `versesWithWord` fetches a page's verses and their matching link spans by primary key.
+    - **Live check:**
+      - A cleared app's first download fetched BSB plus word study together ("Download · 15.9 MB").
+      - Look up "loved" in John 3:16 → See all 143 uses → Matthew first ("MATTHEW · 8", with "you love", "who love" emphasised) → the John chip ("JOHN · 37", John 3:16 marked "you are here") → John 11:5 opened the reader at that verse.
+      - The live production check couldn't run: the emulator's DNS stopped resolving any name (even google.com) while this Mac reached production fine. That's the machine's network, not the app; the local backend serves byte-identical packs.
+    - **Found and fixed:** the book heading was merged into the first row's TalkBack node; it's now its own heading.
+    - **Tests:** 11 new in `bible_concordance_test` (per-book counts, a verse once per page with all its uses emphasised, a left-out verse, no word study, paging 40 then stop, the book filter, the screen at 360/393/600dp, the filter chip, choosing a verse, the sheet-to-concordance-to-reader hand-off) and 1 repository test through real SQLite. The Slice 5 sheet test was updated for the button. Full mobile suite 746 passed / 6 failed: the same 6 pre-existing onboarding-step failures. `flutter analyze` is clean.
 - **Slice 7 — Open Scripture in context from elsewhere in the app** — Goal: Scripture across iTestified leads into the Bible.
   - **Backend:** none. `ScriptureOfTheDay.bible_text` (free text, e.g. "John 3:16") and testimony bodies are parsed on the phone with Slice 2's reference parser, so no schema change is needed.
   - **Mobile:**
