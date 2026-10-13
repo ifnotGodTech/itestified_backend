@@ -49,7 +49,7 @@ Snapshot as of 2026-10-09. **Each phase's own `Status:` line is the source of tr
 | 31 | Priority Moderation & Publishing | ⬜ Not started | |
 | 32 | Self-Service Video Testimony Upload (Premium) | ✅ Complete | |
 | 33 | Immersive Discovery | ✅ Complete | |
-| 34 | Bible Reader & Word Study | 🟡 Slices 1–6 of 8 done (packs for 1, 3 and 5 live in production; 4 and 6 are mobile-only) | Next: Slice 7 (open Scripture in context from elsewhere in the app) |
+| 34 | Bible Reader & Word Study | 🟡 Slices 1–7 of 8 done (packs for 1, 3 and 5 live in production; 4, 6 and 7 are mobile-only) | Next: Slice 8 (admin manages Bible packs from the dashboard) |
 
 Test baseline: as of 2026-10-09 the full backend suite passes with 0 failures. Older entries below cite "the pre-existing 21 `apps.authn` failures" (live Brevo calls from tests). That was accurate when written, but the baseline no longer exists, so any new failure is a real one.
 
@@ -2496,6 +2496,38 @@ Sub-slices (each lists the backend, mobile, and dashboard work it ships):
     - Scripture of the Day's card gets "Read in context", which opens the reader at that verse and degrades gracefully when the text doesn't parse.
     - Verse references inside testimony text ("John 3:16", "Phil 4:13") become tappable links showing the verse with "Open in Bible".
     - With no Bible downloaded yet, both show what they can (Scripture of the Day already carries its verse text) plus a "Download a Bible to read the full chapter" prompt into Slice 1's download screen.
+  - ✅ **Implemented 2026-10-13 (mobile only, as planned).** Live-verified on an Android emulator with a local backend and the production packs. The two test records were removed afterwards.
+    - **Architecture (features depend only on `core/`):** the Bible is reached from other features through `core/bible`.
+      - `findBibleReferences` finds references in free text. It's built on Slice 2's parser and takes only "book chapter:verse" forms plus "Psalm N", so "I met Mark 3 times" or "5:30" never link. A capitalised word before the book is dropped ("In John 3:16" links "John 3:16").
+      - `bibleOpenRequestProvider` carries "open the Bible here". The app shell leaves the immersive view and switches to the Bible tab; the Bible tab opens the reference and marks it handled.
+      - `BibleVersePreviews` is a plain-Dart contract that the Bible feature implements (`PreviewBibleVerse`, registered in the service locator). It reads the version last read, the verse range asked for, or a chapter's opening verses.
+      - Shared widgets: `ReadInContextButton`, `ScriptureLinkedText`, `ScripturePreviewCard`.
+    - **Scripture of the Day:**
+      - "Read in context" is on all three of its surfaces: the guest feed card, the registered streak card, and the full-screen immersive view.
+      - It shows nothing when the text isn't a reference the Bible can open; the local "Success Test" entry correctly showed no button.
+    - **Testimonies:**
+      - References in a written testimony's text, and in transcripts, are underlined links.
+      - Tapping one shows the mock's inline card, "Psalm 23:4 · BSB" with the verse from the Bible on the phone, then "Open in Bible", which leaves the testimony and opens the reader there.
+      - Citations now read "Psalm 23:4", not "Psalms 23:4"; this also improves Slice 2's "Go to Psalm 119:176".
+    - **No Bible downloaded yet:**
+      - The card says "Download a Bible to read the full chapter" with "Get the Bible".
+      - The Bible tab's download screen then shows "Download a Bible to read Philippians 4:13 in context", and the reference opens as soon as the download finishes.
+    - **Found and fixed:** two overlapping `goTo` calls (restoring the last chapter on first open, and a "John 3:16" request) could finish out of order and leave the older one showing. The reader controller now lets the latest navigation win.
+    - **Live check:**
+      - **Scripture of the Day:** "Read in context" on "Philippians 4:13" opened Philippians 4.
+      - **Testimony:** "Psalm 23:4" in a written testimony showed the BSB verse in place; "Open in Bible" opened Psalm 23 at verse 4.
+      - "Phil 4:13" in the same text was linked too.
+    - **Tests:**
+      - 16 new in `bible_scripture_links_test`:
+        - finding references, including what isn't one;
+        - request lifecycle;
+        - verse previews (version last read, range, chapter, none);
+        - the linked text, its preview card, and the no-Bible offer;
+        - Read in context and its graceful hiding;
+        - the Bible tab opening a request, and waiting through a first download;
+        - latest navigation wins.
+      - `bible_reference_test` updated for "Psalm".
+      - Full mobile suite 762 passed / 6 failed: the same 6 pre-existing onboarding-step failures. `flutter analyze` is clean.
 
 #### Admin Flows
 - **Slice 8 — Admin manages which Bibles readers can download** — Goal: Admin controls the version list readers see, ready for more versions later.
