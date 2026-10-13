@@ -49,7 +49,7 @@ Snapshot as of 2026-10-09. **Each phase's own `Status:` line is the source of tr
 | 31 | Priority Moderation & Publishing | ⬜ Not started | |
 | 32 | Self-Service Video Testimony Upload (Premium) | ✅ Complete | |
 | 33 | Immersive Discovery | ✅ Complete | |
-| 34 | Bible Reader & Word Study | 🟡 Slices 1–4 of 8 done (1 and 3 live in production; 4 is mobile-only) | Next: Slice 5 (select text and study the original word) |
+| 34 | Bible Reader & Word Study | 🟡 Slices 1–5 of 8 done (packs for 1, 3 and 5 live in production; 4 is mobile-only) | Next: Slice 6 (concordance) |
 
 Test baseline: as of 2026-10-09 the full backend suite passes with 0 failures. Older entries below cite "the pre-existing 21 `apps.authn` failures" (live Brevo calls from tests). That was accurate when written, but the baseline no longer exists, so any new failure is a real one.
 
@@ -2393,6 +2393,78 @@ Sub-slices (each lists the backend, mobile, and dashboard work it ships):
     - **Phrases:** a selection spanning several original words ("eternal life") lists each underlying word to pick from.
     - **No linked word:** a selection with no linked original word, such as punctuation or a word the translators supplied, says so plainly instead of guessing.
     - **Downloads:** the study pack joins the first-run download, and readers who already have a Bible are offered it the first time they tap Look up. Everything is answered from the local packs, offline.
+  - ✅ **Implemented 2026-10-13 (backend pack builds + mobile).** Live-verified on an Android emulator with the real packs, served from a local backend and pack server. **Packs live in production 2026-10-13** (see Production rollout below).
+    - **Sources (pinned by URL + sha256, never committed):**
+      - **The BSB's translation tables** (`bsb_tables.tsv`, ~85 MB, public domain): one row per Hebrew/Aramaic/Greek word, in BSB English order. Each row gives the original word, transliteration, parsing (as a code and in words), Strong's number and the BSB phrase that translates it.
+      - **STEPBible's TBESH/TBESG brief lexicons** (CC BY 4.0), pinned to commit `81450441`.
+      - bereanbible.com resets long transfers, so `fetch_source` now resumes with HTTP Range requests; the pin still decides correctness.
+    - **Backend services** (`apps/bible/services/`):
+      - `original_text.py` parses the tables. It strips Hebrew cantillation and keeps the vowels, and puts parsing in plain words ("Verb · aorist indicative active · 3rd person singular"; Hebrew stems such as Qal keep their capital).
+      - `word_links.py` places the BSB phrases into the verse text in order:
+        - `[supplied]` brackets, `. . .`, markup and spacing around punctuation are handled;
+        - "vvv" words (translated inside the next phrase, e.g. μὴ in "shall not perish") share that span;
+        - untranslated words get no link.
+        - **Result: 386,062 of 386,062 translated phrases placed (100%)**, gate 99.9%.
+      - KJV links come from its CrossWire Strong's tags. **All 348,884 are found in the text, and 95.8% are matched to the original word in the same verse** by Strong's number (gate 93%). The rest are mostly NT places where the KJV's Greek text differs from the BSB's; they still link to the lexicon, without an "In this verse" form.
+      - `lexicon.py` picks one entry per Strong's number: the plain number, else its "a" entry (H1121 → H1121A "son"), main entry before sub-meanings. **All 13,876 BSB and 14,047 KJV numbers have an entry.** HTML is stripped, plus Abbott-Smith's opening headword forms and "[in LXX …]" notes; the attribution states these changes, as CC BY asks.
+      - `study_pack.py` writes the shared pack:
+        - `original_words` (443,625 words, keyed by verse and position, indexed by Strong's number, which is also Slice 6's concordance);
+        - `lexicon`, `morphology` (3,819 parsings) and `strongs_counts` ("Used 143 times").
+      - Version packs gain `word_links` (WITHOUT ROWID, keyed by verse; dropping the separate index cut the BSB from 20.9 to 15 MB on the phone) and `renderings` ("Translated in the BSB as"). `has_word_links=1` in their metadata makes publishing set `supports_word_study`.
+    - **Sizes (download / on the phone):**
+      - BSB 5.9 / 15 MB;
+      - KJV 5.3 / 13.8 MB;
+      - word study 10.8 / 34 MB.
+      - A new reader's first download is 16.6 MB (the app shows sizes in binary megabytes, so "15.9 MB").
+    - **Builds are reproducible:** three full rebuilds were byte-identical. Format version stays 1, since the new tables are additive and older app builds simply ignore them.
+    - **Mobile:**
+      - **Look up:** selecting text shows a toolbar with **Look up** (purple, first) beside the platform's Copy / Share / Select all.
+        - Each verse paragraph has its own `SelectionListener`, so the app knows which verses are selected and where.
+        - **Found on device:** Flutter 3.32 reports the selection's *end* 1–3 characters short in a paragraph containing a WidgetSpan (the verse number): "perish" came back as "per". The start is exact, so within one verse the selected text itself fixes the end; across verses, the last range runs to the end of its word.
+      - **The sheet, as the approved mock:**
+        - the lemma (Literata covers polytonic Greek; pointed Hebrew uses the newly bundled **Noto Serif Hebrew**, OFL, 184 KB);
+        - transliteration · part of speech, and the Strong's badge;
+        - "In this verse" with the form and its parsing;
+        - Meaning (gloss, plus the definition with Show more);
+        - "Translated in the BSB as" chips, and "Used 2,600 times in the Hebrew Bible";
+        - the STEPBible credit.
+        - Slice 6 makes the count open the concordance.
+      - **A phrase** lists each original word ("Two Greek words behind your selection") and opens the one chosen, with a way back.
+      - **Supplied words or punctuation** say so plainly.
+      - **Missing downloads are offered in place:**
+        - word study not downloaded: "Word study is a one-time download", Download, then the answer;
+        - a Bible downloaded before word study: "Update the BSB to study its words", only when the manifest has a word-study build, then the answer.
+        - The sheet watches the files' checksums, so it answers as soon as either arrives.
+      - **First download:** the BSB plus word study, with one progress bar ("Download · 15.9 MB"). If word study fails, the Bible still opens and Look up offers it later.
+      - **Downloaded Bibles** now matches the approved mock, which Slice 4 hadn't followed:
+        - a "Using X MB" banner;
+        - "On this phone" with a word-study row ("Used by every version", always deletable);
+        - "Available to download" with Download buttons;
+        - the footer note and Sources & credits, which now include word study's attribution.
+      - The word-study pack is a separate kind (`InstalledBible.kind`; records saved before Slice 5 read as Bibles) and never appears as a Bible to read.
+    - **Live check (emulator, real packs, local backend):**
+      - **Greek:** "loved" in John 3:16 showed ἀγαπάω / ἠγάπησεν, parsed, with 143 uses. "perish" listed μή and ἀπολλύω (ἀπόληται, aorist subjunctive middle, 90 uses).
+      - **Hebrew:** "God" in Genesis 1:1 showed אֱלֹהִים, fully pointed. The old KJV offered its update, then showed "Translated in the KJV as": God, gods, God's, judges, goddess, great, mighty, angels.
+      - **Downloads:** word study downloaded from the sheet, and two rebuilt word-study packs arrived through Downloaded Bibles' Update.
+    - **Also found and fixed on device:**
+      - (a) Word study's size was missing from "Using X MB".
+      - (b) An update with an unchanged data version didn't refresh the reader or the sheet; both now key on the file's sha256.
+      - (c) My UI-automation helper re-read a stale dump file, which explained earlier phantom screens. It now deletes the old dump first.
+    - **Tests:**
+      - Backend: 28 new (`test_word_study.py`: tables parsing, BSB/KJV linking incl. vvv/brackets/spacing, coverage gate, renderings, lexicon selection and cleaning, study pack contents/concordance/reproducibility, resumable download). Full suite **1033/1033**.
+      - Mobile:
+        - 28 new in `bible_word_study_test` (selection offsets incl. the device's short ends, every Look up outcome, kinds, delete rule, first download with word study and its failure, the sheet at 360/393/600dp, phrase picker, download-then-answer, update-then-answer, first-download screen at three widths);
+        - 2 repository tests through real SQLite (word study end to end incl. restart; a pre-word-study pack);
+        - `bible_downloads_test` updated for the new banner.
+        - Full mobile suite 734 passed / 6 failed: the same 6 pre-existing onboarding-step failures. `flutter analyze` is clean.
+    - ✅ **Production rollout, done 2026-10-13 (same path as Slices 1 and 3):**
+      - Verified from outside afterwards: production `GET /api/v1/bible/packs/` lists BSB v2 (word study, still default), KJV v2 (word study) and the study pack v1. All three S3 copies are byte-identical to the built files. The text-only v1 files stay in S3, unreferenced, and can be deleted later.
+      - Steps followed:
+      1. Upload `bsb-f11fc0351bdf.sqlite.gz`, `kjv-401bb0971cfc.sqlite.gz` and `study-10155968325784.sqlite.gz` to S3 `bible-packs/`.
+      2. Check each public URL returns 200.
+      3. Add three `publish_bible_pack --url … --sha256 …` commands to the Render Build Command once (`--enable` on all three; no `--default`, BSB stays default), then remove them.
+         - BSB and KJV become data version 2, so existing readers are offered the update.
+         - Word study is new, so it's offered in the first download and at the first Look up.
 - **Slice 6 — See everywhere a word is used (concordance)** — Goal: A reader can follow one original word through the whole Bible.
   - **Backend:** the study pack gains per-book counts per Strong's number (for the grouped headers and book filter), published as a new data version.
   - **Mobile:** from the word-study sheet, "Used N times" opens a concordance list for that Strong's number, grouped by book with a count per book. Each row shows the reference and the verse in the current version, with the matching English word emphasised. Tapping a row opens the reader at that verse, highlighted. The list is paged and filterable by book. Not by Old/New Testament: a Greek word only occurs in the New Testament and a Hebrew word only in the Old, so that filter would never narrow anything (caught while drawing the mock).

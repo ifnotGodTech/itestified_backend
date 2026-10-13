@@ -27,6 +27,8 @@ from apps.bible.services.pack_builds import Heading, ParsedText, Verse, finish_p
 
 _NOTE = re.compile(r"\\(f|fe|x)\s.*?\\\1\*", re.DOTALL)
 _WORD = re.compile(r"\\\+?w\s+([^|\\]*?)(?:\|[^\\]*)?\\\+?w\*")
+_TAGGED_WORD = re.compile(r"\\\+?w\s+([^|\\]*?)\|([^\\]*)\\\+?w\*")
+_STRONG = re.compile(r'strong="([HG])0*(\d+)[a-zA-Z]?"')
 _MARKER = re.compile(r"\\\+?[a-z]+[0-9]*\*?")
 _SPACE_BEFORE_PUNCTUATION = re.compile(r"\s+([,.;:!?])")
 _LINE = re.compile(r"^\\([a-z]+[0-9]*)\s*(.*)$")
@@ -44,19 +46,34 @@ def clean_usfm_text(raw: str) -> str:
     return _SPACE_BEFORE_PUNCTUATION.sub(r"\1", text)
 
 
+def strong_tags(raw: str) -> list[tuple[str, str]]:
+    """The Strong's-tagged words of a USFM fragment, in order, as
+    (the words as they read in the clean text, "G0025")."""
+    tags = []
+    for match in _TAGGED_WORD.finditer(_NOTE.sub("", raw)):
+        number = _STRONG.search(match[2])
+        words = re.sub(r"\s+", " ", match[1]).strip()
+        if number and words:
+            tags.append((words, number[1] + number[2].zfill(4)))
+    return tags
+
+
 def parse_usfm_zip(path: Path) -> ParsedText:
     verses: list[Verse] = []
     omitted: list[str] = []
     headings: list[Heading] = []
+    word_tags: dict[tuple[int, int, int], list[tuple[str, str]]] = {}
     seen: set[tuple[int, int, int]] = set()
     try:
         with zipfile.ZipFile(path) as archive:
             names = sorted(name for name in archive.namelist() if name.lower().endswith((".usfm", ".sfm")))
             for name in names:
-                _parse_book(archive.read(name).decode("utf-8-sig"), name, verses, omitted, headings, seen)
+                _parse_book(
+                    archive.read(name).decode("utf-8-sig"), name, verses, omitted, headings, seen, word_tags
+                )
     except zipfile.BadZipFile as exc:
         raise BibleSourceFormatError(f"{path} is not a valid zip of USFM books.") from exc
-    return finish_parsed_text(verses, omitted, headings)
+    return finish_parsed_text(verses, omitted, headings, word_tags)
 
 
 def _parse_book(
@@ -66,6 +83,7 @@ def _parse_book(
     omitted: list[str],
     headings: list[Heading],
     seen: set[tuple[int, int, int]],
+    word_tags: dict[tuple[int, int, int], list[tuple[str, str]]],
 ) -> None:
     book_id: int | None = None
     chapter = 0
@@ -77,9 +95,13 @@ def _parse_book(
     def flush() -> None:
         nonlocal current, buffer
         if current is not None:
-            text = clean_usfm_text(" ".join(buffer))
+            raw = " ".join(buffer)
+            text = clean_usfm_text(raw)
             if text:
                 verses.append(Verse(*current, text))
+                tags = strong_tags(raw)
+                if tags:
+                    word_tags[current] = tags
             else:
                 omitted.append(f"{CANON[current[0] - 1].name} {current[1]}:{current[2]}")
         current, buffer = None, []

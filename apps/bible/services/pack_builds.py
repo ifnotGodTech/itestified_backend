@@ -24,6 +24,9 @@ from apps.bible.sources import SourceDataset, VersionDefinition
 
 PACK_FORMAT_VERSION = 1
 SOURCE_DOWNLOAD_TIMEOUT_SECONDS = 60
+# bereanbible.com resets long transfers (the 85 MB tables file reliably), so
+# downloads resume with a Range request rather than starting over.
+SOURCE_DOWNLOAD_ATTEMPTS = 6
 # Modern translations deliberately leave out a few verses absent from the
 # earliest manuscripts (the BSB lists 16, e.g. Matthew 17:21, John 5:4) as
 # empty lines. Far more than that means a broken source, not a translation
@@ -54,6 +57,9 @@ class ParsedText(NamedTuple):
     # "Book C:V" references the translation deliberately leaves empty.
     omitted: list[str]
     headings: list[Heading] = []
+    # Slice 5, tagged sources only (the KJV): each verse's Strong's-tagged
+    # words in order, as (words as they read in the text, "G0025").
+    word_tags: dict[tuple[int, int, int], list[tuple[str, str]]] = {}
 
 
 def sha256_of_file(path: Path) -> str:
@@ -75,10 +81,7 @@ def fetch_source(dataset: SourceDataset, cache_dir: Path) -> Path:
 
     with tempfile.NamedTemporaryFile(dir=cache_dir, delete=False) as handle:
         partial = Path(handle.name)
-        with requests.get(dataset.url, stream=True, timeout=SOURCE_DOWNLOAD_TIMEOUT_SECONDS) as response:
-            response.raise_for_status()
-            for chunk in response.iter_content(chunk_size=1024 * 1024):
-                handle.write(chunk)
+    _download_resuming(dataset.url, partial)
 
     actual = sha256_of_file(partial)
     if actual != dataset.sha256:
@@ -89,6 +92,29 @@ def fetch_source(dataset: SourceDataset, cache_dir: Path) -> Path:
         )
     partial.replace(target)
     return target
+
+
+def _download_resuming(url: str, target: Path) -> None:
+    """Streams `url` into `target`, resuming from the bytes already written
+    when the connection drops. The pinned sha256 is still what decides
+    whether the result is right."""
+    for attempt in range(1, SOURCE_DOWNLOAD_ATTEMPTS + 1):
+        have = target.stat().st_size
+        headers = {"Range": f"bytes={have}-"} if have else {}
+        try:
+            with requests.get(url, stream=True, headers=headers, timeout=SOURCE_DOWNLOAD_TIMEOUT_SECONDS) as response:
+                if response.status_code == 416:  # nothing left to fetch
+                    return
+                response.raise_for_status()
+                # 200 to a Range request means the server sent the whole file.
+                mode = "ab" if have and response.status_code == 206 else "wb"
+                with target.open(mode) as handle:
+                    for chunk in response.iter_content(chunk_size=1024 * 1024):
+                        handle.write(chunk)
+            return
+        except (requests.ConnectionError, requests.exceptions.ChunkedEncodingError):
+            if attempt == SOURCE_DOWNLOAD_ATTEMPTS:
+                raise
 
 
 def parse_verse_text(path: Path) -> ParsedText:
@@ -121,7 +147,10 @@ def parse_verse_text(path: Path) -> ParsedText:
 
 
 def finish_parsed_text(
-    verses: list[Verse], omitted: list[str], headings: list[Heading] | None = None
+    verses: list[Verse],
+    omitted: list[str],
+    headings: list[Heading] | None = None,
+    word_tags: dict[tuple[int, int, int], list[tuple[str, str]]] | None = None,
 ) -> ParsedText:
     """Shared completeness rules for every source format: all 66 books
     present, and no more omitted verses than a translation plausibly makes.
@@ -136,7 +165,7 @@ def finish_parsed_text(
         )
     verses.sort(key=lambda verse: (verse.book_id, verse.chapter, verse.verse))
     ordered_headings = sorted(headings or [], key=lambda h: (h.book_id, h.chapter, h.before_verse))
-    return ParsedText(verses=verses, omitted=omitted, headings=ordered_headings)
+    return ParsedText(verses=verses, omitted=omitted, headings=ordered_headings, word_tags=word_tags or {})
 
 
 def parse_source(definition: VersionDefinition, path: Path) -> ParsedText:
@@ -150,8 +179,18 @@ def parse_source(definition: VersionDefinition, path: Path) -> ParsedText:
     raise BibleSourceFormatError(f"Unknown text format {definition.text_format!r}.")
 
 
-def write_version_pack(*, definition: VersionDefinition, parsed: ParsedText, source_sha256: str, out_dir: Path) -> Path:
-    """Writes `<code>.sqlite.gz` into `out_dir` and returns its path."""
+def write_version_pack(
+    *,
+    definition: VersionDefinition,
+    parsed: ParsedText,
+    source_sha256: str,
+    out_dir: Path,
+    word_links: list | None = None,
+    renderings: list[tuple[str, str, int]] | None = None,
+) -> Path:
+    """Writes `<code>.sqlite.gz` into `out_dir` and returns its path.
+    `word_links` (WordLink rows) and `renderings` (strongs, rendering,
+    count) add word study (Slice 5); without them the pack is text only."""
     out_dir.mkdir(parents=True, exist_ok=True)
     verses = parsed.verses
     chapter_counts: dict[int, int] = {}
@@ -192,7 +231,7 @@ def write_version_pack(*, definition: VersionDefinition, parsed: ParsedText, sou
                 "attribution": definition.attribution,
                 "source_sha256": source_sha256,
                 "verse_count": str(len(verses)),
-                "has_word_links": "0",
+                "has_word_links": "1" if word_links else "0",
                 "omitted_verses": "; ".join(parsed.omitted),
                 "sort_order": str(definition.sort_order),
             }
@@ -230,15 +269,64 @@ def write_version_pack(*, definition: VersionDefinition, parsed: ParsedText, sou
                 heading_rows.append((*key, positions[key], heading.text))
             if heading_rows:
                 connection.executemany("INSERT INTO headings VALUES (?, ?, ?, ?, ?)", heading_rows)
+            if word_links:
+                _write_word_links(connection, word_links, renderings or [])
             connection.commit()
             connection.execute("VACUUM")
         finally:
             connection.close()
 
-        pack_path = out_dir / f"{definition.code}.sqlite.gz"
-        with database_path.open("rb") as source, pack_path.open("wb") as target:
-            # filename="" and mtime=0 keep the gzip header free of anything
-            # that would change between otherwise identical builds.
-            with gzip.GzipFile(filename="", mode="wb", fileobj=target, mtime=0, compresslevel=9) as compressed:
-                shutil.copyfileobj(source, compressed)
+        return compress_pack(database_path, out_dir / f"{definition.code}.sqlite.gz")
+
+
+def _write_word_links(connection: sqlite3.Connection, links: list, renderings: list[tuple[str, str, int]]) -> None:
+    """Slice 5. `word_links`: which characters of a verse translate which
+    original word. `position` points into the study pack's `original_words`
+    (NULL when the original word isn't known, e.g. a KJV word whose Greek
+    text differs); `strongs` is always there for the lexicon. `renderings`:
+    how this version translates each Strong's number, for "Translated in
+    the BSB as"."""
+    connection.executescript(
+        """
+        CREATE TABLE word_links (
+            book_id INTEGER NOT NULL,
+            chapter INTEGER NOT NULL,
+            verse INTEGER NOT NULL,
+            seq INTEGER NOT NULL,
+            start_offset INTEGER NOT NULL,
+            end_offset INTEGER NOT NULL,
+            strongs TEXT NOT NULL,
+            position INTEGER,
+            PRIMARY KEY (book_id, chapter, verse, seq)
+        ) WITHOUT ROWID;
+        CREATE TABLE renderings (
+            strongs TEXT NOT NULL,
+            rendering TEXT NOT NULL,
+            count INTEGER NOT NULL,
+            PRIMARY KEY (strongs, rendering)
+        ) WITHOUT ROWID;
+        """
+    )
+    # Keyed by verse (how readers look them up), so no separate index: the
+    # table is its own index, which roughly halves its size on the phone.
+    ordered = sorted(
+        links, key=lambda link: (link.book_id, link.chapter, link.verse, link.start, -1 if link.position is None else link.position)
+    )
+    rows = []
+    previous_verse = None
+    for link in ordered:
+        verse = (link.book_id, link.chapter, link.verse)
+        seq = seq + 1 if verse == previous_verse else 0
+        previous_verse = verse
+        rows.append((*verse, seq, link.start, link.end, link.strongs, link.position))
+    connection.executemany("INSERT INTO word_links VALUES (?, ?, ?, ?, ?, ?, ?, ?)", rows)
+    connection.executemany("INSERT INTO renderings VALUES (?, ?, ?)", renderings)
+
+
+def compress_pack(database_path: Path, pack_path: Path) -> Path:
+    with database_path.open("rb") as source, pack_path.open("wb") as target:
+        # filename="" and mtime=0 keep the gzip header free of anything
+        # that would change between otherwise identical builds.
+        with gzip.GzipFile(filename="", mode="wb", fileobj=target, mtime=0, compresslevel=9) as compressed:
+            shutil.copyfileobj(source, compressed)
     return pack_path
