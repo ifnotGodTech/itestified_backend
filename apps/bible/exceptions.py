@@ -18,3 +18,13 @@ class BiblePackVerificationError(BiblePackError):
 
 class BiblePackInvalidError(BiblePackError):
     """A file passed to publish isn't a readable iTestified Bible pack."""
+
+
+class BiblePackChangeRefused(Exception):
+    """An admin change that would leave readers worse off (Phase 34 Slice
+    8): no Bible to download, no default, or word-study Bibles without the
+    word-study pack. `code` is stable for clients; the message is for people."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code

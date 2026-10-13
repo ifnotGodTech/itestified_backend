@@ -49,7 +49,7 @@ Snapshot as of 2026-10-09. **Each phase's own `Status:` line is the source of tr
 | 31 | Priority Moderation & Publishing | ⬜ Not started | |
 | 32 | Self-Service Video Testimony Upload (Premium) | ✅ Complete | |
 | 33 | Immersive Discovery | ✅ Complete | |
-| 34 | Bible Reader & Word Study | 🟡 Slices 1–7 of 8 done (packs for 1, 3 and 5 live in production; 4, 6 and 7 are mobile-only) | Next: Slice 8 (admin manages Bible packs from the dashboard) |
+| 34 | Bible Reader & Word Study | ✅ All 8 slices done (BSB, KJV and word-study packs live in production) | Mobile features ship with the next app build; Slice 8 needs the backend deploy (migration `bible.0002`) |
 
 Test baseline: as of 2026-10-09 the full backend suite passes with 0 failures. Older entries below cite "the pre-existing 21 `apps.authn` failures" (live Brevo calls from tests). That was accurate when written, but the baseline no longer exists, so any new failure is a real one.
 
@@ -2534,6 +2534,48 @@ Sub-slices (each lists the backend, mobile, and dashboard work it ships):
   - **Backend:** admin endpoints (session auth + `IsActiveAdmin`, like the other admin settings APIs) to list all packs and to change a pack's enabled flag or make a version the default. Each is a service command in `transaction.atomic()`, with `select_for_update()` so two admins can't leave zero or two defaults. Each change is recorded in a small `BiblePackChangeHistory` audit table (who, what, when). Two guards: the last enabled version can't be disabled, and the study pack can't be disabled while any word-study version is enabled.
   - **Dashboard:** a settings page listing every pack with its size, data version, licence/attribution text, enabled toggle, and default choice. Built to the mobile work's UX quality bar rather than copying an older settings screen, with a confirmation before disabling a version readers may have downloaded. Next.js proxy routes, component tests, and the E2E admin gate per this plan's Mandatory Cross-Client Test Gate.
   - Building and uploading packs stays a release-time management-command step, not a dashboard action.
+  - ✅ **Implemented 2026-10-13 (backend + dashboard).** Verified end to end locally: the real dashboard and backend, logged in as a real admin.
+    - **Backend:**
+      - `BiblePackChange` audit table (pack, action enabled/disabled/made_default, actor, when), migration `bible.0002_bible_pack_change`.
+      - Service commands `set_bible_pack_enabled` and `make_bible_pack_default`, each in `transaction.atomic()`. They lock every pack row in one fixed order (`select_for_update().order_by("id")`), because the guards look across rows.
+      - **Guards**, each refused with a stable code and a plain-words message:
+        - the default can't be hidden (`is_default`: make another version the default first);
+        - the last version readers can download can't be hidden (`last_version`);
+        - word study can't be hidden while any shown version supports it (`study_in_use`);
+        - only an enabled Bible version can be the default (`not_a_version` / `disabled`).
+      - A change to the same state records nothing. Hiding a Bible never touches readers' phones: they keep what they downloaded.
+      - An extra "no file" guard was dropped: the existing `bible_pack_downloadable_has_file` check constraint already makes it unreachable.
+      - **Endpoints** (session auth + `IsActiveAdmin`):
+        - `GET /bible/admin/packs/` (every pack, hidden included, versions first);
+        - `GET /bible/admin/packs/changes/` (paginated, newest first, with the admin's name);
+        - `POST /bible/admin/packs/<code>/enable|disable|make-default/` (400 with `{code, message}` when refused, 404 for an unknown pack).
+    - **Dashboard** (`/bible-packs`, "Bible downloads" under Settings):
+      - **A server-rendered page in the mobile work's style rather than an older settings screen:**
+        - a card per Bible with a "Default for new readers" pill and an "Available to readers" or "Hidden" pill;
+        - size, data version and word-study support on each card, plus "Credits shown to readers" (the attribution) one click away;
+        - word study in its own section;
+        - a "Recent changes" list ("Bible Admin made King James Version the default").
+      - **Actions say why before anyone tries:** a pack that can't be hidden shows "Can't be hidden: …" with the reason, instead of a button that fails.
+      - **Hiding asks first:** a dialog explains that new readers won't see it, that anyone who downloaded it keeps it, and that it can be made available again.
+      - **Outcomes:** successes and backend refusals come back as a plain-words banner.
+      - Next.js proxy route `api/admin/bible-packs/[code]/[action]`.
+      - **Found by the E2E run and fixed:** redirecting with `new URL(…, req.url)` sent the browser to `localhost` in dev even when the admin had opened `127.0.0.1`, so the host-scoped session cookie didn't follow and every later call was refused. This route now redirects with a relative `Location`. **The other dashboard proxy routes build their redirects the same way and likely share this issue in dev**; worth one shared fix later.
+    - **Tests:**
+      - Backend: 15 new (`test_admin_settings.py`: every guard, the history, no-op changes, the public manifest dropping a hidden pack, guest and reader refused on all five endpoints). Full suite **1047/1047**; no pending migrations.
+      - Dashboard:
+        - 7 view-model tests (backend contract and session cookie, every guard worked out ahead, banners, the confirmation only for a hideable pack, the error state);
+        - 7 component tests (cards, buttons and their form actions, reasons, the dialog, the history wording, the error state, the Settings entry);
+        - full suite 42 files / 294 tests green;
+        - `tsc` clean;
+        - lint clean for the new files. One existing lint error remains in `use-unread-testimony-count.ts`, untouched.
+      - **E2E** (`e2e/bible-packs.spec.ts`), real admin against the real backend:
+        - log in, open Bible downloads;
+        - see why the default can't be hidden;
+        - hide the KJV through the dialog, then see the banner, the "Hidden" pill and the history entry, and confirm the app's public `GET /bible/packs/` no longer lists `kjv`;
+        - make it available again.
+        - It starts from a known state if a previous run stopped halfway.
+        - It ran green locally with a temporary admin, which was deleted afterwards along with its history rows.
+    - **Production:** pushing deploys it. Render's build runs `migrate`, which creates the change table. No pack or data changes are needed.
 
 Test:
 - pack build: reproducible (same inputs give the same pack checksum). The coverage report states the share of BSB words with a word-study link, and the build refuses to complete below the agreed threshold.
@@ -2543,7 +2585,20 @@ Test:
 - reference parser: common abbreviations, numbered books ("1 Cor", "1 Corinthians", "I Corinthians"), chapter-only and verse-range forms, and graceful failure for text that isn't a reference.
 - mobile: the adaptive gate at 360/393/600dp for the download screen, reader, sheets, and the new bottom bar. Reading, word study, and the concordance work in airplane mode after download. Switching version keeps the visible verse. A selection with no linked word shows the plain "no original word" message.
 
-Status: not started — drafted 2026-10-09 from the admin's feature request and same-day licensing/data research. A concept mock (published Artifact "iTestified Bible Concept", https://claude.ai/artifact/CQKxkWte3fYUUKvPRqpWL9, the established review-before-build pattern) was approved by the admin 2026-10-09, along with the Bible-replaces-Category tab decision. The same day the storage design changed from a Postgres import to downloadable on-device packs (see Decisions); the download and Downloaded Bibles screens were added to the mock for review. Still open: the KJV tagging-dataset licence check, needed before KJV word study (Slices 5-6).
+Status: ✅ **complete 2026-10-13**, all 8 slices.
+- Drafted 2026-10-09 from the admin's feature request, with a concept mock approved the same day (published Artifact "iTestified Bible Concept", https://claude.ai/artifact/CQKxkWte3fYUUKvPRqpWL9).
+- The KJV tagging question was settled 2026-10-12 (option 1: CrossWire tags under the GPL, credited).
+- In production: the BSB (default), KJV and word-study packs are live in S3 and the manifest.
+- Readers get Slices 2–7 with the next mobile build. Slice 8 arrives with the backend and dashboard deploy.
+- The Test list above is covered by the slices' own tests:
+  - reproducible builds and the coverage gate;
+  - John 3:16 offsets ("loved" → G25);
+  - the manifest's enabled-only list and single default;
+  - downloader integrity, update and resume;
+  - the reference parser;
+  - the 360/393/600dp widget gates;
+  - offline reading, keep-my-place, and the "no original word" message.
+- **Known gap:** the 6 pre-existing mobile test failures (onboarding's first button now reads "Next") predate this phase and are unrelated.
 
 ## Risks To Watch Early
 

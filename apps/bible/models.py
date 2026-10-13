@@ -1,7 +1,8 @@
+from django.conf import settings
 from django.db import models
 from django.db.models import Q
 
-from apps.bible.choices import BiblePackKind
+from apps.bible.choices import BiblePackChangeAction, BiblePackKind
 
 
 class BiblePack(models.Model):
@@ -52,3 +53,26 @@ class BiblePack(models.Model):
 
     def __str__(self) -> str:
         return f"{self.abbreviation} ({self.code}, v{self.data_version})"
+
+
+class BiblePackChange(models.Model):
+    """Audit trail for the dashboard's Bible settings (Phase 34 Slice 8):
+    who enabled, disabled or made a pack the default, and when. Publishing a
+    new file isn't recorded here; that's `data_version` on the pack."""
+
+    pack = models.ForeignKey(BiblePack, on_delete=models.CASCADE, related_name="changes")
+    action = models.CharField(max_length=16, choices=BiblePackChangeAction.choices)
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="bible_pack_changes",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+
+    def __str__(self) -> str:
+        return f"BiblePackChange<{self.pack_id} {self.action}>"
