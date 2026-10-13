@@ -49,7 +49,7 @@ Snapshot as of 2026-10-09. **Each phase's own `Status:` line is the source of tr
 | 31 | Priority Moderation & Publishing | ⬜ Not started | |
 | 32 | Self-Service Video Testimony Upload (Premium) | ✅ Complete | |
 | 33 | Immersive Discovery | ✅ Complete | |
-| 34 | Bible Reader & Word Study | 🟡 Slices 1–3 of 8 done (1 and 3 live in production) | Next: Slice 4 (manage downloaded Bibles) |
+| 34 | Bible Reader & Word Study | 🟡 Slices 1–4 of 8 done (1 and 3 live in production; 4 is mobile-only) | Next: Slice 5 (select text and study the original word) |
 
 Test baseline: as of 2026-10-09 the full backend suite passes with 0 failures. Older entries below cite "the pre-existing 21 `apps.authn` failures" (live Brevo calls from tests). That was accurate when written, but the baseline no longer exists, so any new failure is a real one.
 
@@ -2351,6 +2351,37 @@ Sub-slices (each lists the backend, mobile, and dashboard work it ships):
 - **Slice 4 — Manage downloaded Bibles** — Goal: A reader can see what's on their phone, free up space, and get data updates.
   - **Backend:** none new. Publishing a rebuilt pack bumps that row's data version (already part of `publish_bible_pack`), and that is what tells phones an update exists.
   - **Mobile:** a "Downloaded Bibles" screen (from the version sheet) lists each downloaded pack with its size and a Delete action. The version being read can't be deleted while it's the only one left. When the manifest's data version is newer than the phone's, an "Update available" action re-downloads it, and the old copy stays in use until the new one is verified.
+  - ✅ **Implemented 2026-10-13 (mobile only, as planned; no backend change).** Live-verified on an Android emulator against production: BSB and KJV downloaded from S3, then the KJV deleted while it was being read.
+    - **Downloaded Bibles screen:**
+      - Opened from a new row at the foot of the version sheet. The row reads "Free up space or check for updates", or "1 update available" in purple when there is one.
+      - Shows the total space used ("…use 8.6 MB"). Each Bible shows its real size on the phone (e.g. KJV 4.4 MB, measured from the file, not the 1.5 MB download), with "Reading now" on the active one.
+      - **Delete** asks first ("Delete King James Version? It frees 4.4 MB. You can download it again any time.").
+        - Deleting the Bible being read moves the reader to one still on the phone, at the same verse (on device: KJV John 1:5 → BSB John 1:4–5).
+        - The last Bible can't be deleted. Its button is disabled, and a note says why. The rule lives in the `DeleteBible` use case (`BibleLastBibleFailure`), not just the UI.
+        - The pack file goes first, then its Hive record. A Bible only counts as installed while its file exists, so a half-finished delete never shows a broken Bible.
+      - **Update** appears when the manifest's data version is newer than the phone's (`InstalledBible.isOutdatedBy`).
+        - It re-downloads through the same verified install path. The old file stays in use until the new one passes size + sha256 + identity checks.
+        - The reader stays on whatever it was showing. If the updated Bible is the one being read, the reader reloads from the new file at the same verse: the reader key now includes the data version.
+        - Progress, cancel, and errors show inline.
+      - Offline, the screen still lists the Bibles and says "Couldn't check for updates right now", with Retry.
+    - **Not yet tried on a real update:** production has no second build of any pack. The update path is covered by tests, including a corrupted v2 download leaving v1 readable; it will first run for real when Slice 5 republishes the packs with word links.
+    - **Found and fixed while checking on device:**
+      - (a) **App-wide bug, not new in this slice:** `MinimalAnimatedSwitcher`, which wraps the whole app shell, returned a bare child under reduced motion and an `AnimatedSwitcher` otherwise. When accessibility switched on mid-session (TalkBack, or the UI-automation dump used for these checks), the widget type changed and the entire home shell remounted. Every tab lost its state: the Bible reader jumped back to the top, and the version sheet's "Downloaded Bibles" row couldn't open its screen because the reader that launched it was gone. It now always builds the same `AnimatedSwitcher`, with zero duration under reduced motion. There's a regression test (state survives the flip), and `app_shell_motion_test` was updated to match.
+      - (b) The delete buttons only had a tooltip, which Android doesn't announce as a button name, so TalkBack skipped them. They now carry an explicit label and tap action, the same fix as the Home header in Slice 1.
+      - (c) In light mode the cards matched the page colour, and then the BSB badge matched the card. The cards now use the surface colour, and `BibleVersionBadge` (now shared with the version sheet) takes the contrasting shade.
+      - (d) Incremental `flutter build apk` again installed stale Dart code: the device kept running code already deleted from the source. Only `flutter clean` builds are trustworthy for device checks.
+    - **Tests:**
+      - 14 new in `bible_downloads_test`:
+        - `DeleteBible`: deletes, keeps the last one, reports storage errors;
+        - `isOutdatedBy`;
+        - controllers: delete while reading switches, delete another stays, update in place without switching, a failed update keeps v1;
+        - the screen at 360/393/600dp: sizes, update, delete with confirm, last Bible disabled with note;
+        - the sheet's update count;
+        - delete while reading returns to the other Bible;
+        - offline.
+      - 2 new repository tests through real SQLite (ffi): a corrupted update leaves v1 readable, and the intact one replaces it and is read at once; delete removes the file and record, survives a restart, and frees the space.
+      - 1 new core test (the switcher keeps state).
+      - Full mobile suite 704 passed / 6 failed: the same 6 pre-existing onboarding-step failures. `flutter analyze` is clean.
 - **Slice 5 — Select text and study the original word** — Goal: A reader can select a word in the text and see what it means in the original Hebrew or Greek.
   - **Backend (pack build, still no database tables):**
     - **Word links:** `build_bible_packs` adds per-verse word links (character offsets, Strong's number, morphology code) to the **BSB pack**, placing the translation tables' English phrases into the verse text in order. It prints a coverage report and fails below the agreed threshold. The KJV pack gets word links too, from the CrossWire Strong's tags already in its USFM source (decided 2026-10-12, GPL, credited).
