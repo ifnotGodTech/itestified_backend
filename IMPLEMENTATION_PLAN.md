@@ -50,7 +50,7 @@ Snapshot as of 2026-10-09. **Each phase's own `Status:` line is the source of tr
 | 32 | Self-Service Video Testimony Upload (Premium) | ✅ Complete | |
 | 33 | Immersive Discovery | ✅ Complete | |
 | 34 | Bible Reader & Word Study | ✅ All 8 slices done (BSB, KJV and word-study packs live in production) | Mobile features ship with the next app build; Slice 8 needs the backend deploy (migration `bible.0002`) |
-| 35 | Immersive-first Home | ⬜ Not started | Slice 6 (dashboard-managed reactions per category) deferred |
+| 35 | Immersive-first Home | 🟡 Slice 1 done (Home opens into the feed; promos in feed, carousel retired) | Slices 2–5 next; Slice 6 deferred |
 
 Test baseline: as of 2026-10-09 the full backend suite passes with 0 failures. Older entries below cite "the pre-existing 21 `apps.authn` failures" (live Brevo calls from tests). That was accurate when written, but the baseline no longer exists, so any new failure is a real one.
 
@@ -2650,6 +2650,59 @@ Confirmed by inspection (2026-10-14):
   - Widget gates at 360/393/600dp.
 - **Dashboard:** none.
 - **DB footprint:** none.
+- **✅ Built and verified 2026-10-14** (mobile only), checked on the emulator against the local backend.
+  - What shipped:
+    - `HomeFeedTab` replaces `DiscoverScreen` as the Home tab.
+    - `ImmersiveFeedScreen` gained a Home mode: a top bar ("For you", Search, Notifications, or Create account for guests) and no close button.
+    - The bottom nav stays visible.
+    - Live and Scripture now follow the first testimony instead of leading, so Home opens on a testimony.
+  - Verified on device:
+    - Video and audio get a play/pause button and a draggable scrubber (`ImmersivePlayback`/`ImmersiveScrubber`). Pause held position, seeking jumped to the right time, and a viewer's pause survives a seek.
+    - When the item is covered (a sheet, another screen, another tab), video and audio pause in place instead of restarting. A video left at 0:05 for 12s on the Bible tab resumed from where it stopped.
+    - Written testimonies show the title and the whole story, scrolling in the card, with Scripture references linked. A fresh swipe that starts at the end of a story moves on; a fast scroll that merely runs into the end stops there.
+    - The swipe nudge appears after 8s on an item for a viewer who has never swiped, and never again after their first swipe. It's a device flag (`HomeFeedSwipeLearnedController`).
+    - The first back press on Home shows "Press back again to leave iTestified"; a second within 2s leaves. Other tabs keep their usual back behaviour.
+  - Found and fixed during the device check:
+    - If the first page brought no testimonies (seen live: an expired session token got a 403), Home showed a Scripture-and-live-only feed that reshuffled under the viewer once testimonies arrived. Home now shows "We couldn't load testimonies just now" with Try again. It also reloads the feed whenever the viewer signs in or out.
+    - The guest daily-limit gate swapped out the guest's 3rd free video a few seconds in, because starting it is what reaches the limit. Phase 33 had the same bug. The gate is now decided once, when a video becomes the current item.
+    - The gate's "Go Back" popped the app's root route and left a blank screen; in the feed it now reads "Next testimony" and moves on.
+    - A late view-count response used `ref` after its video had gone (guarded).
+    - The category pill overlapped a video's iTestified mark.
+  - Removed as Discovery-only:
+    - `discover_screen.dart`, the Guest/Registered headers, `live_now_card.dart`, `home_discover_picture_cards.dart` and the feed-card part of `scripture_streak_card.dart`. Its palette moved to `scripture_palette.dart`, and `CommunityPrompt` to `community_prompt.dart`.
+    - The Home carousel and promo cards stopped appearing; see the follow-ups below for what was decided.
+  - Tests: new widget tests for:
+    - the Home tab;
+    - Try again;
+    - the written story and the pull-past-end hand-off;
+    - the nudge;
+    - the guest-limit regression;
+    - the 360/393/600dp gate, now run as Home under the top bar and above the nav.
+
+    Full suite: 759 passed. The only failures are the 6 known onboarding "Continue" ones.
+  - Slice 5 (measurement) was planned alongside Slice 1 but has not been built yet, so there is no "before" baseline from the old Discovery screen.
+
+Follow-ups to Slice 1, decided by the admin 2026-10-14 and built the same day:
+- **Carousel retired.** It doesn't fit an immersive feed; opening straight into a playing testimony does its job.
+  - It was fully automatic (recent pictures plus pull-quotes), with no dashboard screen and no table of its own, so there was no data to lose.
+  - Removed:
+    - backend: `GET /content/home-feed/carousel/`, `home_carousel_slides` and their tests;
+    - mobile: `home_carousel.dart`, `home_carousel_controller.dart`, the endpoint constant and their tests.
+  - Older app builds already treat a failed carousel request as "no slides".
+- **Promo cards are back, as full pages in the feed** (the admin: "part of the ads experience").
+  - Mocked first as boards 7–8 on the [Home canvas](https://claude.ai/artifact/4GsmyZ6SKWdbD49SFupMQg).
+  - `immersiveSlotsProvider` no longer filters `PromoSlot` out. The same every-8-testimonies cadence and the same dashboard-managed promos apply.
+  - New `ImmersivePromoItem`:
+    - an always-visible "From iTestified" label, so it is never mistaken for a testimony;
+    - the image, or a brand gradient if there is none or it fails to load;
+    - the title, body and at most one button;
+    - "Swipe up to keep watching", and no auto-advance.
+  - The old list-card `home_promo_card.dart` and the now-unused `immersiveIndexForRawSlotIndex` were removed.
+  - **A guest tapping a referral or submit-testimony button is asked to create an account or log in**, instead of landing on the referral screen's "Authentication credentials were not provided" error and an Upgrade to Premium button (raised by the admin during the device check). Giving and external links still open for guests.
+- **Guest video limit: a feed video counts only after 10 seconds of watching** (or when a shorter one finishes), via `UsageService.hasWatchedEnoughToCount`. Swiping past a video no longer uses up one of the 3 free daily views.
+  - Verified on device: a guest swiped past videos all the way to a promo without hitting the wall.
+  - The old detail screen (still reached from notifications) counts on play, since there the viewer pressed play.
+  - The limit itself is still device-only.
 
 #### Slice 2 — Feed row: For you · Following · categories
 - **Backend:**
@@ -2755,7 +2808,7 @@ Test:
 - A retired reaction keeps its past counts.
 - An older app build can still react with the old keys.
 
-Status: ⬜ Not started. Slice 6 (admin-managed reactions) is deferred until the admin picks it up.
+Status: 🟡 Slice 1 ✅ (2026-10-14, mobile; ships with the next app build). Slices 2–5 not started. Slice 6 (admin-managed reactions) is deferred until the admin picks it up.
 
 ## Risks To Watch Early
 
