@@ -50,6 +50,7 @@ Snapshot as of 2026-10-09. **Each phase's own `Status:` line is the source of tr
 | 32 | Self-Service Video Testimony Upload (Premium) | ✅ Complete | |
 | 33 | Immersive Discovery | ✅ Complete | |
 | 34 | Bible Reader & Word Study | ✅ All 8 slices done (BSB, KJV and word-study packs live in production) | Mobile features ship with the next app build; Slice 8 needs the backend deploy (migration `bible.0002`) |
+| 35 | Immersive-first Home | ⬜ Not started | Slice 6 (dashboard-managed reactions per category) deferred |
 
 Test baseline: as of 2026-10-09 the full backend suite passes with 0 failures. Older entries below cite "the pre-existing 21 `apps.authn` failures" (live Brevo calls from tests). That was accurate when written, but the baseline no longer exists, so any new failure is a real one.
 
@@ -2599,6 +2600,162 @@ Status: ✅ **complete 2026-10-13**, all 8 slices.
   - the 360/393/600dp widget gates;
   - offline reading, keep-my-place, and the "no original word" message.
 - **Known gap:** the 6 pre-existing mobile test failures (onboarding's first button now reads "Next") predate this phase and are unrelated.
+
+### Phase 35: Immersive-first Home
+
+Background: raised by the admin 2026-10-14. The question was whether the immersive feed should replace the Discovery screen. Phase 33 made Discovery deepen in place, but a viewer still lands on a mixed list and has to tap in. The immersive view exists to cut that work, and the testimony detail screen is already out of the daily flow for the same reason.
+
+The first draft kept a "Browse" screen beside a Watch default, for search and For you. The admin rejected it: a second screen brings back the work the immersive view removes. Search and For you belong inside the immersive screen. A first-open explainer screen was also dropped in favour of an in-place nudge.
+
+Worked example: Ada opens the app. A Grace Chapel video, "Healed after eleven years of pain", is already playing full screen under a row of chips: **For you · Following · Healing · …**. She taps search and types "healing". She gets one ministry match (Healing Streams Fellowship) and 37 testimonies. She taps the second result, "The scan came back clear" (audio, 8:15). It plays in place with a scrubber, and the top bar reads "healing · 2 of 37". Swiping up moves to result 3, a written testimony she reads in full in the card. Tapping Pray opens the responses sheet over the testimony, and the audio keeps playing. Closing search puts her back on For you, at the video she left.
+
+Mockup: [iTestified Home: Watch & Browse](https://claude.ai/artifact/4GsmyZ6SKWdbD49SFupMQg). It has six boards:
+1. For you, playing in place;
+2. a written testimony read in place;
+3. the responses sheet;
+4. search over the feed;
+5. results become the feed;
+6. the swipe nudge.
+
+Decisions:
+- **Home is the immersive feed.** Discovery's list screen is retired. There is no Browse screen and no first-open explainer.
+- **Everything plays in full, in place:**
+  - video and audio get a scrubber;
+  - written testimonies scroll in full inside the card. This replaces Phase 33's tap-to-expand quote, which was capped at 42% of the screen height.
+- **For you, Following and categories are chips in one row** at the top of the feed. Each chip keeps its own place, so switching back resumes where you left off.
+- **Search opens over the feed.** Its results become the feed, with a "query · n of N" bar until it is closed.
+- **The nudge appears only when needed:** "Swipe up for the next testimony". It shows once, after a viewer finishes their first item without swiping. It disappears for good after the first swipe.
+- **Phase 33's rules stay:**
+  - Scripture of the day, live (cold preview), inspiration pictures and the "More" sheet;
+  - per-type auto-advance;
+  - the guest video limit;
+  - share links into the immersive view.
+- **Reactions are set from the dashboard, per category** (admin decision, 2026-10-14). This replaces the earlier open question of which names to use. Slice 4 is built on whatever reactions the item already has, and Slice 6 makes them admin-managed. The mock's "Pray with me / This encouraged me / Believing for the same" are examples of one category's set, not a fixed list.
+
+Confirmed by inspection (2026-10-14):
+- **Ranking:** `_home_feed_base_queryset` (`apps/testimonies/services/queries.py`) already ranks signal categories first: followed, favourited, reacted. `home_feed_page(seed=...)` then shuffles the first page, so the ranking is mostly lost.
+- **For you:** `ForYouTestimonyListView` (`for-you/`) already exists and needs authentication.
+- **Search:** `?search=` on the testimonies list is `title__icontains` only.
+- **Follows:** creator follows (`CreatorFollow`, `apps/creators/models.py`) and category follows (`UserFollowedCategory`) both exist. "Following" needs no new follow model.
+
+#### Slice 1 — Home opens into the immersive feed
+- **Backend:** none.
+- **Mobile:**
+  - The Home tab opens directly into the immersive feed, keeping the bottom nav visible. `DiscoverScreen`'s list view is retired.
+  - Scripture, live and pictures stay as feed items.
+  - Video and audio get a play/pause control and a scrubber with elapsed and total time.
+  - Written testimonies scroll in full inside the card.
+  - The one-time swipe nudge, with a "seen" flag in local preferences.
+  - Back on Android from Home does not exit mid-item without the usual double-back.
+  - Widget gates at 360/393/600dp.
+- **Dashboard:** none.
+- **DB footprint:** none.
+
+#### Slice 2 — Feed row: For you · Following · categories
+- **Backend:**
+  - For you uses the real ranking instead of the seeded shuffle. Each item carries a short `reason` ("Because you follow Grace Chapel", "Popular in Healing"). A cold-start viewer falls back to recent plus popular.
+  - New paginated `following/` feed built from creator follows. If the viewer follows no one, it returns an empty-state hint that suggests creators to follow.
+  - Category chips reuse the existing `?category=` filter.
+  - Guests get For you and categories. Following asks them to sign in.
+- **Mobile:**
+  - The chip row over the feed. Each chip keeps its own controller and position.
+  - The "why shown" line under the citation.
+  - The Following empty state, with Follow buttons.
+- **Dashboard:** none.
+- **DB footprint:** none. It reads existing follow and reaction rows.
+
+#### Slice 3 — Search inside the feed
+- **Backend:**
+  - Real paginated search across testimony titles and stories, creator names, churches/ministries and categories.
+  - Uses Postgres full-text search: a `SearchVector` with a GIN index on testimonies, ranked by `SearchRank`. It replaces the title-only `?search=`, keeping the parameter name so older app builds still work.
+  - Type filter: video, audio or written.
+  - A separate small result block for matching churches and ministries.
+  - Only approved, public testimonies are returned.
+- **Mobile:**
+  - The search panel over the feed: type chips, the churches and ministries match with Follow, and the testimony list.
+  - Tapping a result plays it in place. The results become the feed, with the "query · n of N" bar and Back to results. Close returns to the chip the viewer came from, at the same item.
+  - Recent searches are kept locally.
+- **Dashboard:** none.
+- **DB footprint:** one GIN index (with a generated search-vector column if needed). The migration is checked for lock time on the testimonies table.
+
+#### Slice 4 — Respond without leaving
+- **Backend:**
+  - The feed payload includes the item's reactions as a list (`key`, `label`, `count`, plus the viewer's own reaction), so the sheet opens without another request.
+  - The mobile app renders whatever the list contains, which lets Slice 6 change the reactions without another app release.
+  - Until Slice 6, the list is built from Phase 15's three fixed reactions.
+- **Mobile:**
+  - Response buttons on the item, drawn from the reaction list rather than hard-coded.
+  - The responses sheet opens over the playing testimony and holds the reactions plus the existing comment thread.
+  - Playback continues underneath. The sheet uses the outer context so callbacks survive closing it, the lesson from Phase 33's comments bug.
+- **Dashboard:** none.
+- **DB footprint:** none.
+
+#### Slice 6 — Admin-managed reactions per category
+Worked example: an admin opens Dashboard → Reactions. They create "Pray with me", "This encouraged me" and "Believing for the same", then assign all three to Healing. Finances gets "Amen", "Gives me hope" and "Believing for the same". From then on, every Healing testimony shows Healing's set and every Finances testimony shows Finances' set. A category with no set uses the default set (Phase 15's three).
+
+Facts confirmed 2026-10-14:
+- `TestimonyReactionType` (`apps/testimonies/models.py`) is a fixed code enum.
+- `Testimony` holds one count column per reaction: `praying_for_you_count`, `amen_count`, `gives_me_hope_count`.
+- Each testimony has exactly one category (a foreign key), so "the category's set" is never ambiguous.
+
+- **Backend:**
+  - A `Reaction` catalogue: key, label, icon key, active flag and a default-set flag.
+  - An ordered category-to-reaction assignment (`CategoryReaction`), capped at a small number per category (proposed 4).
+  - A per-testimony count table, `TestimonyReactionCount (testimony, reaction, count)`, replaces the three fixed count columns. Counts are updated with `F()` inside `set_testimony_reaction`'s existing transaction.
+  - `TestimonyReaction.reaction_type` becomes a foreign key to `Reaction`.
+  - Migration:
+    - seed the three Phase 15 reactions as the default set;
+    - backfill reaction rows and counts from the existing columns;
+    - drop the old columns in a later migration once the new counts are verified. Schema and backfill stay separate, per AGENTS.md.
+  - Rules:
+    - Reacting only accepts a reaction that is in the testimony's category set.
+    - Retiring a reaction hides it from new reactions, but past reactions and counts are kept and are never deleted.
+    - Moving a testimony to another category keeps its old reactions, but only the new set is offered.
+  - Admin endpoints: list, create, edit and retire reactions; set a category's ordered reaction list. Changes are logged with who and when.
+  - The old `praying_for_you` / `amen` / `gives_me_hope` keys keep working for older app builds.
+- **Mobile:** none beyond Slice 4. Any icon key the app doesn't recognise falls back to a generic icon.
+- **Dashboard:**
+  - A Reactions page: the catalogue (add, rename, retire) and, per category, an ordered set with a live preview of how the buttons look on a testimony.
+  - The default-set fallback is shown clearly.
+  - Built to the mobile work's quality bar.
+- **DB footprint:** four small tables (`Reaction`, `CategoryReaction`, `TestimonyReactionCount` and a change log), a foreign-key change on `TestimonyReaction`, and three dropped columns on `Testimony`.
+
+#### Slice 5 — Measure it (alongside Slice 1)
+- **Backend:**
+  - An events endpoint that takes small batches: item viewed with time spent, swiped, search run, result opened, responded.
+  - Stored as compact rows: user or anonymous id, type, testimony id, a duration integer, timestamp. No payload blobs.
+  - A daily rollup, so the raw rows can be pruned (keep 90 days).
+- **Mobile:**
+  - A batched, fire-and-forget event sender, flushed on pause.
+  - It ships with Slice 1, so the old Discovery numbers serve as the baseline.
+- **Dashboard:** a small "Home engagement" card: median time per item, swipes per session, searches per day, response rate. It is a first real piece of Phase 8's analytics.
+- **DB footprint:** one events table, pruned after 90 days, plus a daily rollup table.
+
+Order: Slice 1 with Slice 5, then Slices 2, 3 and 4. Slice 6 comes later, when the admin is ready to work on reactions.
+
+Out of scope:
+- the Premium value gaps (Celery worker, AI key, Agora/S3 on Render, Phases 30 and 31), tracked separately;
+- making inspiration-picture favourites persist;
+- reactions on live.
+
+Test:
+- The Home tab lands on a playing item with no extra tap.
+- The scrubber seeks correctly.
+- A long written testimony reads in full.
+- The nudge shows once and never after a swipe.
+- Each chip keeps its own place.
+- For you items carry a reason, and Following is empty-safe.
+- Search finds a testimony by a word in its story, not only its title.
+- Search results swipe in order, and closing search restores For you at the same item.
+- Responding does not pause playback.
+- Events arrive in batches, and the rollup matches the raw rows.
+- A Healing testimony shows Healing's reactions, and a category with no set shows the default.
+- Reacting with a reaction outside the category's set is rejected.
+- The backfilled counts equal the old columns.
+- A retired reaction keeps its past counts.
+- An older app build can still react with the old keys.
+
+Status: ⬜ Not started. Slice 6 (admin-managed reactions) is deferred until the admin picks it up.
 
 ## Risks To Watch Early
 
