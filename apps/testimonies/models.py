@@ -1,6 +1,8 @@
 import uuid
 
 from django.conf import settings
+from django.contrib.postgres.indexes import GinIndex
+from django.contrib.postgres.search import SearchVector
 from django.db import models
 from django.db.models.signals import pre_save
 from django.dispatch import receiver
@@ -58,6 +60,12 @@ class UserFollowedCategory(models.Model):
 
     def __str__(self) -> str:
         return f"FollowedCategory<{self.user_id}:{self.category_id}>"
+
+
+# Phase 35 Slice 3: what testimony search matches against. Shared by the GIN
+# index on Testimony and by the search query itself, which must build this
+# exact expression for Postgres to use the index.
+TESTIMONY_SEARCH_VECTOR = SearchVector("title", "body", config="english")
 
 
 class TestimonyStatus(models.TextChoices):
@@ -327,6 +335,10 @@ class Testimony(models.Model):
             models.Index(fields=["testimony_type", "status", "-created_at"], name="testim_type_status_created_idx"),
             models.Index(fields=["category", "status", "-created_at"], name="testim_cat_status_created_idx"),
             models.Index(fields=["-created_at", "id"], name="testim_created_id_idx"),
+            # Phase 35 Slice 3: full-text search over title and story. An
+            # expression index, so a query only uses it when it builds the
+            # very same expression -- see TESTIMONY_SEARCH_VECTOR.
+            GinIndex(TESTIMONY_SEARCH_VECTOR, name="testim_search_vector_gin"),
         ]
 
     def __str__(self) -> str:

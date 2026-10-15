@@ -1443,6 +1443,208 @@ class BrowseMinistryTestimoniesFilterTests(TestCase):
         self.assertIn(self.ministry_testimony.id, ids)
 
 
+class HomeFeedChipsApiTests(TestCase):
+    """Phase 35 Slice 2 -- For you says why each testimony is there, and
+    the Following chip has its own feed (with suggestions when empty)."""
+
+    def setUp(self) -> None:
+        cache.clear()
+        from apps.creators.models import CreatorFollow, CreatorProfile
+
+        self.CreatorFollow = CreatorFollow
+        self.category = TestimonyCategory.objects.create(name="Healing", slug="healing")
+
+        self.grace_chapel = UserFactory(email="grace-chapel@example.com")
+        ProfileFactory(user=self.grace_chapel, full_name="Pastor Grace")
+        CreatorProfile.objects.create(user=self.grace_chapel, display_name="Grace Chapel")
+        self.older = Testimony.objects.create(
+            author=self.grace_chapel,
+            category=self.category,
+            title="Older from Grace Chapel",
+            body="Body.",
+            testimony_type=TestimonyType.WRITTEN,
+            status=TestimonyStatus.APPROVED,
+        )
+        self.newer = Testimony.objects.create(
+            author=self.grace_chapel,
+            category=self.category,
+            title="Newer from Grace Chapel",
+            body="Body.",
+            testimony_type=TestimonyType.WRITTEN,
+            status=TestimonyStatus.APPROVED,
+        )
+        Testimony.objects.create(
+            author=self.grace_chapel,
+            category=self.category,
+            title="Pending from Grace Chapel",
+            body="Body.",
+            testimony_type=TestimonyType.WRITTEN,
+            status=TestimonyStatus.PENDING_REVIEW,
+        )
+        someone = UserFactory(email="someone@example.com")
+        ProfileFactory(user=someone, full_name="Someone")
+        self.unfollowed = Testimony.objects.create(
+            author=someone,
+            category=self.category,
+            title="From someone else",
+            body="Body.",
+            testimony_type=TestimonyType.WRITTEN,
+            status=TestimonyStatus.APPROVED,
+        )
+
+        self.ada = UserFactory(email="ada@example.com")
+        ProfileFactory(user=self.ada, full_name="Ada")
+        self.token = Token.objects.create(user=self.ada)
+
+    def _auth(self):
+        return {"HTTP_AUTHORIZATION": f"Token {self.token.key}"}
+
+    def test_home_feed_items_carry_their_reason(self) -> None:
+        self.CreatorFollow.objects.create(follower=self.ada, creator=self.grace_chapel)
+
+        response = self.client.get(reverse("testimony-home-feed"), **self._auth())
+
+        reasons = {row["title"]: row["reason"] for row in response.json()["results"]}
+        self.assertEqual(reasons["Newer from Grace Chapel"], "You follow Grace Chapel")
+        self.assertIsNone(reasons["From someone else"])
+
+    def test_following_lists_followed_creators_approved_testimonies_newest_first(self) -> None:
+        self.CreatorFollow.objects.create(follower=self.ada, creator=self.grace_chapel)
+
+        response = self.client.get(reverse("testimony-home-following"), **self._auth())
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(
+            [row["title"] for row in body["results"]],
+            ["Newer from Grace Chapel", "Older from Grace Chapel"],
+        )
+        self.assertTrue(body["follows_anyone"])
+        self.assertNotIn("suggested_creators", body)
+
+    def test_following_nobody_returns_suggestions_to_follow(self) -> None:
+        response = self.client.get(reverse("testimony-home-following"), **self._auth())
+
+        body = response.json()
+        self.assertEqual(body["results"], [])
+        self.assertFalse(body["follows_anyone"])
+        self.assertEqual(
+            body["suggested_creators"],
+            [
+                {
+                    "user_id": self.grace_chapel.id,
+                    "display_name": "Grace Chapel",
+                    "avatar_url": "",
+                    "testimony_count": 2,
+                }
+            ],
+        )
+
+    def test_following_requires_sign_in(self) -> None:
+        response = self.client.get(reverse("testimony-home-following"))
+
+        self.assertEqual(response.status_code, 401)
+
+
+class TestimonySearchApiTests(TestCase):
+    """Phase 35 Slice 3 -- real search behind the same `?search=`: story
+    words, ministry/author/category names, best match first; plus the
+    churches & ministries block."""
+
+    def setUp(self) -> None:
+        cache.clear()
+        from apps.creators.models import CreatorFollow, CreatorProfile
+
+        self.CreatorFollow = CreatorFollow
+        self.healing = TestimonyCategory.objects.create(name="Healing", slug="healing")
+        self.provision = TestimonyCategory.objects.create(name="Provision", slug="provision")
+
+        self.ministry = UserFactory(email="streams@example.com")
+        ProfileFactory(user=self.ministry, full_name="Pastor Ade")
+        CreatorProfile.objects.create(user=self.ministry, display_name="Healing Streams Fellowship")
+        person = UserFactory(email="funmi@example.com")
+        ProfileFactory(user=person, full_name="Funmi Adebayo")
+
+        def make(title, body, author, category, **extra):
+            return Testimony.objects.create(
+                author=author,
+                category=category,
+                title=title,
+                body=body,
+                testimony_type=extra.pop("testimony_type", TestimonyType.WRITTEN),
+                status=extra.pop("status", TestimonyStatus.APPROVED),
+                **extra,
+            )
+
+        self.story_match = make("The scan came back clear", "I was healed of cancer last spring.", person, self.provision)
+        self.title_match = make("Healing after the accident", "Months in hospital.", person, self.provision)
+        self.category_match = make("My daughter walked again", "She walked.", person, self.healing)
+        self.ministry_match = make("A night of prayer", "We prayed.", self.ministry, self.provision)
+        self.unrelated = make("The rent was due on Friday", "Provision came.", person, self.provision)
+        make("Pending healing story", "Healed.", person, self.healing, status=TestimonyStatus.PENDING_REVIEW)
+
+    def _search(self, text, **params):
+        response = self.client.get(reverse("testimony-list"), {"search": text, **params})
+        self.assertEqual(response.status_code, 200)
+        return [row["title"] for row in response.json()["results"]]
+
+    def test_finds_story_words_names_and_categories_title_match_first(self) -> None:
+        titles = self._search("healing")
+
+        self.assertEqual(titles[0], "Healing after the accident")
+        self.assertCountEqual(
+            titles,
+            [
+                "Healing after the accident",
+                "The scan came back clear",
+                "My daughter walked again",
+                "A night of prayer",
+            ],
+        )
+
+    def test_matches_by_author_name(self) -> None:
+        self.assertIn("The rent was due on Friday", self._search("Funmi"))
+
+    def test_type_filter_still_applies(self) -> None:
+        Testimony.objects.filter(id=self.title_match.id).update(testimony_type=TestimonyType.VIDEO)
+
+        self.assertEqual(self._search("healing", type="video"), ["Healing after the accident"])
+
+    def test_never_returns_unapproved_testimonies(self) -> None:
+        self.assertNotIn("Pending healing story", self._search("healing"))
+
+    def test_ministries_block_matches_names_and_says_if_followed(self) -> None:
+        viewer = UserFactory(email="viewer@example.com")
+        ProfileFactory(user=viewer, full_name="Viewer")
+        self.CreatorFollow.objects.create(follower=viewer, creator=self.ministry)
+        token = Token.objects.create(user=viewer)
+
+        response = self.client.get(
+            reverse("testimony-search-ministries"),
+            {"q": "healing"},
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        )
+
+        self.assertEqual(
+            response.json()["results"],
+            [
+                {
+                    "user_id": self.ministry.id,
+                    "display_name": "Healing Streams Fellowship",
+                    "avatar_url": "",
+                    "testimony_count": 1,
+                    "is_followed": True,
+                }
+            ],
+        )
+
+    def test_ministries_block_is_public_and_empty_for_a_blank_query(self) -> None:
+        response = self.client.get(reverse("testimony-search-ministries"), {"q": " "})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["results"], [])
+
+
 class AdminTestimonyApiTests(TestCase):
     def setUp(self) -> None:
         self.category = TestimonyCategory.objects.create(

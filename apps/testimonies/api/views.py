@@ -44,7 +44,13 @@ from apps.testimonies.models import (
     VideoUploadPolicy,
 )
 from apps.authn.api.permissions import IsActiveAdmin
-from apps.testimonies.services.queries import home_feed_page
+from apps.testimonies.services.queries import (
+    apply_testimony_search,
+    following_feed_queryset,
+    home_feed_page,
+    search_ministries,
+    suggested_creators_to_follow,
+)
 from apps.testimonies.validators import parse_future_publish_at
 from apps.testimonies.services.commands import (
     create_testimony_comment,
@@ -221,7 +227,9 @@ class PublicTestimonyListView(generics.ListAPIView):
         if testimony_type:
             queryset = queryset.filter(testimony_type=testimony_type)
         if search_text:
-            queryset = queryset.filter(title__icontains=search_text)
+            # Phase 35 Slice 3: real search (story, names, categories), best
+            # match first -- same `search` parameter older builds send.
+            queryset = apply_testimony_search(queryset, search_text[:200])
         if ministry_only:
             # Phase 23 Slice 11 -- lets a user discover Ministries through
             # their content directly, rather than only stumbling into one
@@ -266,12 +274,50 @@ class HomeFeedView(APIView):
             page_size=TestimonyPagination.page_size,
             seed=seed,
         )
-        return Response(
-            {
-                "results": TestimonyListSerializer(page_data["results"], many=True).data,
-                "next_page": page_data["next_page"],
-            }
-        )
+        results = TestimonyListSerializer(page_data["results"], many=True).data
+        # Phase 35 Slice 2: the "why shown" line ("You follow Grace
+        # Chapel"); null when there's no particular reason.
+        for item, reason in zip(results, page_data["reasons"]):
+            item["reason"] = reason
+        return Response({"results": results, "next_page": page_data["next_page"]})
+
+
+class FollowingFeedView(generics.ListAPIView):
+    """Phase 35 Slice 2 -- the Home feed's Following chip: approved
+    testimonies from creators the viewer follows, newest first, paginated
+    like the other testimony lists (it ends; it doesn't loop). When the
+    viewer follows no one yet, the empty page carries
+    `suggested_creators` so mobile can offer Follow buttons right there.
+    Signed-in only: a guest follows no one."""
+
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+    serializer_class = TestimonyListSerializer
+    pagination_class = TestimonyPagination
+
+    def get_queryset(self):
+        return following_feed_queryset(self.request.user)
+
+    def list(self, request, *args, **kwargs):
+        response = super().list(request, *args, **kwargs)
+        follows_anyone = request.user.creator_follows.exists()
+        response.data["follows_anyone"] = follows_anyone
+        if not follows_anyone:
+            response.data["suggested_creators"] = suggested_creators_to_follow(request.user)
+        return response
+
+
+class MinistrySearchView(APIView):
+    """Phase 35 Slice 3 -- the "Churches & ministries" block above testimony
+    search results. Public; `is_followed` is real for a signed-in viewer."""
+
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        text = (request.query_params.get("q") or "").strip()[:200]
+        if not text:
+            return Response({"results": []})
+        return Response({"results": search_ministries(text, request.user)})
 
 
 class PublicTestimonyDetailView(generics.RetrieveAPIView):
@@ -841,7 +887,9 @@ class AdminTestimonyListView(generics.ListAPIView):
         if testimony_type in TestimonyType.values:
             queryset = queryset.filter(testimony_type=testimony_type)
         if search_text:
-            queryset = queryset.filter(title__icontains=search_text)
+            # Phase 35 Slice 3: real search (story, names, categories), best
+            # match first -- same `search` parameter older builds send.
+            queryset = apply_testimony_search(queryset, search_text[:200])
         if date_from:
             queryset = queryset.filter(created_at__date__gte=date_from)
         if date_to:

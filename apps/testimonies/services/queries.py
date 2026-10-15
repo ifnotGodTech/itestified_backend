@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import random
 from collections import Counter
+from dataclasses import dataclass
 
 from django.core.cache import cache
-from django.db.models import Case, IntegerField, When
 
 from apps.testimonies.models import (
     Testimony,
@@ -31,52 +31,172 @@ HOME_FEED_ROTATION_STEP = 7
 
 # A per-session seed (minted by mobile once per fresh load / pull-to-
 # refresh, reused across pagination within that session) lets the reader
-# see a genuinely different, truly shuffled starting mix each time, not
-# just a different rotation of the same fixed order. Only the first
-# HOME_FEED_SHUFFLE_WINDOW ranked items are actually shuffled -- realistic
-# sessions rarely scroll past that, so the in-memory shuffle itself stays
-# O(window) regardless of catalog size. The ordered id list still has to
-# come from somewhere for that shuffle to run against, though -- see
-# _cached_base_ids for how the DB query behind it is kept off the hot path
-# for repeat pages within one session. This is the "seeded Fisher-Yates
-# over a bounded window" approach agreed after discussing scale: cheap
-# now, and migrates cleanly later (same seed param, same response shape)
-# to a precomputed random-rank column with a periodic reshuffle job if
-# traffic ever outgrows it.
+# see a genuinely different starting mix each time. Phase 35 Slice 2: the
+# shuffle now runs *within* each ranking tier (see _ranked_feed), so a
+# fresh session still varies without undoing the ranking -- someone who
+# follows Grace Chapel sees Grace Chapel's testimonies first every time,
+# just not always in the same order. Only the first
+# HOME_FEED_SHUFFLE_WINDOW items of each tier are shuffled, so the
+# in-memory shuffle stays bounded regardless of catalog size.
 HOME_FEED_SHUFFLE_WINDOW = 200
 
-# How long one session's ordered id list stays cached (keyed by user +
-# seed) so that scrolling through several pages of the same session only
-# re-queries the eligible catalog once, not once per page -- mobile mints
-# a fresh seed on every fresh load/refresh, so a new session always gets a
-# genuinely fresh query regardless of this TTL; it only bounds how long a
-# single very-long-lived scroll session goes before picking up newly
-# approved content. LocMemCache (Django's default, no CACHES setting
-# configured) is per-process, so on a multi-worker deployment this is a
-# best-effort hit rate, not a guarantee -- a miss just falls back to the
-# same query that always ran before this cache existed, so it's safe
-# either way.
+# A testimony with at least this many responses (reactions + comments)
+# counts as popular for viewers with no closer signal -- the cold-start
+# "recent plus popular" mix, and the "Popular in Healing" reason.
+HOME_FEED_POPULAR_MIN_RESPONSES = 5
+
+# How long one session's ranked list stays cached (keyed by user + seed) so
+# that scrolling through several pages of the same session only ranks the
+# eligible catalog once, not once per page -- mobile mints a fresh seed on
+# every fresh load/refresh, so a new session always gets a genuinely fresh
+# ranking regardless of this TTL; it only bounds how long a single very-
+# long-lived scroll session goes before picking up newly approved content.
+# LocMemCache (Django's default, no CACHES setting configured) is
+# per-process, so on a multi-worker deployment this is a best-effort hit
+# rate, not a guarantee -- a miss just ranks again, so it's safe either way.
 HOME_FEED_ID_CACHE_TTL_SECONDS = 900
 
 
-def _cached_base_ids(user, seed: str) -> list[int]:
+@dataclass(frozen=True)
+class RankedFeedItem:
+    testimony_id: int
+    reason: str | None
+
+
+# Tiers, best first. Within a tier, testimonies the viewer hasn't watched
+# yet come before ones they have.
+_TIER_FOLLOWED_CREATOR = 0
+_TIER_FOLLOWED_CATEGORY = 1
+_TIER_ENGAGED_CATEGORY = 2
+_TIER_POPULAR = 3
+_TIER_EVERYTHING_ELSE = 4
+
+
+def _display_names(user_ids: set[int]) -> dict[int, str]:
+    """The public name for each user -- a Ministry's display name first,
+    then the person's full name, then email, matching
+    TestimonyListSerializer.get_author_name."""
+    from django.contrib.auth import get_user_model
+
+    names = {}
+    for user in get_user_model().objects.filter(id__in=user_ids).select_related(
+        "profile", "creator_profile"
+    ):
+        creator_profile = getattr(user, "creator_profile", None)
+        profile = getattr(user, "profile", None)
+        if creator_profile and creator_profile.display_name.strip():
+            names[user.id] = creator_profile.display_name
+        elif profile and profile.full_name.strip():
+            names[user.id] = profile.full_name
+        else:
+            names[user.id] = user.email
+    return names
+
+
+def _ranked_feed(user, seed: str | None) -> list[RankedFeedItem]:
+    """Phase 35 Slice 2 -- the For you ranking, best first, each with the
+    short reason the viewer sees ("You follow Grace Chapel").
+
+    Worked example: Ada follows Grace Chapel and the Healing category, and
+    has reacted to a Faith testimony. Her feed reads Grace Chapel's
+    testimonies first, then Healing, then Faith, then anything with 5+
+    responses ("Popular in Provision"), then the rest, newest first. In
+    each of those groups, whatever she has already watched drops to the
+    end of the group. A guest gets the last two groups only.
+    """
+    from apps.creators.models import CreatorFollow
+
+    rows = list(
+        Testimony.objects.filter(
+            status=TestimonyStatus.APPROVED,
+            category__is_active=True,
+        )
+        .order_by("-created_at", "-id")
+        .values(
+            "id",
+            "author_id",
+            "category_id",
+            "category__name",
+            "comment_count",
+            "praying_for_you_count",
+            "amen_count",
+            "gives_me_hope_count",
+        )
+    )
+    if not rows:
+        return []
+
+    followed_creator_ids: set[int] = set()
+    followed_category_ids: set[int] = set()
+    engaged_category_ids: set[int] = set()
+    watched_ids: set[int] = set()
+    if user is not None and getattr(user, "is_authenticated", False):
+        followed_creator_ids = set(
+            CreatorFollow.objects.filter(follower=user).values_list("creator_id", flat=True)
+        )
+        followed_category_ids = set(
+            user.followed_categories.values_list("category_id", flat=True)
+        )
+        engaged_category_ids = set(
+            TestimonyFavorite.objects.filter(user=user).values_list(
+                "testimony__category_id", flat=True
+            )
+        ) | set(
+            TestimonyReaction.objects.filter(user=user).values_list(
+                "testimony__category_id", flat=True
+            )
+        )
+        watched_ids = set(
+            TestimonyWatch.objects.filter(user=user).values_list("testimony_id", flat=True)
+        )
+    creator_names = _display_names(followed_creator_ids) if followed_creator_ids else {}
+
+    groups: dict[tuple[int, bool], list[RankedFeedItem]] = {}
+    for row in rows:
+        category = row["category__name"]
+        responses = (
+            row["comment_count"]
+            + row["praying_for_you_count"]
+            + row["amen_count"]
+            + row["gives_me_hope_count"]
+        )
+        if row["author_id"] in followed_creator_ids:
+            tier = _TIER_FOLLOWED_CREATOR
+            reason = f"You follow {creator_names.get(row['author_id'], 'this ministry')}"
+        elif row["category_id"] in followed_category_ids:
+            tier, reason = _TIER_FOLLOWED_CATEGORY, f"You follow {category}"
+        elif row["category_id"] in engaged_category_ids:
+            tier, reason = _TIER_ENGAGED_CATEGORY, f"Because you liked {category} testimonies"
+        elif responses >= HOME_FEED_POPULAR_MIN_RESPONSES:
+            tier, reason = _TIER_POPULAR, f"Popular in {category}"
+        else:
+            tier, reason = _TIER_EVERYTHING_ELSE, None
+        watched = row["id"] in watched_ids
+        groups.setdefault((tier, watched), []).append(RankedFeedItem(row["id"], reason))
+
+    ranked: list[RankedFeedItem] = []
+    for key in sorted(groups):
+        items = groups[key]
+        if seed:
+            window = items[:HOME_FEED_SHUFFLE_WINDOW]
+            random.Random(f"{seed}:{key[0]}:{key[1]}").shuffle(window)
+            items = window + items[HOME_FEED_SHUFFLE_WINDOW:]
+        ranked.extend(items)
+    return ranked
+
+
+def _cached_ranked_feed(user, seed: str | None) -> list[RankedFeedItem]:
+    if not seed:
+        return _ranked_feed(user, None)
     is_authenticated = user is not None and getattr(user, "is_authenticated", False)
     user_key = user.pk if is_authenticated else "guest"
-    cache_key = f"home_feed_ids:{user_key}:{seed}"
-    cached_ids = cache.get(cache_key)
-    if cached_ids is not None:
-        return cached_ids
-    ids = list(_home_feed_base_queryset(user).values_list("id", flat=True))
-    cache.set(cache_key, ids, HOME_FEED_ID_CACHE_TTL_SECONDS)
-    return ids
-
-
-def _seeded_shuffle_ids(base_ids: list[int], seed: str) -> list[int]:
-    window = base_ids[:HOME_FEED_SHUFFLE_WINDOW]
-    rest = base_ids[HOME_FEED_SHUFFLE_WINDOW:]
-    shuffled_window = window[:]
-    random.Random(seed).shuffle(shuffled_window)
-    return shuffled_window + rest
+    cache_key = f"home_feed_ranked:{user_key}:{seed}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+    ranked = _ranked_feed(user, seed)
+    cache.set(cache_key, ranked, HOME_FEED_ID_CACHE_TTL_SECONDS)
+    return ranked
 
 
 def _rotated_window_ids(
@@ -111,98 +231,173 @@ def _testimonies_for_ids(window_ids: list[int]) -> list[Testimony]:
     ]
 
 
-def _home_feed_base_queryset(user):
-    """The ranked, un-evaluated queryset behind one user's home feed --
-    signal-category testimonies first (most recent within), then
-    everything else (most recent within) for a user with real signal
-    (follows/favorites/reactions, same blend as Phase 16's for-you feed);
-    plain most-recent-first for a guest or a signal-less user."""
-    base_queryset = Testimony.objects.filter(
-        status=TestimonyStatus.APPROVED,
-        category__is_active=True,
-    )
-    category_ids = set()
-    if user is not None and getattr(user, "is_authenticated", False):
-        category_ids = (
-            set(user.followed_categories.values_list("category_id", flat=True))
-            | set(
-                TestimonyFavorite.objects.filter(user=user).values_list(
-                    "testimony__category_id", flat=True
-                )
-            )
-            | set(
-                TestimonyReaction.objects.filter(user=user).values_list(
-                    "testimony__category_id", flat=True
-                )
-            )
-        )
-    if category_ids:
-        return base_queryset.annotate(
-            is_signal=Case(
-                When(category_id__in=category_ids, then=0),
-                default=1,
-                output_field=IntegerField(),
-            )
-        ).order_by("is_signal", "-created_at", "id")
-    return base_queryset.order_by("-created_at", "id")
-
-
 def home_feed_page(
     *, user, page: int, page_size: int, seed: str | None = None
 ) -> dict:
-    """One page of the immersive Home feed (Phase 20 Slice 3) -- never
-    truly ends: once `page` reads past the real ordered list, it wraps
-    around (rotated per loop, see HOME_FEED_ROTATION_STEP) instead of
-    returning an empty page.
+    """One page of the immersive Home feed's For you -- never truly ends:
+    once `page` reads past the real ranked list, it wraps around (rotated
+    per loop, see HOME_FEED_ROTATION_STEP) instead of returning an empty
+    page.
 
+    Results are ranked by _ranked_feed, and each one comes back paired
+    with its reason in `reasons` (same order), for the "why shown" line.
     With a `seed` (minted by mobile once per feed session, reused across
-    that session's pagination -- see HOME_FEED_SHUFFLE_WINDOW), the first
-    page of items is a genuine shuffle rather than the plain ranked order,
-    so two different sessions -- or the same user's next pull-to-refresh
-    -- see a different mix, not just a different rotation of the same
-    fixed order. Without a seed, behavior is unchanged from before this
-    was added (backward compatible for any caller that doesn't send one).
-
-    Optimized for the common no-seed case: as long as the requested
-    window still fits inside the real, un-looped content, this is a
-    single indexed COUNT plus a plain DB-level OFFSET/LIMIT slice --
-    select_related covers the serializer's needs, no extra queries. A
-    seeded request always needs the ordered ID list up front instead,
-    since a shuffle can't be expressed as a DB-level slice; that list is
-    fetched without select_related (only `id` is ever read off it, so the
-    joins select_related would add are pure waste here) and cached per
-    (user, seed) via _cached_base_ids so repeat pages within one session
-    don't re-run that query -- only the id-list fetch is cached, the
-    shuffle and the final select_related testimony fetch still run fresh
-    every call, same as before.
+    that session's pagination), each tier is shuffled so two sessions see a
+    different mix, and the ranked list is cached per (user, seed) so later
+    pages of the same session don't rank the catalog again.
     """
     start = (page - 1) * page_size
-
-    if seed:
-        base_ids = _cached_base_ids(user, seed)
-        total = len(base_ids)
-        if total == 0:
-            return {"results": [], "next_page": page + 1}
-        ordered_ids = _seeded_shuffle_ids(base_ids, seed)
-        window_ids = _rotated_window_ids(ordered_ids, start, page_size, total)
-        return {"results": _testimonies_for_ids(window_ids), "next_page": page + 1}
-
-    base_queryset = _home_feed_base_queryset(user).select_related(
-        "author", "author__profile", "author__creator_profile", "category"
-    )
-    total = base_queryset.count()
+    ranked = _cached_ranked_feed(user, seed)
+    total = len(ranked)
     if total == 0:
-        return {"results": [], "next_page": page + 1}
+        return {"results": [], "reasons": [], "next_page": page + 1}
 
-    if start + page_size <= total:
-        return {
-            "results": list(base_queryset[start : start + page_size]),
-            "next_page": page + 1,
+    reason_by_id = {item.testimony_id: item.reason for item in ranked}
+    window_ids = _rotated_window_ids(
+        [item.testimony_id for item in ranked], start, page_size, total
+    )
+    results = _testimonies_for_ids(window_ids)
+    return {
+        "results": results,
+        "reasons": [reason_by_id.get(testimony.id) for testimony in results],
+        "next_page": page + 1,
+    }
+
+
+def following_feed_queryset(user):
+    """Phase 35 Slice 2 -- the Following chip: approved testimonies from the
+    creators this viewer follows, newest first. Unlike For you it ends."""
+    return (
+        Testimony.objects.filter(
+            status=TestimonyStatus.APPROVED,
+            category__is_active=True,
+            author__followers__follower=user,
+        )
+        .select_related("author", "author__profile", "author__creator_profile", "category")
+        .order_by("-created_at", "-id")
+    )
+
+
+FOLLOWING_SUGGESTION_LIMIT = 6
+
+
+def suggested_creators_to_follow(user) -> list[dict]:
+    """For an empty Following feed: Ministries with approved testimonies the
+    viewer doesn't follow yet, most-followed first."""
+    from django.db.models import Count, Q
+
+    from apps.creators.models import CreatorProfile
+
+    profiles = (
+        CreatorProfile.objects.exclude(user=user)
+        .exclude(user__followers__follower=user)
+        .annotate(
+            approved_count=Count(
+                "user__testimonies",
+                filter=Q(user__testimonies__status=TestimonyStatus.APPROVED),
+                distinct=True,
+            ),
+            follower_count=Count("user__followers", distinct=True),
+        )
+        .filter(approved_count__gt=0)
+        .order_by("-follower_count", "-approved_count", "id")[:FOLLOWING_SUGGESTION_LIMIT]
+    )
+    return [
+        {
+            "user_id": profile.user_id,
+            "display_name": profile.display_name,
+            "avatar_url": profile.avatar_url,
+            "testimony_count": profile.approved_count,
         }
+        for profile in profiles
+    ]
 
-    base_ids = list(base_queryset.values_list("id", flat=True))
-    window_ids = _rotated_window_ids(base_ids, start, page_size, total)
-    return {"results": _testimonies_for_ids(window_ids), "next_page": page + 1}
+
+def apply_testimony_search(queryset, text: str):
+    """Phase 35 Slice 3 -- narrows `queryset` to testimonies matching `text`
+    and orders them best match first.
+
+    Matches the story's words via full-text search over title and body
+    ("healed" finds "healing"), plus a plain substring match on the title
+    and on the ministry, author and category names -- so "Grace Chapel" or
+    "Provision" finds their testimonies even if neither word is in the
+    story. Ranked by SearchRank, with a boost when the title itself
+    contains the text, then newest first.
+
+    Worked example: searching "healing" finds a written testimony whose
+    story says "I was healed of cancer" (full-text), every testimony in the
+    Healing category (category name), and "Healing Streams Fellowship"'s
+    testimonies (ministry name) -- with "Healing after the accident"
+    (title contains it) ranked above the rest.
+    """
+    from django.contrib.postgres.search import SearchQuery, SearchRank
+    from django.db.models import Case, FloatField, Q, Value, When
+
+    from apps.testimonies.models import TESTIMONY_SEARCH_VECTOR
+
+    query = SearchQuery(text, search_type="websearch", config="english")
+    return (
+        queryset.annotate(search=TESTIMONY_SEARCH_VECTOR)
+        .filter(
+            Q(search=query)
+            | Q(title__icontains=text)
+            | Q(author__creator_profile__display_name__icontains=text)
+            | Q(author__profile__full_name__icontains=text)
+            | Q(category__name__icontains=text)
+        )
+        .annotate(
+            rank=SearchRank(TESTIMONY_SEARCH_VECTOR, query)
+            + Case(
+                When(title__icontains=text, then=Value(1.0)),
+                default=Value(0.0),
+                output_field=FloatField(),
+            )
+        )
+        .order_by("-rank", "-created_at", "-id")
+    )
+
+
+MINISTRY_SEARCH_LIMIT = 5
+
+
+def search_ministries(text: str, user) -> list[dict]:
+    """Phase 35 Slice 3 -- churches and ministries whose name matches, shown
+    above the testimony results. Only Ministries with approved testimonies,
+    most-followed first."""
+    from django.db.models import Count, Q
+
+    from apps.creators.models import CreatorFollow, CreatorProfile
+
+    profiles = list(
+        CreatorProfile.objects.filter(display_name__icontains=text)
+        .annotate(
+            approved_count=Count(
+                "user__testimonies",
+                filter=Q(user__testimonies__status=TestimonyStatus.APPROVED),
+                distinct=True,
+            ),
+            follower_count=Count("user__followers", distinct=True),
+        )
+        .filter(approved_count__gt=0)
+        .order_by("-follower_count", "display_name", "id")[:MINISTRY_SEARCH_LIMIT]
+    )
+    followed_ids = set()
+    if user is not None and getattr(user, "is_authenticated", False):
+        followed_ids = set(
+            CreatorFollow.objects.filter(
+                follower=user, creator_id__in=[profile.user_id for profile in profiles]
+            ).values_list("creator_id", flat=True)
+        )
+    return [
+        {
+            "user_id": profile.user_id,
+            "display_name": profile.display_name,
+            "avatar_url": profile.avatar_url,
+            "testimony_count": profile.approved_count,
+            "is_followed": profile.user_id in followed_ids,
+        }
+        for profile in profiles
+    ]
 
 
 def user_engagement_journey(user) -> dict:

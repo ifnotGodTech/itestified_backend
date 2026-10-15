@@ -114,7 +114,7 @@ class HomeFeedSeededShuffleTests(TestCase):
     rotation of the same fixed order."""
 
     def setUp(self) -> None:
-        # _cached_base_ids caches by (user, seed) in the process-level
+        # _cached_ranked_feed caches by (user, seed) in the process-level
         # LocMemCache, which isn't tied to the DB transaction rollback
         # TestCase gives each test -- without clearing it, a cached id
         # list from one test could leak into another if they ever reuse
@@ -222,10 +222,9 @@ class HomeFeedSeededShuffleTests(TestCase):
         )
 
     def test_no_seed_fast_path_costs_exactly_a_count_and_a_slice(self) -> None:
-        # Guest/signal-less path: no extra queries computing category_ids
-        # (see _home_feed_base_queryset), so this should be exactly
-        # count() + the select_related slice -- nothing more, regardless
-        # of catalog size, as the docstring claims.
+        # Guest path: no signal queries, so this is exactly the ranking's
+        # one values() query plus the select_related fetch of the page --
+        # nothing more, regardless of catalog size.
         with self.assertNumQueries(2):
             home_feed_page(user=None, page=1, page_size=10)
 
@@ -252,3 +251,108 @@ class HomeFeedSeededShuffleTests(TestCase):
         # again.
         with self.assertNumQueries(2):
             home_feed_page(user=None, page=1, page_size=2, seed="query-count-c2")
+
+
+class ForYouRankingTests(TestCase):
+    """Phase 35 Slice 2 -- For you ranks by the viewer's own signals, best
+    first, and says why each testimony is there."""
+
+    def setUp(self) -> None:
+        cache.clear()
+        from apps.creators.models import CreatorFollow, CreatorProfile
+        from apps.testimonies.models import TestimonyReaction, TestimonyWatch
+
+        self.CreatorFollow = CreatorFollow
+        self.TestimonyReaction = TestimonyReaction
+        self.TestimonyWatch = TestimonyWatch
+        self.healing = TestimonyCategory.objects.create(name="Healing", slug="healing-r")
+        self.faith = TestimonyCategory.objects.create(name="Faith", slug="faith-r")
+        self.provision = TestimonyCategory.objects.create(name="Provision", slug="provision-r")
+        self.other = TestimonyCategory.objects.create(name="Other", slug="other-r")
+
+        self.grace_chapel = UserFactory(email="grace-chapel@example.com")
+        ProfileFactory(user=self.grace_chapel, full_name="Pastor Grace")
+        CreatorProfile.objects.create(user=self.grace_chapel, display_name="Grace Chapel")
+        someone = UserFactory(email="someone@example.com")
+        ProfileFactory(user=someone, full_name="Someone")
+
+        def make(title, author, category, **counts):
+            return Testimony.objects.create(
+                author=author,
+                category=category,
+                title=title,
+                body="...",
+                testimony_type=TestimonyType.WRITTEN,
+                status=TestimonyStatus.APPROVED,
+                **counts,
+            )
+
+        # Oldest first, so recency alone would put "Plain" first.
+        self.from_grace = make("From Grace Chapel", self.grace_chapel, self.other)
+        self.in_healing = make("In Healing", someone, self.healing)
+        self.in_faith = make("In Faith", someone, self.faith)
+        self.popular = make("Popular one", someone, self.provision, amen_count=6)
+        self.plain = make("Plain", someone, self.other)
+
+        self.ada = UserFactory(email="ada@example.com")
+        ProfileFactory(user=self.ada, full_name="Ada")
+        CreatorFollow.objects.create(follower=self.ada, creator=self.grace_chapel)
+        UserFollowedCategory.objects.create(user=self.ada, category=self.healing)
+        TestimonyReaction.objects.create(user=self.ada, testimony=self.in_faith, reaction_type="amen")
+
+    def _page(self, user, seed=None):
+        return home_feed_page(user=user, page=1, page_size=5, seed=seed)
+
+    def test_tiers_read_followed_creator_then_category_then_engaged_then_popular_then_rest(self) -> None:
+        page = self._page(self.ada)
+
+        self.assertEqual(
+            [row.title for row in page["results"]],
+            ["From Grace Chapel", "In Healing", "In Faith", "Popular one", "Plain"],
+        )
+        self.assertEqual(
+            page["reasons"],
+            [
+                "You follow Grace Chapel",
+                "You follow Healing",
+                "Because you liked Faith testimonies",
+                "Popular in Provision",
+                None,
+            ],
+        )
+
+    def test_a_seed_varies_order_within_a_tier_but_never_across_tiers(self) -> None:
+        for seed in ("a", "b", "c", "d"):
+            cache.clear()
+            titles = [row.title for row in self._page(self.ada, seed=seed)["results"]]
+            self.assertEqual(titles[0], "From Grace Chapel")
+            self.assertEqual(titles[-1], "Plain")
+
+    def test_already_watched_testimonies_drop_to_the_end_of_their_tier(self) -> None:
+        second_from_grace = Testimony.objects.create(
+            author=self.grace_chapel,
+            category=self.other,
+            title="Newer from Grace Chapel",
+            body="...",
+            testimony_type=TestimonyType.WRITTEN,
+            status=TestimonyStatus.APPROVED,
+        )
+        self.TestimonyWatch.objects.create(user=self.ada, testimony=second_from_grace)
+
+        titles = [
+            row.title
+            for row in home_feed_page(user=self.ada, page=1, page_size=6)["results"]
+        ]
+
+        self.assertEqual(titles[:2], ["From Grace Chapel", "Newer from Grace Chapel"])
+
+    def test_a_guest_gets_popular_first_then_newest(self) -> None:
+        page = self._page(None)
+
+        self.assertEqual(page["results"][0].title, "Popular one")
+        self.assertEqual(page["reasons"][0], "Popular in Provision")
+        self.assertEqual(
+            [row.title for row in page["results"][1:]],
+            ["Plain", "In Faith", "In Healing", "From Grace Chapel"],
+        )
+        self.assertEqual(page["reasons"][1:], [None, None, None, None])
