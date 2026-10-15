@@ -161,63 +161,9 @@ class ScriptureReadReceipt(models.Model):
         return f"ScriptureReadReceipt<{self.user_id}:{self.read_date}>"
 
 
-class HomeSectionKey(models.TextChoices):
-    FEATURED_TESTIMONIES = "featured_testimonies", "Featured Testimonies"
-    INSPIRATIONAL_PICTURE = "inspirational_picture", "Inspirational Picture"
-    SCRIPTURE = "scripture", "Scripture"
-
-
-class HomeSectionOrder(models.Model):
-    section = models.CharField(max_length=40, choices=HomeSectionKey.choices, unique=True)
-    position = models.PositiveIntegerField(default=0)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        ordering = ["position", "id"]
-
-    def __str__(self) -> str:
-        return f"HomeSectionOrder<{self.section}:{self.position}>"
-
-
-class FeaturedHomeTestimony(models.Model):
-    testimony = models.ForeignKey(
-        Testimony,
-        on_delete=models.CASCADE,
-        related_name="home_featured_entries",
-    )
-    position = models.PositiveIntegerField(default=0)
-    created_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        null=True,
-        blank=True,
-        on_delete=models.SET_NULL,
-        related_name="home_featured_testimonies_created",
-    )
-    updated_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        null=True,
-        blank=True,
-        on_delete=models.SET_NULL,
-        related_name="home_featured_testimonies_updated",
-    )
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        ordering = ["position", "id"]
-        constraints = [
-            models.UniqueConstraint(
-                fields=["testimony"],
-                name="uniq_home_featured_testimony",
-            ),
-        ]
-
-    def clean(self):
-        if self.testimony.status != TestimonyStatus.APPROVED:
-            raise ValidationError("Only approved testimonies can be featured on home feed.")
-
-    def __str__(self) -> str:
-        return f"FeaturedHomeTestimony<{self.testimony_id}:{self.position}>"
+# Phase 35: the home section order and featured testimonies were retired --
+# the app's Home is one immersive feed (and stopped reading them back in
+# Phase 20 Slice 3). Featured pictures below still feed its pictures.
 
 
 class FeaturedHomePicture(models.Model):

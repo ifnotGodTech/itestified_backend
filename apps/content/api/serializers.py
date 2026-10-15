@@ -3,11 +3,8 @@ from rest_framework import serializers
 
 from apps.content.models import (
     FeaturedHomePicture,
-    FeaturedHomeTestimony,
     HomePromoCard,
     HomePromoCtaDestination,
-    HomeSectionKey,
-    HomeSectionOrder,
     InspirationalPicture,
     InspirationalPictureCategory,
     InspirationalPictureStatus,
@@ -117,43 +114,6 @@ class ScriptureReadInputSerializer(serializers.Serializer):
     read_date = serializers.DateField()
 
 
-class HomeSectionOrderSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = HomeSectionOrder
-        fields = ("section", "position")
-
-
-class FeaturedHomeTestimonySerializer(serializers.ModelSerializer):
-    testimony_id = serializers.IntegerField(source="testimony.id", read_only=True)
-    title = serializers.CharField(source="testimony.title", read_only=True)
-    category = serializers.CharField(source="testimony.category.name", read_only=True)
-    testimony_type = serializers.CharField(source="testimony.testimony_type", read_only=True)
-    body = serializers.CharField(source="testimony.body", read_only=True)
-    thumbnail_url = serializers.SerializerMethodField()
-    video_url = serializers.CharField(source="testimony.video_url", read_only=True)
-    created_at = serializers.DateTimeField(source="testimony.created_at", read_only=True)
-
-    class Meta:
-        model = FeaturedHomeTestimony
-        fields = (
-            "id",
-            "testimony_id",
-            "position",
-            "title",
-            "category",
-            "testimony_type",
-            "body",
-            "thumbnail_url",
-            "video_url",
-            "created_at",
-        )
-
-    def get_thumbnail_url(self, obj: FeaturedHomeTestimony) -> str:
-        if obj.testimony.thumbnail_url.strip():
-            return obj.testimony.thumbnail_url
-        return build_cloudinary_video_thumbnail_url(obj.testimony.video_url)
-
-
 class FeaturedHomePictureSerializer(serializers.ModelSerializer):
     picture_id = serializers.IntegerField(source="picture.id", read_only=True)
     title = serializers.CharField(source="picture.title", read_only=True)
@@ -182,39 +142,14 @@ class FeaturedHomePictureSerializer(serializers.ModelSerializer):
 
 
 class HomeCurationUpdateSerializer(serializers.Serializer):
-    section_order = serializers.ListField(
-        child=serializers.ChoiceField(choices=HomeSectionKey.values),
-        allow_empty=False,
-    )
-    featured_testimony_ids = serializers.ListField(
-        child=serializers.IntegerField(min_value=1),
-        allow_empty=True,
-    )
+    # Older dashboards may still send section_order / featured_testimony_ids;
+    # those settings are retired (Phase 35), so they're ignored.
     featured_picture_ids = serializers.ListField(
         child=serializers.IntegerField(min_value=1),
         allow_empty=True,
         required=False,
         default=list,
     )
-
-    def validate_section_order(self, value):
-        required = set(HomeSectionKey.values)
-        incoming = set(value)
-        if incoming != required or len(value) != len(required):
-            raise serializers.ValidationError(
-                f"section_order must contain each section exactly once: {', '.join(HomeSectionKey.values)}."
-            )
-        return value
-
-    def validate_featured_testimony_ids(self, value):
-        if not value:
-            return value
-        testimonies = Testimony.objects.filter(id__in=value, status=TestimonyStatus.APPROVED)
-        found_ids = {item.id for item in testimonies}
-        missing = [item_id for item_id in value if item_id not in found_ids]
-        if missing:
-            raise serializers.ValidationError("All featured testimonies must exist and be approved.")
-        return value
 
     def validate_featured_picture_ids(self, value):
         if not value:

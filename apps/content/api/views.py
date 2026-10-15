@@ -2,7 +2,7 @@ from datetime import timedelta
 from typing import Optional
 
 from django.utils import timezone
-from django.db import models
+from django.db import models, transaction
 from rest_framework import generics, status
 from rest_framework.authentication import SessionAuthentication, TokenAuthentication
 from rest_framework.decorators import api_view, authentication_classes, permission_classes
@@ -16,10 +16,7 @@ from apps.common.services.media_uploads import CloudinaryUploadError, create_dir
 from apps.content.exceptions import ContentError
 from apps.content.models import (
     FeaturedHomePicture,
-    FeaturedHomeTestimony,
     HomePromoCard,
-    HomeSectionKey,
-    HomeSectionOrder,
     InspirationalPicture,
     InspirationalPictureCategory,
     InspirationalPictureStatus,
@@ -36,11 +33,9 @@ from apps.users.models import Profile
 
 from .serializers import (
     FeaturedHomePictureSerializer,
-    FeaturedHomeTestimonySerializer,
     HomeCurationUpdateSerializer,
     HomePromoCardPublicSerializer,
     HomePromoCardSerializer,
-    HomeSectionOrderSerializer,
     InspirationalPictureCategorySerializer,
     InspirationalPictureSerializer,
     ScriptureReadInputSerializer,
@@ -309,43 +304,13 @@ class AdminScriptureStreakStatsView(APIView):
 
 
 class AdminHomeCurationView(APIView):
+    """The featured pictures woven into the app's Home feed. (Phase 35
+    retired this page's section order and featured testimonies.)"""
+
     authentication_classes = [SessionAuthentication]
     permission_classes = [IsAuthenticated, IsActiveAdmin]
 
     def get(self, request):
-        section_rows = list(HomeSectionOrder.objects.all())
-        if not section_rows:
-            defaults = [
-                HomeSectionKey.FEATURED_TESTIMONIES,
-                HomeSectionKey.INSPIRATIONAL_PICTURE,
-                HomeSectionKey.SCRIPTURE,
-            ]
-            for index, section in enumerate(defaults):
-                HomeSectionOrder.objects.create(section=section, position=index)
-            section_rows = list(HomeSectionOrder.objects.all())
-
-        featured_rows = FeaturedHomeTestimony.objects.select_related("testimony", "testimony__category")
-        available_rows = (
-            Testimony.objects.filter(status=TestimonyStatus.APPROVED)
-            .exclude(home_featured_entries__isnull=False)
-            .select_related("category", "author")
-            .order_by("-created_at")
-        )
-        available_payload = [
-            {
-                "id": row.id,
-                "title": row.title,
-                "category": row.category.name,
-                "testimony_type": row.testimony_type,
-                "body": row.body,
-                "video_url": row.video_url,
-                "thumbnail_url": row.thumbnail_url or build_cloudinary_video_thumbnail_url(row.video_url),
-                "created_at": row.created_at,
-                "author_name": row.author.get_full_name() or row.author.email,
-            }
-            for row in available_rows
-        ]
-
         featured_picture_rows = FeaturedHomePicture.objects.select_related("picture", "picture__category")
         available_picture_rows = (
             InspirationalPicture.objects.filter(status=InspirationalPictureStatus.PUBLISHED)
@@ -368,9 +333,6 @@ class AdminHomeCurationView(APIView):
 
         return Response(
             {
-                "section_order": HomeSectionOrderSerializer(section_rows, many=True).data,
-                "featured_testimonies": FeaturedHomeTestimonySerializer(featured_rows, many=True).data,
-                "available_testimonies": available_payload,
                 "featured_pictures": FeaturedHomePictureSerializer(featured_picture_rows, many=True).data,
                 "available_pictures": available_picture_payload,
             }
@@ -379,44 +341,20 @@ class AdminHomeCurationView(APIView):
     def put(self, request):
         serializer = HomeCurationUpdateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        section_order = serializer.validated_data["section_order"]
-        featured_ids = serializer.validated_data["featured_testimony_ids"]
         featured_picture_ids = serializer.validated_data["featured_picture_ids"]
 
-        for index, section in enumerate(section_order):
-            HomeSectionOrder.objects.update_or_create(section=section, defaults={"position": index})
-
-        FeaturedHomeTestimony.objects.exclude(testimony_id__in=featured_ids).delete()
-        for index, testimony_id in enumerate(featured_ids):
-            FeaturedHomeTestimony.objects.update_or_create(
-                testimony_id=testimony_id,
-                defaults={
-                    "position": index,
-                    "updated_by": request.user,
-                    "created_by": request.user,
-                },
-            )
-
-        FeaturedHomePicture.objects.exclude(picture_id__in=featured_picture_ids).delete()
-        for index, picture_id in enumerate(featured_picture_ids):
-            FeaturedHomePicture.objects.update_or_create(
-                picture_id=picture_id,
-                defaults={
-                    "position": index,
-                    "updated_by": request.user,
-                    "created_by": request.user,
-                },
-            )
+        with transaction.atomic():
+            FeaturedHomePicture.objects.exclude(picture_id__in=featured_picture_ids).delete()
+            for index, picture_id in enumerate(featured_picture_ids):
+                FeaturedHomePicture.objects.update_or_create(
+                    picture_id=picture_id,
+                    defaults={
+                        "position": index,
+                        "updated_by": request.user,
+                        "created_by": request.user,
+                    },
+                )
         return self.get(request)
-
-
-class AdminFeaturedHomeTestimonyDeleteView(APIView):
-    authentication_classes = [SessionAuthentication]
-    permission_classes = [IsAuthenticated, IsActiveAdmin]
-
-    def post(self, request, testimony_id: int):
-        FeaturedHomeTestimony.objects.filter(testimony_id=testimony_id).delete()
-        return Response({"removed": testimony_id}, status=status.HTTP_200_OK)
 
 
 class AdminFeaturedHomePictureDeleteView(APIView):
@@ -459,34 +397,6 @@ def _scripture_streak_payload(request) -> Optional[dict]:
 @api_view(["GET"])
 @permission_classes([])
 def mobile_home_feed_view(request):
-    section_rows = list(HomeSectionOrder.objects.all().order_by("position", "id"))
-    if not section_rows:
-        section_rows = [
-            HomeSectionOrder(section=HomeSectionKey.FEATURED_TESTIMONIES, position=0),
-            HomeSectionOrder(section=HomeSectionKey.INSPIRATIONAL_PICTURE, position=1),
-            HomeSectionOrder(section=HomeSectionKey.SCRIPTURE, position=2),
-        ]
-    section_order = [row.section for row in section_rows]
-
-    featured = FeaturedHomeTestimony.objects.select_related("testimony", "testimony__category").order_by("position", "id")
-    featured_payload = [
-        {
-            "id": row.testimony.id,
-            "title": row.testimony.title,
-            "category": row.testimony.category.name,
-            "body": row.testimony.body,
-            "testimony_type": row.testimony.testimony_type,
-            "video_url": row.testimony.video_url,
-            "thumbnail_url": row.testimony.thumbnail_url or build_cloudinary_video_thumbnail_url(row.testimony.video_url),
-            "publish_at": row.testimony.publish_at,
-            "created_at": row.testimony.created_at,
-            "view_count": row.testimony.view_count,
-            "comment_count": row.testimony.comment_count,
-        }
-        for row in featured
-        if row.testimony.status == TestimonyStatus.APPROVED
-    ]
-
     featured_pictures = (
         FeaturedHomePicture.objects.filter(picture__status=InspirationalPictureStatus.PUBLISHED)
         .select_related("picture", "picture__category")
@@ -505,8 +415,6 @@ def mobile_home_feed_view(request):
 
     return Response(
         {
-            "section_order": section_order,
-            "featured_testimonies": featured_payload,
             "inspirational_pictures": featured_pictures_payload,
             "scripture": ScriptureSerializer(scripture).data if scripture else None,
             "scripture_streak": _scripture_streak_payload(request),

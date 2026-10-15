@@ -2,7 +2,6 @@ from django.urls import path
 
 from .views import (
     AdminFeaturedHomePictureDeleteView,
-    AdminFeaturedHomeTestimonyDeleteView,
     AdminHomeCurationView,
     AdminHomePromoCardActivationView,
     AdminHomePromoCardDetailView,
@@ -100,11 +99,6 @@ urlpatterns = [
         "admin/home-curation/",
         AdminHomeCurationView.as_view(),
         name="admin-home-curation",
-    ),
-    path(
-        "admin/home-curation/featured-testimonies/<int:testimony_id>/remove/",
-        AdminFeaturedHomeTestimonyDeleteView.as_view(),
-        name="admin-home-curation-featured-remove",
     ),
     path(
         "admin/home-curation/featured-pictures/<int:picture_id>/remove/",

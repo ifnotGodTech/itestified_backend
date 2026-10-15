@@ -1,9 +1,7 @@
 from django.contrib import admin
 
 from .models import (
-    FeaturedHomeTestimony,
     HomePromoCard,
-    HomeSectionOrder,
     InspirationalPicture,
     InspirationalPictureCategory,
     ScriptureOfTheDay,
@@ -37,18 +35,6 @@ class ScriptureReadReceiptAdmin(admin.ModelAdmin):
     list_display = ("user", "read_date", "created_at")
     list_filter = ("read_date",)
     search_fields = ("user__email",)
-
-
-@admin.register(HomeSectionOrder)
-class HomeSectionOrderAdmin(admin.ModelAdmin):
-    list_display = ("section", "position", "updated_at")
-    list_editable = ("position",)
-
-
-@admin.register(FeaturedHomeTestimony)
-class FeaturedHomeTestimonyAdmin(admin.ModelAdmin):
-    list_display = ("id", "testimony", "position", "updated_at")
-    list_filter = ("testimony__testimony_type", "testimony__status")
 
 
 @admin.register(HomePromoCard)

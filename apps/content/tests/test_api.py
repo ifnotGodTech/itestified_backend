@@ -11,11 +11,8 @@ from rest_framework.authtoken.models import Token
 
 from apps.content.models import (
     FeaturedHomePicture,
-    FeaturedHomeTestimony,
     HomePromoCard,
     HomePromoCardStatus,
-    HomeSectionKey,
-    HomeSectionOrder,
     InspirationalPicture,
     InspirationalPictureCategory,
     InspirationalPictureStatus,
@@ -323,33 +320,30 @@ class ContentAdminApiTests(TestCase):
         self.assertIn("Isaiah 40:31", notification.message)
         self.assertFalse(UserNotification.objects.filter(recipient=self.admin).exists())
 
-    def test_phase7_slice5_home_feed_curation(self):
-        category = TestimonyCategory.objects.create(name="Healing", slug="healing")
-        author = UserFactory()
-        approved = Testimony.objects.create(
-            author=author,
+    def test_retired_home_settings_from_an_older_dashboard_are_ignored(self):
+        # Phase 35 retired the section order and featured testimonies; a
+        # dashboard that still sends them gets its pictures saved and the
+        # rest quietly ignored.
+        category = InspirationalPictureCategory.objects.create(name="Hope", slug="hope")
+        picture = InspirationalPicture.objects.create(
+            title="Morning Mercy",
             category=category,
-            title="Featured Testimony",
-            body="God did it.",
-            testimony_type=TestimonyType.WRITTEN,
-            status=TestimonyStatus.APPROVED,
+            source="Instagram",
+            image_url="https://images.example.com/1.jpg",
+            status=InspirationalPictureStatus.PUBLISHED,
         )
         response = self.client.put(
             reverse("admin-home-curation"),
             {
-                "section_order": [
-                    HomeSectionKey.SCRIPTURE,
-                    HomeSectionKey.FEATURED_TESTIMONIES,
-                    HomeSectionKey.INSPIRATIONAL_PICTURE,
-                ],
-                "featured_testimony_ids": [approved.id],
+                "section_order": ["scripture", "featured_testimonies", "inspirational_picture"],
+                "featured_testimony_ids": [999],
+                "featured_picture_ids": [picture.id],
             },
             content_type="application/json",
         )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(FeaturedHomeTestimony.objects.count(), 1)
-        self.assertEqual(HomeSectionOrder.objects.count(), 3)
-        self.assertEqual(HomeSectionOrder.objects.order_by("position").first().section, HomeSectionKey.SCRIPTURE)
+        self.assertEqual(set(response.json()), {"featured_pictures", "available_pictures"})
+        self.assertEqual(FeaturedHomePicture.objects.get().picture, picture)
 
     def test_phase7_slice5_home_feed_picture_curation_add_reorder_remove(self):
         category = InspirationalPictureCategory.objects.create(name="Hope", slug="hope")
@@ -379,12 +373,6 @@ class ContentAdminApiTests(TestCase):
         rejected = self.client.put(
             reverse("admin-home-curation"),
             {
-                "section_order": [
-                    HomeSectionKey.SCRIPTURE,
-                    HomeSectionKey.FEATURED_TESTIMONIES,
-                    HomeSectionKey.INSPIRATIONAL_PICTURE,
-                ],
-                "featured_testimony_ids": [],
                 "featured_picture_ids": [unpublished.id],
             },
             content_type="application/json",
@@ -396,12 +384,6 @@ class ContentAdminApiTests(TestCase):
         added = self.client.put(
             reverse("admin-home-curation"),
             {
-                "section_order": [
-                    HomeSectionKey.SCRIPTURE,
-                    HomeSectionKey.FEATURED_TESTIMONIES,
-                    HomeSectionKey.INSPIRATIONAL_PICTURE,
-                ],
-                "featured_testimony_ids": [],
                 "featured_picture_ids": [first.id, second.id],
             },
             content_type="application/json",
@@ -420,12 +402,6 @@ class ContentAdminApiTests(TestCase):
         reordered = self.client.put(
             reverse("admin-home-curation"),
             {
-                "section_order": [
-                    HomeSectionKey.SCRIPTURE,
-                    HomeSectionKey.FEATURED_TESTIMONIES,
-                    HomeSectionKey.INSPIRATIONAL_PICTURE,
-                ],
-                "featured_testimony_ids": [],
                 "featured_picture_ids": [second.id, first.id],
             },
             content_type="application/json",
@@ -458,10 +434,6 @@ class ContentAdminApiTests(TestCase):
             video_url="https://res.cloudinary.com/itestified/video/upload/v1784672029/exmoriihzrotlki5en5k.mp4",
             thumbnail_url="",
         )
-        FeaturedHomeTestimony.objects.create(testimony=approved, position=0, created_by=self.admin, updated_by=self.admin)
-        HomeSectionOrder.objects.create(section=HomeSectionKey.FEATURED_TESTIMONIES, position=0)
-        HomeSectionOrder.objects.create(section=HomeSectionKey.INSPIRATIONAL_PICTURE, position=1)
-        HomeSectionOrder.objects.create(section=HomeSectionKey.SCRIPTURE, position=2)
         picture = InspirationalPicture.objects.create(
             title="Faith",
             caption="Keep believing.",
@@ -486,12 +458,9 @@ class ContentAdminApiTests(TestCase):
 
         home_feed = self.client.get(reverse("mobile-home-feed"))
         self.assertEqual(home_feed.status_code, 200)
-        self.assertEqual(home_feed.json()["section_order"][0], HomeSectionKey.FEATURED_TESTIMONIES)
-        self.assertEqual(len(home_feed.json()["featured_testimonies"]), 1)
-        self.assertEqual(
-            home_feed.json()["featured_testimonies"][0]["thumbnail_url"],
-            "https://res.cloudinary.com/itestified/video/upload/so_2,w_1280,h_720,c_fill,g_auto/v1784672029/exmoriihzrotlki5en5k.jpg",
-        )
+        # Retired in Phase 35; older app builds treat the absence as empty.
+        self.assertNotIn("section_order", home_feed.json())
+        self.assertNotIn("featured_testimonies", home_feed.json())
         self.assertEqual(len(home_feed.json()["inspirational_pictures"]), 1)
         self.assertEqual(home_feed.json()["inspirational_pictures"][0]["image_url"], "https://images.example.com/mobile.jpg")
 
