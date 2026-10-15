@@ -50,7 +50,7 @@ Snapshot as of 2026-10-09. **Each phase's own `Status:` line is the source of tr
 | 32 | Self-Service Video Testimony Upload (Premium) | ✅ Complete | |
 | 33 | Immersive Discovery | ✅ Complete | |
 | 34 | Bible Reader & Word Study | ✅ All 8 slices done (BSB, KJV and word-study packs live in production) | Mobile features ship with the next app build; Slice 8 needs the backend deploy (migration `bible.0002`) |
-| 35 | Immersive-first Home | 🟡 Slices 1–3 done (immersive Home; chips; search in the feed) | Slices 4–5 next; Slice 6 deferred |
+| 35 | Immersive-first Home | 🟡 Slices 1–3 and 5 done (immersive Home; chips; search; measurement) | Slice 4 next; Slice 6 deferred |
 
 Test baseline: as of 2026-10-09 the full backend suite passes with 0 failures. Older entries below cite "the pre-existing 21 `apps.authn` failures" (live Brevo calls from tests). That was accurate when written, but the baseline no longer exists, so any new failure is a real one.
 
@@ -2835,6 +2835,32 @@ Facts confirmed 2026-10-14:
   - It ships with Slice 1, so the old Discovery numbers serve as the baseline.
 - **Dashboard:** a small "Home engagement" card: median time per item, swipes per session, searches per day, response rate. It is a first real piece of Phase 8's analytics.
 - **DB footprint:** one events table, pruned after 90 days, plus a daily rollup table.
+- **✅ Built and verified 2026-10-15** (after Slices 1–3, so there is no "old Discovery" baseline; it is a baseline for Slice 4 instead). Checked end to end on the emulator against the local backend, and the dashboard page was screenshotted in both themes.
+  - Backend: new app `apps.engagement`, migration `engagement.0001_initial`.
+    - `HomeEvent` stores compact rows: user or none, an anonymous per-install `device_id`, `session_id`, type, a plain `testimony_id` (not a foreign key), `duration_ms` and `occurred_at`.
+    - `HomeEngagementDay` holds one row per finished day.
+    - `POST /engagement/home-events/` (public; a token attaches the user) takes batches of up to 50. It drops events stamped in the future or over 2 days old, and rejects views over an hour.
+    - `GET /engagement/admin/home/?days=7|30|90` (admins) returns:
+      - the median time on a testimony (`PERCENTILE_CONT` over the raw events);
+      - swipes per session, searches a day, how often a search led to a played result, and the response rate;
+      - a daily series, with today live.
+    - Each summary request first rolls up any finished day not yet rolled up, then prunes raw events older than 90 days. So no scheduled job is needed, which matters on Render's free plan.
+  - Mobile:
+    - `HomeEventRecorder` batches events and sends them at 20 events, every 30s, and when the app goes to the background. It is fire-and-forget, drops a failed batch, and never shows anything to the viewer.
+    - `HomeViewTimer` counts a testimony's time only while it is visible: paused under a sheet, another tab, search, or in the background. A flick past (under 0.5s) isn't a view. The current view is reported when the app goes to the background.
+    - Recorded, on Home only (not playlists or shared links): `item_viewed` (testimonies only), `swiped` (the viewer's own, not auto-advance), `search_run`, `result_opened`, `responded` (a reaction added, or a comment posted).
+    - Added `clock` as a direct dependency so widget tests can move time.
+  - Dashboard:
+    - New `/analytics/home`, listed first under Analytics as "Home engagement", built to the approved mock (board 9).
+    - It has a 7/30/90-day switch, four numbers each with a plain sentence of what it means, and a daily chart of testimonies viewed and responses. Thirty and 90 days label about one bar in seven.
+    - An empty period shows a note, not zeros dressed as results.
+    - It uses theme tokens throughout, so it reads in light and dark mode.
+    - Link text colour goes on an inner span, because `globals.css`'s unlayered `a { color: inherit }` beats Tailwind's colour classes on links. That's worth knowing for the rebrand.
+  - Verified on device: a guest session sent 2 swipes, a 73s view, a search and an opened result under one session id, and the summary added up. This check found that the view on screen when the app went to the background was being lost; it is now reported at that moment.
+  - Tests:
+    - Backend (9): batch storage, guest and signed-in, clock-skew drops, validation, the worked-example numbers, rollup once and prune, today live, no activity, admin-only.
+    - Mobile: the view timer worked example, a flick past, batch payload and size, a failed send dropped quietly, and the feed recording a swipe and the previous testimony's time.
+    - Dashboard: 4 vitest (numbers and sentences, empty, error, formats) and an e2e test (open from Analytics, switch period).
 
 Order: Slice 1 with Slice 5, then Slices 2, 3 and 4. Slice 6 comes later, when the admin is ready to work on reactions.
 
@@ -2860,7 +2886,7 @@ Test:
 - A retired reaction keeps its past counts.
 - An older app build can still react with the old keys.
 
-Status: 🟡 Slices 1–3 ✅ (2026-10-14/15; Slices 2–3 need the backend deploy, and Slice 3 runs migration `testimonies.0017`, built concurrently). Slices 4–5 not started. Slice 6 (admin-managed reactions) is deferred until the admin picks it up.
+Status: 🟡 Slices 1–3 ✅ (2026-10-14/15; Slices 2–3 need the backend deploy, and Slice 3 runs migration `testimonies.0017`, built concurrently). Slice 5 ✅ 2026-10-15 (backend app `engagement`, migration `engagement.0001`; dashboard `/analytics/home`). Slice 4 not started. Slice 6 (admin-managed reactions) is deferred until the admin picks it up.
 
 ## Risks To Watch Early
 
