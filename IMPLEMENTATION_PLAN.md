@@ -50,7 +50,7 @@ Snapshot as of 2026-10-09. **Each phase's own `Status:` line is the source of tr
 | 32 | Self-Service Video Testimony Upload (Premium) | ✅ Complete | |
 | 33 | Immersive Discovery | ✅ Complete | |
 | 34 | Bible Reader & Word Study | ✅ All 8 slices done (BSB, KJV and word-study packs live in production) | Mobile features ship with the next app build; Slice 8 needs the backend deploy (migration `bible.0002`) |
-| 35 | Immersive-first Home | 🟡 Slice 1 done (Home opens into the feed; promos in feed, carousel retired) | Slices 2–5 next; Slice 6 deferred |
+| 35 | Immersive-first Home | 🟡 Slices 1–3 done (immersive Home; chips; search in the feed) | Slices 4–5 next; Slice 6 deferred |
 
 Test baseline: as of 2026-10-09 the full backend suite passes with 0 failures. Older entries below cite "the pre-existing 21 `apps.authn` failures" (live Brevo calls from tests). That was accurate when written, but the baseline no longer exists, so any new failure is a real one.
 
@@ -2716,6 +2716,33 @@ Follow-ups to Slice 1, decided by the admin 2026-10-14 and built the same day:
   - The Following empty state, with Follow buttons.
 - **Dashboard:** none.
 - **DB footprint:** none. It reads existing follow and reaction rows.
+- **✅ Built and verified 2026-10-14**, checked on the emulator against the local backend with a signed-in test account.
+  - Backend:
+    - **For you is ranked in tiers** (`_ranked_feed` in `apps/testimonies/services/queries.py`), each tier with its reason:
+      1. creators you follow ("You follow Grace Chapel");
+      2. categories you follow ("You follow Healing");
+      3. categories you saved or reacted to ("Because you liked Faith testimonies");
+      4. popular, 5+ responses ("Popular in Provision");
+      5. everything else, newest first, with no reason.
+    - Within a tier, testimonies you have already watched drop to the end.
+    - The per-session seed now shuffles only *within* a tier, so a fresh open still varies without undoing the ranking. The ranked list is cached per (user, seed) as before, and the feed still loops endlessly.
+    - `home/feed/` items carry `reason`. A guest gets tiers 4–5.
+    - New `GET /testimonies/home/following/` (signed in only): approved testimonies from followed creators, newest first, normal pagination (it ends). It includes `follows_anyone`, and when that is false, `suggested_creators`: up to 6 Ministries with approved testimonies, most-followed first.
+    - Category chips use the existing `?category=<slug>`. No migration.
+  - Mobile:
+    - The top bar is a scrolling chip row: For you, Following, then every category, the ones you follow first. It fades out before Search. Guests get a Create account icon so the chips have room.
+    - Each chip other than For you runs in its own `ProviderScope`, with its own `SourceFeedController` and immersive position. A chip's feed is created on first visit and kept, so going back resumes it. Only the selected one plays.
+      - On device, a Deliverance video at 0:35 came back at 0:38 after 8s on For you; the extra seconds are tap delay.
+    - Scripture of the day and live stay on For you only.
+    - The "why shown" line (✓ You follow Grace Community Ministry) sits under the citation.
+    - Following:
+      - a guest gets a sign-in prompt and no request is made;
+      - someone following no one gets the suggestions with Follow buttons. On device, following Grace Community Ministry turned the empty feed into their testimonies immediately.
+    - Signing in or out rebuilds every chip's feed.
+  - Tests:
+    - Backend: tiers and reasons, the seed never crossing tiers, watched last, a guest's order, `reason` in the API, Following order/suggestions/sign-in. The existing 16 feed tests pass unchanged.
+    - Mobile: `SourceFeedController` paging/ending/suggestions/slug, `feedReason` mapping, chip order, a guest on Following, a category's own feed, the reason line, and no Scripture/live on a category feed.
+  - Known limitation: after following someone from the Following chip, For you only reflects it on the next fresh load. For you isn't reloaded underneath the viewer, so they don't lose their place.
 
 #### Slice 3 — Search inside the feed
 - **Backend:**
@@ -2730,6 +2757,31 @@ Follow-ups to Slice 1, decided by the admin 2026-10-14 and built the same day:
   - Recent searches are kept locally.
 - **Dashboard:** none.
 - **DB footprint:** one GIN index (with a generated search-vector column if needed). The migration is checked for lock time on the testimonies table.
+- **✅ Built and verified 2026-10-15**, checked on the emulator against the local backend as a guest.
+  - Backend:
+    - Migration `testimonies.0017_testimony_search_index`: one GIN expression index over `to_tsvector('english', title || ' ' || body)`.
+      - It is created with `AddIndexConcurrently` (non-atomic migration), so building it never blocks writes to the testimonies table. No generated column was needed.
+      - The index and the query share one expression (`TESTIMONY_SEARCH_VECTOR`); EXPLAIN confirms a Bitmap Index Scan on it.
+    - `?search=` on `/testimonies/` (same parameter, so older builds keep working) now uses `apply_testimony_search`:
+      - full-text matching on the story ("healed" finds "healing"), plus a substring match on title, ministry name, author name and category name;
+      - ranked by `SearchRank`, with a boost when the title contains the text, then newest first;
+      - `type=` and approved-only still apply.
+    - New public `GET /testimonies/search/ministries/?q=`: up to 5 Ministries with approved testimonies whose name matches, with `is_followed` for a signed-in viewer.
+  - Mobile:
+    - Search opens over the Home feed; the chip underneath pauses.
+    - Before searching, the panel offers recent searches (the existing on-device list) and the category tiles, so following a category still has a home.
+    - Results show: type chips (All · Video · Audio · Written), "Churches & ministries" with Follow (a guest is asked to sign in), and "Testimonies · N", paging in more as you scroll.
+    - Tapping a result plays the results as the feed, in order (no pictures or promos woven in), under a "grace · 2 of 5" bar with Back to results and Close.
+    - Android Back steps out one level at a time.
+    - The result list and its feed share one scoped `SourceFeedController`, so they page through the same results.
+    - The old Search screen (route `/search-results`), its app bar and tabs, the on-device filtering it used (`filteredTestimoniesProvider`, `setSearchQuery`), `ministryTestimoniesProvider` and the unused search domain/data stubs were removed. The category screen and the widgets reused here stay.
+  - Verified on device: "grace" found 2 ministries and 5 testimonies. Tapping the 2nd result opened "grace · 2 of 5", a swipe went to "3 of 5" in result order, Back returned to the list, and Back again returned to For you on the same testimony.
+  - Tests:
+    - Backend: story-word, title-first, author-name, type filter, approved-only, the ministries block with `is_followed`, a blank query.
+    - Mobile:
+      - the full search → results → play → back → close flow;
+      - the search state steps;
+      - the 360/393/600dp checks of the panel, results and results feed.
 
 #### Slice 4 — Respond without leaving
 - **Backend:**
@@ -2808,7 +2860,7 @@ Test:
 - A retired reaction keeps its past counts.
 - An older app build can still react with the old keys.
 
-Status: 🟡 Slice 1 ✅ (2026-10-14, mobile; ships with the next app build). Slices 2–5 not started. Slice 6 (admin-managed reactions) is deferred until the admin picks it up.
+Status: 🟡 Slices 1–3 ✅ (2026-10-14/15; Slices 2–3 need the backend deploy, and Slice 3 runs migration `testimonies.0017`, built concurrently). Slices 4–5 not started. Slice 6 (admin-managed reactions) is deferred until the admin picks it up.
 
 ## Risks To Watch Early
 
