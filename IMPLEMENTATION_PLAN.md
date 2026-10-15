@@ -2882,7 +2882,13 @@ Facts confirmed 2026-10-14:
 Order: Slice 1 with Slice 5, then Slices 2, 3 and 4. Slice 6 comes later, when the admin is ready to work on reactions.
 
 Found along the way (2026-10-15), not fixed here:
-- **Home page Management on the dashboard is mostly stale.** Its featured pictures still feed the inspiration pictures woven into the Home feed. But its featured testimonies and section order have had no effect on the app since Phase 20 Slice 3 replaced the sectioned Home, long before this phase. It needs a decision: retire those settings, or give them a job in the immersive feed.
+- **Home page Management on the dashboard was mostly stale.** Its featured testimonies and section order had had no effect on the app since Phase 20 Slice 3.
+  - **✅ Retired 2026-10-15** (admin decision): backend migration `content.0011` drops `HomeSectionOrder` and `FeaturedHomeTestimony`, along with their admin, serializers, the testimony-remove endpoint, and the `section_order` / `featured_testimonies` keys of the mobile home payload. Older app builds already treat missing keys as empty.
+  - The curation endpoint now handles only `featured_picture_ids`, ignoring the retired fields if an older dashboard sends them, and saves in one transaction.
+  - Mobile: `HomeContentSnapshot` holds only pictures and Scripture.
+  - Dashboard: Home page Management is now just the featured pictures. The Video/Text tabs, the section order, the add-testimony dialog, the tab-switching route and the testimony detail modals are gone. Old `?tab=video` links still open the page.
+  - Verified against the local backend: the page loads, and adding a picture saves it.
+  - Noticed, not fixed: a featured picture hosted somewhere other than Cloudinary or placehold.co crashes the dashboard page (`next/image` refuses unknown hosts). Real pictures are on Cloudinary.
 - **Deleting an account leaves its reactions and comments in a testimony's stored totals** (`*_count`, `comment_count`): the rows cascade away, but the counters don't go down.
 
 Out of scope:
