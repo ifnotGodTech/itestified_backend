@@ -50,7 +50,7 @@ Snapshot as of 2026-10-09. **Each phase's own `Status:` line is the source of tr
 | 32 | Self-Service Video Testimony Upload (Premium) | ✅ Complete | |
 | 33 | Immersive Discovery | ✅ Complete | |
 | 34 | Bible Reader & Word Study | ✅ All 8 slices done (BSB, KJV and word-study packs live in production) | Mobile features ship with the next app build; Slice 8 needs the backend deploy (migration `bible.0002`) |
-| 35 | Immersive-first Home | 🟡 Slices 1–3 and 5 done (immersive Home; chips; search; measurement) | Slice 4 next; Slice 6 deferred |
+| 35 | Immersive-first Home | ✅ Slices 1–5 done (immersive Home; chips; search; respond in place; measurement) | Slice 6 (reactions per category) deferred |
 
 Test baseline: as of 2026-10-09 the full backend suite passes with 0 failures. Older entries below cite "the pre-existing 21 `apps.authn` failures" (live Brevo calls from tests). That was accurate when written, but the baseline no longer exists, so any new failure is a real one.
 
@@ -2794,6 +2794,23 @@ Follow-ups to Slice 1, decided by the admin 2026-10-14 and built the same day:
   - Playback continues underneath. The sheet uses the outer context so callbacks survive closing it, the lesson from Phase 33's comments bug.
 - **Dashboard:** none.
 - **DB footprint:** none.
+- **✅ Built and verified 2026-10-15**, checked on the emulator against the local backend with a signed-in test account.
+  - Backend:
+    - Testimony list and detail payloads, and the react/unreact responses, now carry `reactions`: `[{key, label, count}]` in order (`testimony_reaction_options`).
+    - `reaction_counts` stays for older builds. No migration.
+  - Mobile:
+    - `Testimony.reactionOptions` is the server's list, falling back to the original three for older payloads and seed data.
+    - Tapping the "N responded" pill opens the responses sheet, as part of the testimony's page rather than a separate screen, so the video keeps playing above it. Verified on device: a 42s video played to its end while the sheet was open. The sheet holds:
+      - large reaction buttons with counts, showing "You + 128" when one is yours;
+      - the latest two comments, with "View all N comments" opening the existing full thread;
+      - a box to write a comment.
+    - Tapping the video above the sheet, a firm swipe down, Close, Back, or moving to another item closes it. Auto-advance waits while it's open, so a video ending mid-comment doesn't close it. Guests are asked to sign in.
+    - Reactions go through a new `TestimonyResponsesController`: shown at once, settled on the server's counts, undone if the request fails.
+  - **Bug found and fixed:** the feed's old reaction path (`TestimonyFeedController.setReaction`) only acted on testimonies in its own cached list. For most items in the immersive feed it silently did nothing, not even sending a request. On device, a reaction and a comment on "God saves" both reached the server.
+  - Responses (reaction added, comment posted) feed Slice 5's response rate.
+  - Tests:
+    - Backend: the ordered, labelled list in lists and in the react response.
+    - Mobile: add/settle, switch/remove, failure undone, the fallback three; the sheet opening without pausing anything, reacting showing "You + 128", and Back closing the sheet rather than the session; a guest asked to sign in; the 360/393/600dp layout checks.
 
 #### Slice 6 — Admin-managed reactions per category
 Worked example: an admin opens Dashboard → Reactions. They create "Pray with me", "This encouraged me" and "Believing for the same", then assign all three to Healing. Finances gets "Amen", "Gives me hope" and "Believing for the same". From then on, every Healing testimony shows Healing's set and every Finances testimony shows Finances' set. A category with no set uses the default set (Phase 15's three).
@@ -2864,6 +2881,10 @@ Facts confirmed 2026-10-14:
 
 Order: Slice 1 with Slice 5, then Slices 2, 3 and 4. Slice 6 comes later, when the admin is ready to work on reactions.
 
+Found along the way (2026-10-15), not fixed here:
+- **Home page Management on the dashboard is mostly stale.** Its featured pictures still feed the inspiration pictures woven into the Home feed. But its featured testimonies and section order have had no effect on the app since Phase 20 Slice 3 replaced the sectioned Home, long before this phase. It needs a decision: retire those settings, or give them a job in the immersive feed.
+- **Deleting an account leaves its reactions and comments in a testimony's stored totals** (`*_count`, `comment_count`): the rows cascade away, but the counters don't go down.
+
 Out of scope:
 - the Premium value gaps (Celery worker, AI key, Agora/S3 on Render, Phases 30 and 31), tracked separately;
 - making inspiration-picture favourites persist;
@@ -2886,7 +2907,7 @@ Test:
 - A retired reaction keeps its past counts.
 - An older app build can still react with the old keys.
 
-Status: 🟡 Slices 1–3 ✅ (2026-10-14/15; Slices 2–3 need the backend deploy, and Slice 3 runs migration `testimonies.0017`, built concurrently). Slice 5 ✅ 2026-10-15 (backend app `engagement`, migration `engagement.0001`; dashboard `/analytics/home`). Slice 4 not started. Slice 6 (admin-managed reactions) is deferred until the admin picks it up.
+Status: 🟡 Slices 1–3 ✅ (2026-10-14/15; Slices 2–3 need the backend deploy, and Slice 3 runs migration `testimonies.0017`, built concurrently). Slice 5 ✅ 2026-10-15 (backend app `engagement`, migration `engagement.0001`; dashboard `/analytics/home`). Slice 4 ✅ 2026-10-15 (backend deploy for the `reactions` list; no migration). Slice 6 (admin-managed reactions) is deferred until the admin picks it up.
 
 ## Risks To Watch Early
 
