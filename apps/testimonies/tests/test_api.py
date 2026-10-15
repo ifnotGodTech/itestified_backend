@@ -728,6 +728,34 @@ class TestimonyApiTests(TestCase):
             ).exists()
         )
 
+    def test_reactions_come_as_an_ordered_labelled_list_in_lists_and_reacting(self) -> None:
+        # Phase 35 Slice 4: the app draws whatever reactions it's given.
+        user = UserFactory(email="lister@example.com")
+        ProfileFactory(user=user, full_name="Lister")
+        token = Token.objects.create(user=user)
+        testimony = Testimony.objects.get(title="God healed me")
+
+        react = self.client.post(
+            reverse("testimony-react", kwargs={"testimony_id": testimony.id}),
+            {"reaction_type": "amen"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Token {token.key}",
+        ).json()
+        listed = next(
+            row for row in self.client.get(reverse("testimony-list")).json()["results"]
+            if row["id"] == testimony.id
+        )
+
+        expected = [
+            {"key": "praying_for_you", "label": "Praying for you", "count": 0},
+            {"key": "amen", "label": "Amen", "count": 1},
+            {"key": "gives_me_hope", "label": "Gives me hope", "count": 0},
+        ]
+        self.assertEqual(react["reactions"], expected)
+        self.assertEqual(listed["reactions"], expected)
+        # The old shape stays for older app builds.
+        self.assertEqual(listed["reaction_counts"]["amen"], 1)
+
     def test_react_switching_reaction_type_moves_the_count_not_adds_to_it(self) -> None:
         user = UserFactory(email="switcher@example.com")
         ProfileFactory(user=user, full_name="Switcher")

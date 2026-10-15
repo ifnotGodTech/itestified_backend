@@ -27,6 +27,7 @@ from apps.testimonies.services.media_uploads import (
     build_cloudinary_video_thumbnail_url,
     upload_testimony_media,
 )
+from apps.testimonies.services.queries import testimony_reaction_options
 from apps.testimonies.services.commands import (
     create_audio_testimony_from_upload,
     create_video_testimony_from_upload,
@@ -145,6 +146,11 @@ class TestimonyListSerializer(serializers.ModelSerializer):
     category_slug = serializers.CharField(source="category.slug", read_only=True)
     thumbnail_url = serializers.SerializerMethodField()
     reaction_counts = serializers.SerializerMethodField()
+    # Phase 35 Slice 4: the same counts as an ordered list with labels, so
+    # the app draws whatever reactions it is given (Slice 6 will let the
+    # admin choose them per category) rather than a fixed three.
+    # reaction_counts stays for older app builds.
+    reactions = serializers.SerializerMethodField()
 
     class Meta:
         model = Testimony
@@ -164,6 +170,7 @@ class TestimonyListSerializer(serializers.ModelSerializer):
             "view_count",
             "comment_count",
             "reaction_counts",
+            "reactions",
             "publish_at",
             "created_at",
         )
@@ -196,6 +203,9 @@ class TestimonyListSerializer(serializers.ModelSerializer):
         if obj.thumbnail_url.strip():
             return obj.thumbnail_url
         return build_cloudinary_video_thumbnail_url(obj.video_url)
+
+    def get_reactions(self, obj: Testimony) -> list[dict]:
+        return testimony_reaction_options(obj)
 
     def get_reaction_counts(self, obj: Testimony) -> dict:
         # Reads the three denormalized counters directly -- no per-row

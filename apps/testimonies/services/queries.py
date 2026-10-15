@@ -400,6 +400,31 @@ def search_ministries(text: str, user) -> list[dict]:
     ]
 
 
+# Which denormalized counter holds each reaction's count.
+_REACTION_COUNT_FIELDS = {
+    "praying_for_you": "praying_for_you_count",
+    "amen": "amen_count",
+    "gives_me_hope": "gives_me_hope_count",
+}
+
+
+def testimony_reaction_options(testimony) -> list[dict]:
+    """Phase 35 Slice 4 -- the reactions offered on a testimony, in order,
+    with their labels and counts. Today the same three everywhere; Slice 6
+    will make the set depend on the testimony's category, without the app
+    needing to change."""
+    from apps.testimonies.models import TestimonyReactionType
+
+    return [
+        {
+            "key": choice.value,
+            "label": choice.label,
+            "count": getattr(testimony, _REACTION_COUNT_FIELDS[choice.value]),
+        }
+        for choice in TestimonyReactionType
+    ]
+
+
 def user_engagement_journey(user) -> dict:
     """Live-computed "Your Journey" signals for a single authenticated
     user (Phase 18 Slice 3) -- watched/favorited counts and a ranked

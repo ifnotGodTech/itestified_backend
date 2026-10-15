@@ -50,6 +50,7 @@ from apps.testimonies.services.queries import (
     home_feed_page,
     search_ministries,
     suggested_creators_to_follow,
+    testimony_reaction_options,
 )
 from apps.testimonies.validators import parse_future_publish_at
 from apps.testimonies.services.commands import (
@@ -724,6 +725,7 @@ def _reaction_state(testimony: Testimony, user) -> dict:
             "amen": testimony.amen_count,
             "gives_me_hope": testimony.gives_me_hope_count,
         },
+        "reactions": testimony_reaction_options(testimony),
         "my_reaction": my_reaction,
     }
 
