@@ -39,6 +39,7 @@ INSTALLED_APPS = [
     "apps.live_broadcasts",
     "apps.playlists",
     "apps.bible",
+    "apps.engagement",
 ]
 
 MIDDLEWARE = [

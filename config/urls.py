@@ -21,4 +21,5 @@ urlpatterns = [
     path("api/v1/live-broadcasts/", include("apps.live_broadcasts.api.urls")),
     path("api/v1/playlists/", include("apps.playlists.api.urls")),
     path("api/v1/bible/", include("apps.bible.api.urls")),
+    path("api/v1/engagement/", include("apps.engagement.api.urls")),
 ]
