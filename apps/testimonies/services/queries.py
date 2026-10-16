@@ -5,11 +5,17 @@ from collections import Counter
 from dataclasses import dataclass
 
 from django.core.cache import cache
+from django.db.models import OuterRef, Subquery, Sum
+from django.db.models.functions import Coalesce
 
 from apps.testimonies.models import (
+    CategoryReaction,
+    Reaction,
     Testimony,
     TestimonyFavorite,
     TestimonyReaction,
+    TestimonyReactionCount,
+    TestimonyReactionType,
     TestimonyStatus,
     TestimonyWatch,
 )
@@ -112,15 +118,24 @@ def _ranked_feed(user, seed: str | None) -> list[RankedFeedItem]:
             category__is_active=True,
         )
         .order_by("-created_at", "-id")
+        .annotate(
+            reaction_total=Coalesce(
+                Subquery(
+                    TestimonyReactionCount.objects.filter(testimony_id=OuterRef("pk"))
+                    .values("testimony_id")
+                    .annotate(total=Sum("count"))
+                    .values("total")
+                ),
+                0,
+            )
+        )
         .values(
             "id",
             "author_id",
             "category_id",
             "category__name",
             "comment_count",
-            "praying_for_you_count",
-            "amen_count",
-            "gives_me_hope_count",
+            "reaction_total",
         )
     )
     if not rows:
@@ -154,12 +169,7 @@ def _ranked_feed(user, seed: str | None) -> list[RankedFeedItem]:
     groups: dict[tuple[int, bool], list[RankedFeedItem]] = {}
     for row in rows:
         category = row["category__name"]
-        responses = (
-            row["comment_count"]
-            + row["praying_for_you_count"]
-            + row["amen_count"]
-            + row["gives_me_hope_count"]
-        )
+        responses = row["comment_count"] + row["reaction_total"]
         if row["author_id"] in followed_creator_ids:
             tier = _TIER_FOLLOWED_CREATOR
             reason = f"You follow {creator_names.get(row['author_id'], 'this ministry')}"
@@ -400,29 +410,75 @@ def search_ministries(text: str, user) -> list[dict]:
     ]
 
 
-# Which denormalized counter holds each reaction's count.
-_REACTION_COUNT_FIELDS = {
-    "praying_for_you": "praying_for_you_count",
-    "amen": "amen_count",
-    "gives_me_hope": "gives_me_hope_count",
-}
+@dataclass(frozen=True)
+class ReactionSets:
+    """Phase 35 Slice 6: which reactions each category offers, loaded once
+    per request (the tables are tiny). `reactions` holds every reaction,
+    retired ones too, so a stored count can always be named."""
+
+    default: list[Reaction]
+    by_category: dict[int, list[Reaction]]
+    reactions: dict[int, Reaction]
+
+    def for_category(self, category_id: int | None) -> list[Reaction]:
+        return self.by_category.get(category_id) or self.default
 
 
-def testimony_reaction_options(testimony) -> list[dict]:
-    """Phase 35 Slice 4 -- the reactions offered on a testimony, in order,
-    with their labels and counts. Today the same three everywhere; Slice 6
-    will make the set depend on the testimony's category, without the app
-    needing to change."""
-    from apps.testimonies.models import TestimonyReactionType
+def load_reaction_sets() -> ReactionSets:
+    reactions = {reaction.id: reaction for reaction in Reaction.objects.all()}
+    default = sorted(
+        (r for r in reactions.values() if r.is_active and r.default_position is not None),
+        key=lambda r: r.default_position,
+    )
+    by_category: dict[int, list[Reaction]] = {}
+    for category_id, reaction_id in CategoryReaction.objects.order_by("category_id", "position").values_list(
+        "category_id", "reaction_id"
+    ):
+        if reactions[reaction_id].is_active:
+            by_category.setdefault(category_id, []).append(reactions[reaction_id])
+    return ReactionSets(default=default, by_category=by_category, reactions=reactions)
 
+
+def offered_reactions(category_id: int | None) -> list[Reaction]:
+    """The reactions people can choose on a testimony in this category:
+    its own set, or the default set if it has none (or none still active)."""
+    own = list(
+        Reaction.objects.filter(category_sets__category_id=category_id, is_active=True).order_by(
+            "category_sets__position"
+        )
+    )
+    if own:
+        return own
+    return list(Reaction.objects.filter(is_active=True, default_position__isnull=False).order_by("default_position"))
+
+
+def reaction_counts_by_testimony(testimony_ids) -> dict[int, dict[int, int]]:
+    """{testimony id: {reaction id: count}} in one query."""
+    counts: dict[int, dict[int, int]] = {}
+    for testimony_id, reaction_id, count in TestimonyReactionCount.objects.filter(
+        testimony_id__in=list(testimony_ids), count__gt=0
+    ).values_list("testimony_id", "reaction_id", "count"):
+        counts.setdefault(testimony_id, {})[reaction_id] = count
+    return counts
+
+
+def testimony_reaction_options(testimony, *, sets: ReactionSets | None = None, counts: dict[int, int] | None = None) -> list[dict]:
+    """Phase 35 Slices 4 and 6 -- the reactions offered on a testimony, in
+    order, with their labels, icons and counts. Pass `sets` and `counts`
+    when serializing many testimonies so this adds no queries per item."""
+    sets = sets or load_reaction_sets()
+    if counts is None:
+        counts = reaction_counts_by_testimony([testimony.id]).get(testimony.id, {})
     return [
-        {
-            "key": choice.value,
-            "label": choice.label,
-            "count": getattr(testimony, _REACTION_COUNT_FIELDS[choice.value]),
-        }
-        for choice in TestimonyReactionType
+        {"key": reaction.key, "label": reaction.label, "icon": reaction.icon, "count": counts.get(reaction.id, 0)}
+        for reaction in sets.for_category(testimony.category_id)
     ]
+
+
+def legacy_reaction_counts(*, sets: ReactionSets, counts: dict[int, int]) -> dict[str, int]:
+    """The original three counts, for app builds older than Phase 35."""
+    by_key = {sets.reactions[reaction_id].key: count for reaction_id, count in counts.items() if reaction_id in sets.reactions}
+    return {choice.value: by_key.get(choice.value, 0) for choice in TestimonyReactionType}
 
 
 def user_engagement_journey(user) -> dict:
@@ -466,4 +522,51 @@ def user_engagement_journey(user) -> dict:
         "favorited_count": favorited_count,
         "most_visited_theme": most_visited_theme,
         "theme_distribution": theme_distribution,
+    }
+
+
+def admin_reaction_overview() -> dict:
+    """Phase 35 Slice 6: everything the dashboard's Reactions page shows --
+    the catalogue (with where each reaction is offered and how many
+    responses it has), the default set, and every category's own set."""
+    from django.db.models import Count
+
+    from apps.testimonies.models import REACTION_SET_MAX, ReactionIcon, TestimonyCategory
+
+    categories = list(TestimonyCategory.objects.order_by("name").values("id", "name", "is_active"))
+    category_names = {category["id"]: category["name"] for category in categories}
+    sets: dict[int, list[int]] = {}
+    for category_id, reaction_id in CategoryReaction.objects.order_by("category_id", "position").values_list(
+        "category_id", "reaction_id"
+    ):
+        sets.setdefault(category_id, []).append(reaction_id)
+    shown_on: dict[int, list[str]] = {}
+    for category_id, reaction_ids in sets.items():
+        for reaction_id in reaction_ids:
+            shown_on.setdefault(reaction_id, []).append(category_names[category_id])
+
+    reactions = list(Reaction.objects.annotate(response_count=Count("responses")).order_by("id"))
+    emoji = dict(ReactionIcon.choices)
+    default_ids = [r.id for r in sorted((r for r in reactions if r.default_position is not None), key=lambda r: r.default_position)]
+    return {
+        "max_per_set": REACTION_SET_MAX,
+        "icons": [{"key": key, "emoji": label} for key, label in ReactionIcon.choices],
+        "reactions": [
+            {
+                "id": reaction.id,
+                "key": reaction.key,
+                "label": reaction.label,
+                "icon": reaction.icon,
+                "emoji": emoji.get(reaction.icon, ""),
+                "is_active": reaction.is_active,
+                "in_default_set": reaction.default_position is not None,
+                "categories": sorted(shown_on.get(reaction.id, [])),
+                "response_count": reaction.response_count,
+            }
+            for reaction in reactions
+        ],
+        "default_set": default_ids,
+        "categories": [
+            {**category, "reaction_ids": sets.get(category["id"], [])} for category in categories
+        ],
     }

@@ -1,6 +1,8 @@
 from django.contrib import admin
 
 from .models import (
+    Reaction,
+    ReactionChangeLog,
     Testimony,
     TestimonyCategory,
     TestimonyComment,
@@ -39,9 +41,26 @@ class TestimonyCommentAdmin(admin.ModelAdmin):
 
 @admin.register(TestimonyReaction)
 class TestimonyReactionAdmin(admin.ModelAdmin):
-    list_display = ("user", "testimony", "reaction_type", "created_at")
-    list_filter = ("reaction_type",)
+    list_display = ("user", "testimony", "reaction", "created_at")
+    list_filter = ("reaction",)
     search_fields = ("user__email", "testimony__title")
+
+
+@admin.register(Reaction)
+class ReactionAdmin(admin.ModelAdmin):
+    # Read-mostly here; the dashboard's Reactions page is where they're managed.
+    list_display = ("label", "key", "icon", "is_active", "default_position")
+    list_filter = ("is_active",)
+    readonly_fields = ("key",)
+
+
+@admin.register(ReactionChangeLog)
+class ReactionChangeLogAdmin(admin.ModelAdmin):
+    list_display = ("created_at", "actor", "action", "summary")
+    list_filter = ("action",)
+
+    def has_change_permission(self, request, obj=None) -> bool:
+        return False
 
 
 @admin.register(TestimonyWatch)

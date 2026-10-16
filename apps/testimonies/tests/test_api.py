@@ -9,6 +9,8 @@ from unittest.mock import patch
 
 from apps.notifications.models import NotificationType, UserNotification
 from apps.testimonies.models import (
+    Reaction,
+    TestimonyReactionCount,
     TestimonyComment,
     Testimony,
     TestimonyCategory,
@@ -720,11 +722,12 @@ class TestimonyApiTests(TestCase):
         self.assertEqual(body["my_reaction"], "praying_for_you")
         self.assertEqual(body["reaction_counts"]["praying_for_you"], 1)
         self.assertEqual(body["reaction_counts"]["amen"], 0)
-        testimony.refresh_from_db()
-        self.assertEqual(testimony.praying_for_you_count, 1)
+        self.assertEqual(
+            TestimonyReactionCount.objects.get(testimony=testimony, reaction__key="praying_for_you").count, 1
+        )
         self.assertTrue(
             TestimonyReaction.objects.filter(
-                user=user, testimony=testimony, reaction_type="praying_for_you"
+                user=user, testimony=testimony, reaction_id="praying_for_you"
             ).exists()
         )
 
@@ -747,9 +750,9 @@ class TestimonyApiTests(TestCase):
         )
 
         expected = [
-            {"key": "praying_for_you", "label": "Praying for you", "count": 0},
-            {"key": "amen", "label": "Amen", "count": 1},
-            {"key": "gives_me_hope", "label": "Gives me hope", "count": 0},
+            {"key": "praying_for_you", "label": "Praying for you", "icon": "pray", "count": 0},
+            {"key": "amen", "label": "Amen", "icon": "raised_hands", "count": 1},
+            {"key": "gives_me_hope", "label": "Gives me hope", "icon": "sparkles", "count": 0},
         ]
         self.assertEqual(react["reactions"], expected)
         self.assertEqual(listed["reactions"], expected)
@@ -863,8 +866,8 @@ class TestimonyApiTests(TestCase):
         ProfileFactory(user=user, full_name="Detail Reactor")
         token = Token.objects.create(user=user)
         testimony = Testimony.objects.get(title="God healed me")
-        TestimonyReaction.objects.create(user=user, testimony=testimony, reaction_type="amen")
-        Testimony.objects.filter(id=testimony.id).update(amen_count=1)
+        TestimonyReaction.objects.create(user=user, testimony=testimony, reaction_id="amen")
+        TestimonyReactionCount.objects.create(testimony=testimony, reaction=Reaction.objects.get(key="amen"), count=1)
 
         response = self.client.get(
             reverse("testimony-detail", kwargs={"pk": testimony.id}),
@@ -881,7 +884,9 @@ class TestimonyApiTests(TestCase):
 
     def test_testimony_list_exposes_reaction_counts_without_my_reaction(self) -> None:
         testimony = Testimony.objects.get(title="God healed me")
-        Testimony.objects.filter(id=testimony.id).update(praying_for_you_count=3)
+        TestimonyReactionCount.objects.create(
+            testimony=testimony, reaction=Reaction.objects.get(key="praying_for_you"), count=3
+        )
 
         response = self.client.get(reverse("testimony-list"))
 
@@ -1051,7 +1056,7 @@ class TestimonyApiTests(TestCase):
         ProfileFactory(user=user, full_name="For You Reaction")
         token = Token.objects.create(user=user)
         faith_testimony = Testimony.objects.get(title="God healed me")
-        TestimonyReaction.objects.create(user=user, testimony=faith_testimony, reaction_type="amen")
+        TestimonyReaction.objects.create(user=user, testimony=faith_testimony, reaction_id="amen")
 
         response = self.client.get(
             reverse("testimony-for-you-feed"),

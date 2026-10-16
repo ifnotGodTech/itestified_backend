@@ -2841,6 +2841,43 @@ Facts confirmed 2026-10-14:
   - The default-set fallback is shown clearly.
   - Built to the mobile work's quality bar.
 - **DB footprint:** four small tables (`Reaction`, `CategoryReaction`, `TestimonyReactionCount` and a change log), a foreign-key change on `TestimonyReaction`, and three dropped columns on `Testimony`.
+- **✅ Built and verified 2026-10-16** (mockups: boards 10–12 of the Watch & Browse canvas; the admin confirmed 4 per set, a fixed icon set, and Testimonies → Reactions).
+  - Backend, migrations `testimonies.0018`–`0021`:
+    - `0018` creates `Reaction`, `CategoryReaction`, `TestimonyReactionCount` and `ReactionChangeLog`.
+    - `0019` seeds Phase 15's three reactions as the default set, then backfills `TestimonyReactionCount` from the `TestimonyReaction` rows themselves rather than the old columns, which could have drifted. Locally it gave 3 "Praying for you" and 1 "Gives me hope", matching the rows.
+    - `0020` makes `TestimonyReaction.reaction` a foreign key to `Reaction.key`. The column keeps its name (`reaction_type`) and values, so no data moves.
+    - `0021` drops the three count columns.
+    - Icons come from a fixed set of 12 (`ReactionIcon`) that the app knows how to draw.
+    - Keys are made from the label and never change. Labels must be unique, 24 characters at most.
+  - Rules, enforced in `services/commands.py`:
+    - Reacting accepts only a reaction in the testimony's category set (otherwise 400 "That response isn't available on this testimony"). A category with no set, or whose whole set is retired, uses the default set.
+    - Retiring takes a reaction off every set and the default set, but its responses and counts stay. The default set can't be emptied. "Bring back" returns it to the catalogue only.
+    - Moving a testimony to another category keeps its responses; only the new set is offered, and taking an old reaction back still works.
+    - Every change is logged with who, when and a one-line summary (`ReactionChangeLog`, read-only in Django admin).
+  - Admin API:
+    - `GET/POST testimonies/admin/reactions/`
+    - `PATCH testimonies/admin/reactions/<id>/`
+    - `POST …/<id>/retire/` and `…/<id>/restore/`
+    - `PUT testimonies/admin/reaction-sets/<category id | default>/`
+    - Each answers with the whole fresh overview.
+  - Payloads:
+    - `reactions` items now carry `icon`.
+    - `reaction_counts` (the original three keys) stays for older builds.
+    - A list loads the sets and every item's counts in two queries, not per testimony; a test pins this.
+    - Home ranking's "popular" tier sums the new counts.
+  - Older app builds keep working wherever a category uses the default set. On a category with its own set, their fixed three buttons are refused with the message above.
+  - `apps.creators` (Ministry analytics, prayer inbox) now reads `reaction_id`. The prayer-response inbox still only covers `praying_for_you`; a custom "Pray with me" doesn't feed it (follow-up if wanted).
+  - Mobile: `TestimonyReactionOption.icon`; the sheet and the pill draw the admin's icon, fall back to the original three by key for older payloads, and to 💜 for an icon this build doesn't know.
+  - Verified on the emulator against the local backend, after `flutter clean`, signed in as a test viewer: a Healing testimony's pill showed 🤝💜🔥, the sheet listed Healing's three reactions, and "Pray with me" saved (`POST …/react/` 200).
+    - **Bug found and fixed (from Slice 4):** the pill read "You + 0 responded" after the first response; it now reads "You responded". A regression test covers it.
+  - Dashboard: Testimonies → Reactions (`/testimonies/reactions`).
+    - **Catalogue:** each reaction's icon, where it's offered and its response count, with Edit (label and icon), Retire (the dialog lists what it comes off) and a Retired section with Bring back.
+    - **Category sets:** the default set and each category, an ordered editor (up/down/remove/add, "4 of 4" full state, Go back to the default set), unsaved-change marker, a discard prompt when switching, and a live preview drawn like the app's responses sheet.
+    - Rows stack as cards on a phone. Light and dark themes are both checked.
+  - Tests:
+    - Backend: 17 new in `test_reaction_sets.py` (sets per category, refusal, moving category, fixed query count, keys, label/icon rules, rename, retire/restore, fallback, the default never empty, cap/duplicates/retired, order, API permissions and the full API round trip); existing reaction, recount, ranking and creators tests moved to the new model. Suite: 521 run, only the 14 known Redis-dependent transcription/translation tests fail.
+    - Mobile: icon payload and drawing, older payloads and unknown icons, the first-response label. Full suite: 788 pass.
+    - Dashboard: view-model mapping and request building (vitest, 305 pass); `e2e/reactions.spec.ts` creates a reaction, offers it on a category, checks the preview, restores the category and retires it (passes locally).
 
 #### Slice 5 — Measure it (alongside Slice 1)
 - **Backend:**
@@ -2928,7 +2965,7 @@ Test:
 - A retired reaction keeps its past counts.
 - An older app build can still react with the old keys.
 
-Status: 🟡 Slices 1–3 ✅ (2026-10-14/15; Slices 2–3 need the backend deploy, and Slice 3 runs migration `testimonies.0017`, built concurrently). Slice 5 ✅ 2026-10-15 (backend app `engagement`, migration `engagement.0001`; dashboard `/analytics/home`). Slice 4 ✅ 2026-10-15 (backend deploy for the `reactions` list; no migration). Slice 6 (admin-managed reactions) is deferred until the admin picks it up.
+Status: ✅ All six slices done. Slices 1–3 ✅ (2026-10-14/15; Slices 2–3 need the backend deploy, and Slice 3 runs migration `testimonies.0017`, built concurrently). Slice 5 ✅ 2026-10-15 (backend app `engagement`, migration `engagement.0001`; dashboard `/analytics/home`). Slice 4 ✅ 2026-10-15 (backend deploy for the `reactions` list; no migration). Slice 6 ✅ 2026-10-16 (backend migrations `testimonies.0018`–`0021`, which drop the three old count columns; deploy the backend before or with the dashboard).
 
 ## Risks To Watch Early
 

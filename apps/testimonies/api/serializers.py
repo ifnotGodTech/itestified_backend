@@ -13,7 +13,6 @@ from apps.testimonies.models import (
     TestimonyFavorite,
     TestimonyModerationHistory,
     TestimonyReaction,
-    TestimonyReactionType,
     TestimonyStatus,
     TestimonyType,
     TranscriptionJob,
@@ -27,7 +26,12 @@ from apps.testimonies.services.media_uploads import (
     build_cloudinary_video_thumbnail_url,
     upload_testimony_media,
 )
-from apps.testimonies.services.queries import testimony_reaction_options
+from apps.testimonies.services.queries import (
+    legacy_reaction_counts,
+    load_reaction_sets,
+    reaction_counts_by_testimony,
+    testimony_reaction_options,
+)
 from apps.testimonies.services.commands import (
     create_audio_testimony_from_upload,
     create_video_testimony_from_upload,
@@ -139,6 +143,19 @@ class AdminTestimonyCategorySerializer(serializers.ModelSerializer):
         return value.strip()
 
 
+class _ReactionBatchListSerializer(serializers.ListSerializer):
+    """Loads the reaction sets and every item's reaction counts in two
+    queries for the whole list, instead of per testimony."""
+
+    def to_representation(self, data):
+        items = list(data.all() if hasattr(data, "all") else data)
+        ids = [item.id for item in items]
+        self.child._reaction_sets = load_reaction_sets()
+        self.child._reaction_counts = reaction_counts_by_testimony(ids)
+        self.child._reaction_counted = set(ids)
+        return super().to_representation(items)
+
+
 class TestimonyListSerializer(serializers.ModelSerializer):
     author_name = serializers.SerializerMethodField()
     author_avatar = serializers.SerializerMethodField()
@@ -146,9 +163,9 @@ class TestimonyListSerializer(serializers.ModelSerializer):
     category_slug = serializers.CharField(source="category.slug", read_only=True)
     thumbnail_url = serializers.SerializerMethodField()
     reaction_counts = serializers.SerializerMethodField()
-    # Phase 35 Slice 4: the same counts as an ordered list with labels, so
-    # the app draws whatever reactions it is given (Slice 6 will let the
-    # admin choose them per category) rather than a fixed three.
+    # Phase 35 Slice 4: the reactions this testimony's category offers, as
+    # an ordered list with labels, icons and counts, so the app draws
+    # whatever it is given (Slice 6: the admin chooses them per category).
     # reaction_counts stays for older app builds.
     reactions = serializers.SerializerMethodField()
 
@@ -174,6 +191,7 @@ class TestimonyListSerializer(serializers.ModelSerializer):
             "publish_at",
             "created_at",
         )
+        list_serializer_class = _ReactionBatchListSerializer
 
     def get_author_name(self, obj: Testimony) -> str:
         # Phase 23 Slice 10 -- a Ministry's own display name takes over
@@ -204,17 +222,23 @@ class TestimonyListSerializer(serializers.ModelSerializer):
             return obj.thumbnail_url
         return build_cloudinary_video_thumbnail_url(obj.video_url)
 
+    def _reaction_data(self, obj: Testimony):
+        # Set up front by _ReactionBatchListSerializer for a list; a single
+        # testimony loads its own (once, shared by both fields below).
+        if getattr(self, "_reaction_sets", None) is None:
+            self._reaction_sets = load_reaction_sets()
+        if obj.id not in getattr(self, "_reaction_counted", set()):
+            self._reaction_counts = {**getattr(self, "_reaction_counts", {}), **reaction_counts_by_testimony([obj.id])}
+            self._reaction_counted = getattr(self, "_reaction_counted", set()) | {obj.id}
+        return self._reaction_sets, self._reaction_counts.get(obj.id, {})
+
     def get_reactions(self, obj: Testimony) -> list[dict]:
-        return testimony_reaction_options(obj)
+        sets, counts = self._reaction_data(obj)
+        return testimony_reaction_options(obj, sets=sets, counts=counts)
 
     def get_reaction_counts(self, obj: Testimony) -> dict:
-        # Reads the three denormalized counters directly -- no per-row
-        # query, so this is free on list views with many testimonies.
-        return {
-            "praying_for_you": obj.praying_for_you_count,
-            "amen": obj.amen_count,
-            "gives_me_hope": obj.gives_me_hope_count,
-        }
+        sets, counts = self._reaction_data(obj)
+        return legacy_reaction_counts(sets=sets, counts=counts)
 
 
 class TestimonyDetailSerializer(TestimonyListSerializer):
@@ -255,7 +279,7 @@ class TestimonyDetailSerializer(TestimonyListSerializer):
             return None
         return (
             TestimonyReaction.objects.filter(user=request.user, testimony=obj)
-            .values_list("reaction_type", flat=True)
+            .values_list("reaction_id", flat=True)
             .first()
         )
 
@@ -1078,7 +1102,9 @@ class FavoriteSerializer(serializers.ModelSerializer):
 
 
 class TestimonyReactionInputSerializer(serializers.Serializer):
-    reaction_type = serializers.ChoiceField(choices=TestimonyReactionType.choices)
+    # A reaction's key. Which keys a testimony accepts depends on its
+    # category, so set_testimony_reaction checks it, not this serializer.
+    reaction_type = serializers.SlugField(max_length=40)
 
 
 class FavoriteTestimonySerializer(TestimonyListSerializer):
@@ -1148,3 +1174,14 @@ class TestimonyCommentCreateSerializer(serializers.ModelSerializer):
         if not value or not value.strip():
             raise serializers.ValidationError("Comment body is required.")
         return value.strip()
+
+
+class AdminReactionInputSerializer(serializers.Serializer):
+    # Length, uniqueness and the icon list are checked by the commands,
+    # which word the messages for the admin.
+    label = serializers.CharField(max_length=60, trim_whitespace=True)
+    icon = serializers.CharField(max_length=20)
+
+
+class AdminReactionSetInputSerializer(serializers.Serializer):
+    reaction_ids = serializers.ListField(child=serializers.IntegerField(min_value=1), allow_empty=True, max_length=20)

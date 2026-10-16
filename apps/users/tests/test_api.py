@@ -313,7 +313,7 @@ class ProfileJourneyApiTests(TestCase):
         TestimonyReaction.objects.create(
             user=self.user,
             testimony=self.faith_a,
-            reaction_type=TestimonyReactionType.AMEN,
+            reaction_id=TestimonyReactionType.AMEN,
         )
 
         response = self.client.get(
@@ -332,7 +332,7 @@ class ProfileJourneyApiTests(TestCase):
         TestimonyReaction.objects.create(
             user=self.user,
             testimony=self.faith_a,
-            reaction_type=TestimonyReactionType.AMEN,
+            reaction_id=TestimonyReactionType.AMEN,
         )
 
         response = self.client.get(

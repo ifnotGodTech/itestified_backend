@@ -1,6 +1,10 @@
 from django.urls import path
 
 from .views import (
+    AdminReactionDetailView,
+    AdminReactionOverviewView,
+    AdminReactionSetView,
+    AdminReactionStatusView,
     AdminCategoryActivationView,
     AdminCategoryDetailView,
     AdminCategoryListCreateView,
@@ -98,6 +102,19 @@ urlpatterns = [
     path("submit/video/upload-signature/", AuthenticatedVideoUploadSignatureView.as_view(), name="testimony-submit-video-signature"),
     path("submit/video/", AuthenticatedVideoTestimonyCreateView.as_view(), name="testimony-submit-video"),
     path("admin/video-upload-policy/", AdminVideoUploadPolicyView.as_view(), name="admin-video-upload-policy"),
+    path("admin/reactions/", AdminReactionOverviewView.as_view(), name="admin-reaction-overview"),
+    path("admin/reactions/<int:reaction_id>/", AdminReactionDetailView.as_view(), name="admin-reaction-detail"),
+    path(
+        "admin/reactions/<int:reaction_id>/retire/",
+        AdminReactionStatusView.as_view(action="retire"),
+        name="admin-reaction-retire",
+    ),
+    path(
+        "admin/reactions/<int:reaction_id>/restore/",
+        AdminReactionStatusView.as_view(action="restore"),
+        name="admin-reaction-restore",
+    ),
+    path("admin/reaction-sets/<str:target>/", AdminReactionSetView.as_view(), name="admin-reaction-set"),
     path("admin/categories/", AdminCategoryListCreateView.as_view(), name="admin-testimony-category-list-create"),
     path("admin/categories/<int:pk>/", AdminCategoryDetailView.as_view(), name="admin-testimony-category-detail"),
     path(

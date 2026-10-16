@@ -4,6 +4,8 @@ from django.core.cache import cache
 from django.test import TestCase
 
 from apps.testimonies.models import (
+    Reaction,
+    TestimonyReactionCount,
     Testimony,
     TestimonyCategory,
     TestimonyStatus,
@@ -291,14 +293,17 @@ class ForYouRankingTests(TestCase):
         self.from_grace = make("From Grace Chapel", self.grace_chapel, self.other)
         self.in_healing = make("In Healing", someone, self.healing)
         self.in_faith = make("In Faith", someone, self.faith)
-        self.popular = make("Popular one", someone, self.provision, amen_count=6)
+        self.popular = make("Popular one", someone, self.provision)
+        TestimonyReactionCount.objects.create(
+            testimony=self.popular, reaction=Reaction.objects.get(key="amen"), count=6
+        )
         self.plain = make("Plain", someone, self.other)
 
         self.ada = UserFactory(email="ada@example.com")
         ProfileFactory(user=self.ada, full_name="Ada")
         CreatorFollow.objects.create(follower=self.ada, creator=self.grace_chapel)
         UserFollowedCategory.objects.create(user=self.ada, category=self.healing)
-        TestimonyReaction.objects.create(user=self.ada, testimony=self.in_faith, reaction_type="amen")
+        TestimonyReaction.objects.create(user=self.ada, testimony=self.in_faith, reaction_id="amen")
 
     def _page(self, user, seed=None):
         return home_feed_page(user=user, page=1, page_size=5, seed=seed)

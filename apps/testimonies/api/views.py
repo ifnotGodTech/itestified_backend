@@ -21,6 +21,8 @@ from apps.testimonies.exceptions import (
     CommentReplyDepthError,
     CommentTestimonyNotFoundError,
     ParentCommentNotFoundError,
+    ReactionAdminError,
+    ReactionNotOfferedError,
     TestimonyTransitionNotAllowedError,
     TestimonyTranslationNotReadyError,
     VideoUploadContractError,
@@ -50,10 +52,20 @@ from apps.testimonies.services.queries import (
     home_feed_page,
     search_ministries,
     suggested_creators_to_follow,
+    admin_reaction_overview,
+    legacy_reaction_counts,
+    load_reaction_sets,
+    reaction_counts_by_testimony,
     testimony_reaction_options,
 )
 from apps.testimonies.validators import parse_future_publish_at
 from apps.testimonies.services.commands import (
+    create_reaction,
+    restore_reaction,
+    retire_reaction,
+    set_category_reactions,
+    set_default_reactions,
+    update_reaction,
     create_testimony_comment,
     delete_testimony_comment,
     approve_testimony,
@@ -79,6 +91,8 @@ from apps.notifications.services import (
 
 from .serializers import (
     AdminTestimonyCategorySerializer,
+    AdminReactionInputSerializer,
+    AdminReactionSetInputSerializer,
     AdminTestimonyDetailSerializer,
     AdminTestimonyListSerializer,
     AdminTranscriptionJobSerializer,
@@ -716,16 +730,14 @@ class FavoriteToggleView(APIView):
 def _reaction_state(testimony: Testimony, user) -> dict:
     my_reaction = (
         TestimonyReaction.objects.filter(user=user, testimony=testimony)
-        .values_list("reaction_type", flat=True)
+        .values_list("reaction_id", flat=True)
         .first()
     )
+    sets = load_reaction_sets()
+    counts = reaction_counts_by_testimony([testimony.id]).get(testimony.id, {})
     return {
-        "reaction_counts": {
-            "praying_for_you": testimony.praying_for_you_count,
-            "amen": testimony.amen_count,
-            "gives_me_hope": testimony.gives_me_hope_count,
-        },
-        "reactions": testimony_reaction_options(testimony),
+        "reaction_counts": legacy_reaction_counts(sets=sets, counts=counts),
+        "reactions": testimony_reaction_options(testimony, sets=sets, counts=counts),
         "my_reaction": my_reaction,
     }
 
@@ -744,11 +756,14 @@ class TestimonyReactionView(APIView):
         ).first()
         if testimony is None:
             return Response({"message": "Testimony not found."}, status=status.HTTP_404_NOT_FOUND)
-        testimony = set_testimony_reaction(
-            testimony=testimony,
-            user=request.user,
-            reaction_type=serializer.validated_data["reaction_type"],
-        )
+        try:
+            testimony = set_testimony_reaction(
+                testimony=testimony,
+                user=request.user,
+                reaction_key=serializer.validated_data["reaction_type"],
+            )
+        except ReactionNotOfferedError as error:
+            return Response({"message": str(error)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(_reaction_state(testimony, request.user), status=status.HTTP_200_OK)
 
     def delete(self, request, testimony_id: int):
@@ -1194,3 +1209,79 @@ class AdminTranslationJobRetryView(APIView):
         except AIJobNotRetryableError as exc:
             return Response({"message": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(AdminTranslationJobSerializer(job).data, status=status.HTTP_200_OK)
+
+
+# --- Phase 35 Slice 6: the dashboard's Reactions page ---
+
+
+class AdminReactionOverviewView(APIView):
+    """GET the catalogue, default set and category sets; POST creates a
+    reaction. Every change answers with the fresh overview."""
+
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsActiveAdmin]
+
+    def get(self, request):
+        return Response(admin_reaction_overview(), status=status.HTTP_200_OK)
+
+    def post(self, request):
+        serializer = AdminReactionInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            create_reaction(actor=request.user, **serializer.validated_data)
+        except ReactionAdminError as error:
+            return Response({"message": str(error)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(admin_reaction_overview(), status=status.HTTP_201_CREATED)
+
+
+class AdminReactionDetailView(APIView):
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsActiveAdmin]
+
+    def patch(self, request, reaction_id: int):
+        serializer = AdminReactionInputSerializer(data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        try:
+            update_reaction(actor=request.user, reaction_id=reaction_id, **serializer.validated_data)
+        except ReactionAdminError as error:
+            return Response({"message": str(error)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(admin_reaction_overview(), status=status.HTTP_200_OK)
+
+
+class AdminReactionStatusView(APIView):
+    """POST .../retire/ or .../restore/."""
+
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsActiveAdmin]
+    action: str = "retire"
+
+    def post(self, request, reaction_id: int):
+        command = retire_reaction if self.action == "retire" else restore_reaction
+        try:
+            command(actor=request.user, reaction_id=reaction_id)
+        except ReactionAdminError as error:
+            return Response({"message": str(error)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(admin_reaction_overview(), status=status.HTTP_200_OK)
+
+
+class AdminReactionSetView(APIView):
+    """PUT a category's ordered set ("default" for the default set).
+    An empty list puts a category back on the default set."""
+
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [IsActiveAdmin]
+
+    def put(self, request, target: str):
+        serializer = AdminReactionSetInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        reaction_ids = serializer.validated_data["reaction_ids"]
+        try:
+            if target == "default":
+                set_default_reactions(actor=request.user, reaction_ids=reaction_ids)
+            elif target.isdigit():
+                set_category_reactions(actor=request.user, category_id=int(target), reaction_ids=reaction_ids)
+            else:
+                return Response({"message": "Category not found."}, status=status.HTTP_404_NOT_FOUND)
+        except ReactionAdminError as error:
+            return Response({"message": str(error)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(admin_reaction_overview(), status=status.HTTP_200_OK)

@@ -182,11 +182,11 @@ class CreatorAnalyticsTests(TestCase):
         reactor_a = _free_user(email="reactor-a@example.com")
         reactor_b = _free_user(email="reactor-b@example.com")
         reactor_c = _free_user(email="reactor-c@example.com")
-        TestimonyReaction.objects.create(user=reactor_a, testimony=approved_one, reaction_type=TestimonyReactionType.PRAYING_FOR_YOU)
-        TestimonyReaction.objects.create(user=reactor_b, testimony=approved_one, reaction_type=TestimonyReactionType.AMEN)
-        TestimonyReaction.objects.create(user=reactor_c, testimony=approved_two, reaction_type=TestimonyReactionType.PRAYING_FOR_YOU)
+        TestimonyReaction.objects.create(user=reactor_a, testimony=approved_one, reaction_id=TestimonyReactionType.PRAYING_FOR_YOU)
+        TestimonyReaction.objects.create(user=reactor_b, testimony=approved_one, reaction_id=TestimonyReactionType.AMEN)
+        TestimonyReaction.objects.create(user=reactor_c, testimony=approved_two, reaction_id=TestimonyReactionType.PRAYING_FOR_YOU)
         # A reaction on the still-pending testimony must never count.
-        TestimonyReaction.objects.create(user=reactor_a, testimony=pending, reaction_type=TestimonyReactionType.GIVES_ME_HOPE)
+        TestimonyReaction.objects.create(user=reactor_a, testimony=pending, reaction_id=TestimonyReactionType.GIVES_ME_HOPE)
 
         follower = _free_user(email="follower@example.com")
         follow_creator(follower=follower, creator_user_id=creator.id)
@@ -226,9 +226,9 @@ class CreatorAnalyticsTests(TestCase):
         reactor_a = _free_user(email="reactor-a@example.com")
         reactor_b = _free_user(email="reactor-b@example.com")
         answered = TestimonyReaction.objects.create(
-            user=reactor_a, testimony=approved, reaction_type=TestimonyReactionType.PRAYING_FOR_YOU
+            user=reactor_a, testimony=approved, reaction_id=TestimonyReactionType.PRAYING_FOR_YOU
         )
-        TestimonyReaction.objects.create(user=reactor_b, testimony=approved, reaction_type=TestimonyReactionType.PRAYING_FOR_YOU)
+        TestimonyReaction.objects.create(user=reactor_b, testimony=approved, reaction_id=TestimonyReactionType.PRAYING_FOR_YOU)
         respond_to_prayer_reaction(creator=creator, reaction_id=answered.id, response_text="Praying with you too.")
 
         analytics = get_creator_analytics(creator_user_id=creator.id)

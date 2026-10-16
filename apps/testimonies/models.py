@@ -319,13 +319,6 @@ class Testimony(models.Model):
     archived_at = models.DateTimeField(null=True, blank=True)
     view_count = models.PositiveIntegerField(default=0)
     comment_count = models.PositiveIntegerField(default=0)
-    # Denormalized per-reaction-type counters, kept in sync by
-    # services/commands.py's set_testimony_reaction/remove_testimony_reaction
-    # (F() updates) -- same pattern as comment_count, so list/detail
-    # responses never need a live aggregate query per testimony.
-    praying_for_you_count = models.PositiveIntegerField(default=0)
-    amen_count = models.PositiveIntegerField(default=0)
-    gives_me_hope_count = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -484,20 +477,157 @@ class TestimonyWatch(models.Model):
 
 
 class TestimonyReactionType(models.TextChoices):
+    # The three original reactions (Phase 15), seeded as the default set by
+    # migration 0019. Since Phase 35 Slice 6 the admin manages reactions in
+    # the Reaction catalogue; these keys stay so older app builds and the
+    # Ministry prayer-response feature (apps.creators) keep working.
     # Deliberately no negative/critical option -- a testimony is a personal
-    # hardship-to-breakthrough story, not generic social content. See the
-    # Phase 15 engagement review for the reasoning (LinkedIn cut "Curious"
-    # for being ambiguous; a testimony has even less room for one).
+    # hardship-to-breakthrough story, not generic social content.
     PRAYING_FOR_YOU = "praying_for_you", "Praying for you"
     AMEN = "amen", "Amen"
     GIVES_ME_HOPE = "gives_me_hope", "Gives me hope"
 
 
+class ReactionIcon(models.TextChoices):
+    # A fixed set the app knows how to draw; the label is the emoji shown.
+    PRAY = "pray", "🙏"
+    RAISED_HANDS = "raised_hands", "🙌"
+    SPARKLES = "sparkles", "✨"
+    HANDSHAKE = "handshake", "🤝"
+    HEART = "heart", "💜"
+    FIRE = "fire", "🔥"
+    DOVE = "dove", "🕊️"
+    SPROUT = "sprout", "🌱"
+    STRENGTH = "strength", "💪"
+    CELEBRATE = "celebrate", "🎉"
+    LOVE = "love", "❤️"
+    STAR = "star", "⭐"
+
+
+# Most reactions a category (or the default set) can offer; four still fit
+# the responses sheet two by two.
+REACTION_SET_MAX = 4
+
+
+class Reaction(models.Model):
+    """Phase 35 Slice 6: one button people can tap to respond. `key` is
+    fixed when it's created (it's what the app and stored responses refer
+    to); the label and icon can change. Retired reactions (`is_active`
+    False) are offered nowhere, but their past responses stay counted.
+    `default_position` places it in the default set, which every category
+    without its own set uses."""
+
+    key = models.SlugField(max_length=40, unique=True)
+    label = models.CharField(max_length=24)
+    icon = models.CharField(max_length=20, choices=ReactionIcon.choices)
+    is_active = models.BooleanField(default=True)
+    default_position = models.PositiveSmallIntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["default_position"],
+                condition=models.Q(default_position__isnull=False),
+                name="uniq_reaction_default_position",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"Reaction<{self.key}>"
+
+
+class CategoryReaction(models.Model):
+    """A category's own reaction set, in order. A category with no rows
+    uses the default set."""
+
+    category = models.ForeignKey(
+        "testimonies.TestimonyCategory",
+        on_delete=models.CASCADE,
+        related_name="reaction_set",
+    )
+    reaction = models.ForeignKey(Reaction, on_delete=models.PROTECT, related_name="category_sets")
+    position = models.PositiveSmallIntegerField()
+
+    class Meta:
+        ordering = ["category_id", "position"]
+        constraints = [
+            models.UniqueConstraint(fields=["category", "reaction"], name="uniq_category_reaction"),
+            models.UniqueConstraint(fields=["category", "position"], name="uniq_category_reaction_position"),
+        ]
+
+    def __str__(self) -> str:
+        return f"CategoryReaction<{self.category_id}:{self.position}:{self.reaction_id}>"
+
+
+class TestimonyReactionCount(models.Model):
+    """How many people responded to a testimony with each reaction, kept by
+    set_testimony_reaction/remove_testimony_reaction with F() updates so
+    lists never count rows. Replaces Phase 15's three fixed columns."""
+
+    testimony = models.ForeignKey(
+        "testimonies.Testimony",
+        on_delete=models.CASCADE,
+        related_name="reaction_totals",
+    )
+    reaction = models.ForeignKey(Reaction, on_delete=models.PROTECT, related_name="+")
+    count = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["testimony", "reaction"], name="uniq_testimony_reaction_count"),
+        ]
+
+    def __str__(self) -> str:
+        return f"TestimonyReactionCount<{self.testimony_id}:{self.reaction_id}={self.count}>"
+
+
+class ReactionChangeAction(models.TextChoices):
+    CREATED = "created", "Created"
+    EDITED = "edited", "Edited"
+    RETIRED = "retired", "Retired"
+    RESTORED = "restored", "Brought back"
+    SET_CHANGED = "set_changed", "Set changed"
+
+
+class ReactionChangeLog(models.Model):
+    """Who changed the reactions, and when."""
+
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    action = models.CharField(max_length=20, choices=ReactionChangeAction.choices)
+    reaction = models.ForeignKey(Reaction, on_delete=models.SET_NULL, null=True, blank=True, related_name="+")
+    category = models.ForeignKey(
+        "testimonies.TestimonyCategory",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    summary = models.CharField(max_length=200)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+
+    def __str__(self) -> str:
+        return f"ReactionChangeLog<{self.action}:{self.summary}>"
+
+
 class TestimonyReaction(models.Model):
-    # One reaction per user per testimony -- setting a different type
+    # One reaction per user per testimony -- setting a different one
     # switches it rather than adding a second row (same single-reaction-slot
     # model as Facebook's original 2016 reactions), enforced here and in
-    # services/commands.py's set_testimony_reaction.
+    # services/commands.py's set_testimony_reaction. Points at the
+    # reaction's key, so the stored column (still "reaction_type") reads
+    # the same as before Slice 6.
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -508,7 +638,13 @@ class TestimonyReaction(models.Model):
         on_delete=models.CASCADE,
         related_name="reactions",
     )
-    reaction_type = models.CharField(max_length=20, choices=TestimonyReactionType.choices)
+    reaction = models.ForeignKey(
+        Reaction,
+        to_field="key",
+        db_column="reaction_type",
+        on_delete=models.PROTECT,
+        related_name="responses",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -520,7 +656,7 @@ class TestimonyReaction(models.Model):
         ]
 
     def __str__(self) -> str:
-        return f"Reaction<{self.user_id}:{self.testimony_id}:{self.reaction_type}>"
+        return f"Reaction<{self.user_id}:{self.testimony_id}:{self.reaction_id}>"
 
 
 class TestimonyComment(models.Model):

@@ -34,18 +34,21 @@ def get_creator_analytics(*, creator_user_id: int) -> dict:
 
     reaction_rows = (
         TestimonyReaction.objects.filter(testimony__in=approved_testimonies)
-        .values("reaction_type")
+        .values("reaction_id")
         .annotate(count=Count("id"))
+        .order_by()
     )
+    # The original three always appear (older app builds read them); any
+    # reaction the admin added since (Phase 35 Slice 6) is listed by key.
     reaction_counts = {choice.value: 0 for choice in TestimonyReactionType}
     total_reactions = 0
     for row in reaction_rows:
-        reaction_counts[row["reaction_type"]] = row["count"]
+        reaction_counts[row["reaction_id"]] = row["count"]
         total_reactions += row["count"]
 
     pending_response_count = TestimonyReaction.objects.filter(
         testimony__author_id=creator_user_id,
-        reaction_type=TestimonyReactionType.PRAYING_FOR_YOU,
+        reaction_id=TestimonyReactionType.PRAYING_FOR_YOU,
         prayer_response__isnull=True,
     ).count()
 
@@ -70,7 +73,7 @@ def list_prayer_reactions_for_creator(*, creator_user_id: int) -> QuerySet[Testi
     return (
         TestimonyReaction.objects.filter(
             testimony__author_id=creator_user_id,
-            reaction_type=TestimonyReactionType.PRAYING_FOR_YOU,
+            reaction_id=TestimonyReactionType.PRAYING_FOR_YOU,
         )
         .select_related("user", "user__profile", "testimony", "prayer_response")
         .order_by("-created_at")

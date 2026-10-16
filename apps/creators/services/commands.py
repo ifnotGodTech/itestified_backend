@@ -93,7 +93,7 @@ def respond_to_prayer_reaction(*, creator, reaction_id: int, response_text: str)
 
     if reaction.testimony.author_id != creator.id:
         raise PrayerReactionNotOwnedByCreatorError("You can only respond to reactions on your own testimonies.")
-    if reaction.reaction_type != TestimonyReactionType.PRAYING_FOR_YOU:
+    if reaction.reaction_id != TestimonyReactionType.PRAYING_FOR_YOU:
         raise PrayerReactionWrongTypeError("Only 'Praying for you' reactions can be responded to.")
     if PrayerResponse.objects.filter(reaction=reaction).exists():
         raise PrayerReactionAlreadyRespondedError("This reaction has already been responded to.")

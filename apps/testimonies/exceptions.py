@@ -93,3 +93,12 @@ class CommentNotFoundError(Exception):
 
 class CommentNotOwnedError(Exception):
     pass
+
+
+class ReactionNotOfferedError(Exception):
+    """The reaction isn't in this testimony's category set (or is retired)."""
+
+
+class ReactionAdminError(Exception):
+    """An admin change to the reactions that breaks one of their rules; the
+    message is written for the admin."""

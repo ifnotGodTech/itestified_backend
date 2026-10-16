@@ -64,7 +64,7 @@ class RespondToPrayerReactionServiceTests(TestCase):
 
     def test_responding_creates_a_response_and_notifies_the_reactor(self):
         reaction = TestimonyReaction.objects.create(
-            user=self.reactor, testimony=self.testimony, reaction_type=TestimonyReactionType.PRAYING_FOR_YOU
+            user=self.reactor, testimony=self.testimony, reaction_id=TestimonyReactionType.PRAYING_FOR_YOU
         )
 
         with patch("apps.notifications.services.send_push_to_tokens", return_value=[]):
@@ -95,7 +95,7 @@ class RespondToPrayerReactionServiceTests(TestCase):
             status=TestimonyStatus.APPROVED,
         )
         reaction = TestimonyReaction.objects.create(
-            user=self.reactor, testimony=other_testimony, reaction_type=TestimonyReactionType.PRAYING_FOR_YOU
+            user=self.reactor, testimony=other_testimony, reaction_id=TestimonyReactionType.PRAYING_FOR_YOU
         )
 
         with self.assertRaises(PrayerReactionNotOwnedByCreatorError):
@@ -103,14 +103,14 @@ class RespondToPrayerReactionServiceTests(TestCase):
 
     def test_cannot_respond_to_a_non_praying_for_you_reaction(self):
         reaction = TestimonyReaction.objects.create(
-            user=self.reactor, testimony=self.testimony, reaction_type=TestimonyReactionType.AMEN
+            user=self.reactor, testimony=self.testimony, reaction_id=TestimonyReactionType.AMEN
         )
         with self.assertRaises(PrayerReactionWrongTypeError):
             respond_to_prayer_reaction(creator=self.creator, reaction_id=reaction.id, response_text="Hi")
 
     def test_cannot_respond_twice_to_the_same_reaction(self):
         reaction = TestimonyReaction.objects.create(
-            user=self.reactor, testimony=self.testimony, reaction_type=TestimonyReactionType.PRAYING_FOR_YOU
+            user=self.reactor, testimony=self.testimony, reaction_id=TestimonyReactionType.PRAYING_FOR_YOU
         )
         with self.captureOnCommitCallbacks(execute=True):
             respond_to_prayer_reaction(creator=self.creator, reaction_id=reaction.id, response_text="First response.")
@@ -131,7 +131,7 @@ class RespondToPrayerReactionServiceTests(TestCase):
             status=TestimonyStatus.APPROVED,
         )
         reaction = TestimonyReaction.objects.create(
-            user=self.reactor, testimony=written, reaction_type=TestimonyReactionType.PRAYING_FOR_YOU
+            user=self.reactor, testimony=written, reaction_id=TestimonyReactionType.PRAYING_FOR_YOU
         )
         with self.assertRaises(CreatorProfileNotFoundError):
             respond_to_prayer_reaction(creator=ordinary_author, reaction_id=reaction.id, response_text="Hi")
@@ -149,8 +149,8 @@ class ListPrayerReactionsForCreatorTests(TestCase):
         reactor_a = _free_user(email="a@example.com", full_name="Reactor A")
         reactor_b = _free_user(email="b@example.com", full_name="Reactor B")
 
-        prayer_reaction = TestimonyReaction.objects.create(user=reactor_a, testimony=testimony, reaction_type=TestimonyReactionType.PRAYING_FOR_YOU)
-        TestimonyReaction.objects.create(user=reactor_b, testimony=testimony, reaction_type=TestimonyReactionType.AMEN)
+        prayer_reaction = TestimonyReaction.objects.create(user=reactor_a, testimony=testimony, reaction_id=TestimonyReactionType.PRAYING_FOR_YOU)
+        TestimonyReaction.objects.create(user=reactor_b, testimony=testimony, reaction_id=TestimonyReactionType.AMEN)
 
         with self.captureOnCommitCallbacks(execute=True):
             respond_to_prayer_reaction(creator=creator, reaction_id=prayer_reaction.id, response_text="Thank you!")
@@ -178,7 +178,7 @@ class PrayerInboxApiTests(TestCase):
         self.assertEqual(response.status_code, 401)
 
     def test_lists_the_creators_prayer_reactions(self):
-        TestimonyReaction.objects.create(user=self.reactor, testimony=self.testimony, reaction_type=TestimonyReactionType.PRAYING_FOR_YOU)
+        TestimonyReaction.objects.create(user=self.reactor, testimony=self.testimony, reaction_id=TestimonyReactionType.PRAYING_FOR_YOU)
 
         response = self.client.get(reverse("creator-prayer-inbox"), **_auth_headers(self.creator))
 
@@ -191,7 +191,7 @@ class PrayerInboxApiTests(TestCase):
 
     def test_respond_endpoint_creates_a_response(self):
         reaction = TestimonyReaction.objects.create(
-            user=self.reactor, testimony=self.testimony, reaction_type=TestimonyReactionType.PRAYING_FOR_YOU
+            user=self.reactor, testimony=self.testimony, reaction_id=TestimonyReactionType.PRAYING_FOR_YOU
         )
         headers = _auth_headers(self.creator)
 
@@ -211,7 +211,7 @@ class PrayerInboxApiTests(TestCase):
 
     def test_respond_with_blank_text_is_a_400(self):
         reaction = TestimonyReaction.objects.create(
-            user=self.reactor, testimony=self.testimony, reaction_type=TestimonyReactionType.PRAYING_FOR_YOU
+            user=self.reactor, testimony=self.testimony, reaction_id=TestimonyReactionType.PRAYING_FOR_YOU
         )
         response = self.client.post(
             reverse("creator-prayer-reaction-respond", kwargs={"reaction_id": reaction.id}),
@@ -223,7 +223,7 @@ class PrayerInboxApiTests(TestCase):
 
     def test_responding_twice_returns_400(self):
         reaction = TestimonyReaction.objects.create(
-            user=self.reactor, testimony=self.testimony, reaction_type=TestimonyReactionType.PRAYING_FOR_YOU
+            user=self.reactor, testimony=self.testimony, reaction_id=TestimonyReactionType.PRAYING_FOR_YOU
         )
         headers = _auth_headers(self.creator)
         with patch("apps.notifications.services.send_push_to_tokens", return_value=[]):

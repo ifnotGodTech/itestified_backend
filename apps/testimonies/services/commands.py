@@ -8,6 +8,7 @@ from django.db import transaction
 from django.db.models import Count, F, OuterRef, Q, Subquery
 from django.db.models.functions import Coalesce, Greatest
 from django.utils import timezone
+from django.utils.text import slugify
 
 from apps.testimonies.exceptions import (
     AIJobNotRetryableError,
@@ -16,6 +17,8 @@ from apps.testimonies.exceptions import (
     CommentReplyDepthError,
     CommentTestimonyNotFoundError,
     ParentCommentNotFoundError,
+    ReactionAdminError,
+    ReactionNotOfferedError,
     AudioDailyLimitReachedError,
     AudioPremiumRequiredError,
     AudioUploadAssetVerificationError,
@@ -39,8 +42,15 @@ from apps.testimonies.models import (
     Testimony,
     TestimonyComment,
     TestimonyModerationHistory,
+    REACTION_SET_MAX,
+    CategoryReaction,
+    Reaction,
+    ReactionChangeAction,
+    ReactionChangeLog,
+    ReactionIcon,
+    TestimonyCategory,
     TestimonyReaction,
-    TestimonyReactionType,
+    TestimonyReactionCount,
     TestimonyStatus,
     TestimonyType,
     TranscriptionJob,
@@ -52,6 +62,7 @@ from apps.testimonies.models import (
     VideoUploadPolicyHistory,
 )
 from apps.subscriptions.selectors import is_user_premium
+from apps.testimonies.services.queries import offered_reactions
 from apps.testimonies.services.media_uploads import (
     CloudinaryUploadError,
     CloudinaryUploadSignature,
@@ -693,42 +704,50 @@ def auto_publish_due_scheduled_testimonies() -> int:
     return len(testimonies)
 
 
-_REACTION_COUNT_FIELDS = {
-    TestimonyReactionType.PRAYING_FOR_YOU: "praying_for_you_count",
-    TestimonyReactionType.AMEN: "amen_count",
-    TestimonyReactionType.GIVES_ME_HOPE: "gives_me_hope_count",
-}
-
-
-def _adjust_reaction_count(*, testimony_id: int, reaction_type: str, delta: int) -> None:
-    field = _REACTION_COUNT_FIELDS[reaction_type]
-    Testimony.objects.filter(id=testimony_id).update(**{field: F(field) + delta})
+def _adjust_reaction_count(*, testimony_id: int, reaction_id: int, delta: int) -> None:
+    # The row is created at zero first (a no-op if it's there) and then
+    # moved with F(), so two people reacting at once can't both create it.
+    TestimonyReactionCount.objects.bulk_create(
+        [TestimonyReactionCount(testimony_id=testimony_id, reaction_id=reaction_id, count=0)],
+        ignore_conflicts=True,
+    )
+    TestimonyReactionCount.objects.filter(testimony_id=testimony_id, reaction_id=reaction_id).update(
+        count=Greatest(F("count") + delta, 0)
+    )
 
 
 @transaction.atomic
-def set_testimony_reaction(*, testimony: Testimony, user, reaction_type: str) -> Testimony:
+def set_testimony_reaction(*, testimony: Testimony, user, reaction_key: str) -> Testimony:
     """Sets the user's reaction on a testimony, switching it if they already
     reacted differently. One reaction per user per testimony (unique
     constraint on TestimonyReaction) -- tapping the same reaction again is a
-    no-op, tapping a different one moves the count from the old type to the
-    new one, tapping for the first time just increments the new type."""
+    no-op, tapping a different one moves the count from the old reaction to
+    the new one, tapping for the first time just adds to the new one.
+
+    Phase 35 Slice 6: only a reaction the testimony's category offers is
+    accepted (its own set, or the default set if it has none)."""
+    reaction = next(
+        (option for option in offered_reactions(testimony.category_id) if option.key == reaction_key),
+        None,
+    )
+    if reaction is None:
+        raise ReactionNotOfferedError("That response isn't available on this testimony.")
+
     existing = (
         TestimonyReaction.objects.select_for_update()
         .filter(user=user, testimony=testimony)
+        .select_related("reaction")
         .first()
     )
     if existing is not None:
-        if existing.reaction_type == reaction_type:
+        if existing.reaction_id == reaction.key:
             return testimony
-        _adjust_reaction_count(testimony_id=testimony.id, reaction_type=existing.reaction_type, delta=-1)
-        existing.reaction_type = reaction_type
-        existing.save(update_fields=["reaction_type"])
+        _adjust_reaction_count(testimony_id=testimony.id, reaction_id=existing.reaction.id, delta=-1)
+        existing.reaction = reaction
+        existing.save(update_fields=["reaction"])
     else:
-        TestimonyReaction.objects.get_or_create(
-            user=user, testimony=testimony, defaults={"reaction_type": reaction_type}
-        )
-    _adjust_reaction_count(testimony_id=testimony.id, reaction_type=reaction_type, delta=1)
-    testimony.refresh_from_db(fields=["praying_for_you_count", "amen_count", "gives_me_hope_count"])
+        TestimonyReaction.objects.create(user=user, testimony=testimony, reaction=reaction)
+    _adjust_reaction_count(testimony_id=testimony.id, reaction_id=reaction.id, delta=1)
     return testimony
 
 
@@ -737,12 +756,12 @@ def remove_testimony_reaction(*, testimony: Testimony, user) -> Testimony:
     existing = (
         TestimonyReaction.objects.select_for_update()
         .filter(user=user, testimony=testimony)
+        .select_related("reaction")
         .first()
     )
     if existing is not None:
-        _adjust_reaction_count(testimony_id=testimony.id, reaction_type=existing.reaction_type, delta=-1)
+        _adjust_reaction_count(testimony_id=testimony.id, reaction_id=existing.reaction.id, delta=-1)
         existing.delete()
-    testimony.refresh_from_db(fields=["praying_for_you_count", "amen_count", "gives_me_hope_count"])
     return testimony
 
 
@@ -757,25 +776,53 @@ def recount_testimony_counters(*, testimony_ids=None) -> int:
     without those commands -- a user deleted outright (Django admin, shell)
     takes their reactions and comments with them. Returns how many
     testimonies were changed."""
-    def count_of(queryset):
-        return Coalesce(Subquery(queryset.values("testimony_id").annotate(n=Count("id")).values("n")), 0)
-
-    reactions = TestimonyReaction.objects.filter(testimony_id=OuterRef("pk"))
-    counts = {"comment_count": count_of(TestimonyComment.objects.filter(testimony_id=OuterRef("pk")))}
-    for reaction_type, field in _REACTION_COUNT_FIELDS.items():
-        counts[field] = count_of(reactions.filter(reaction_type=reaction_type))
-
     testimonies = Testimony.objects.all()
     if testimony_ids is not None:
         testimonies = testimonies.filter(id__in=list(testimony_ids))
-    drifted = Q()
-    for field, expression in counts.items():
-        testimonies = testimonies.annotate(**{f"actual_{field}": expression})
-        drifted |= ~Q(**{field: F(f"actual_{field}")})
-    drifted_ids = list(testimonies.filter(drifted).values_list("id", flat=True))
-    if not drifted_ids:
-        return 0
-    return Testimony.objects.filter(id__in=drifted_ids).update(**counts)
+
+    actual_comments = Coalesce(
+        Subquery(
+            TestimonyComment.objects.filter(testimony_id=OuterRef("pk"))
+            .values("testimony_id")
+            .annotate(n=Count("id"))
+            .values("n")
+        ),
+        0,
+    )
+    comment_drift = set(
+        testimonies.annotate(actual=actual_comments)
+        .exclude(comment_count=F("actual"))
+        .values_list("id", flat=True)
+    )
+    if comment_drift:
+        Testimony.objects.filter(id__in=comment_drift).update(comment_count=actual_comments)
+
+    reaction_ids = dict(Reaction.objects.values_list("key", "id"))
+    actual = {
+        (row["testimony_id"], reaction_ids[row["reaction_id"]]): row["n"]
+        for row in TestimonyReaction.objects.filter(testimony__in=testimonies)
+        .values("testimony_id", "reaction_id")
+        .annotate(n=Count("id"))
+        .order_by()
+    }
+    stored = {
+        (row.testimony_id, row.reaction_id): row
+        for row in TestimonyReactionCount.objects.filter(testimony__in=testimonies)
+    }
+    reaction_drift: set[int] = set()
+    to_create, to_update = [], []
+    for key, row in stored.items():
+        if row.count != actual.get(key, 0):
+            row.count = actual.get(key, 0)
+            to_update.append(row)
+            reaction_drift.add(key[0])
+    for (testimony_id, reaction_id), count in actual.items():
+        if (testimony_id, reaction_id) not in stored:
+            to_create.append(TestimonyReactionCount(testimony_id=testimony_id, reaction_id=reaction_id, count=count))
+            reaction_drift.add(testimony_id)
+    TestimonyReactionCount.objects.bulk_update(to_update, ["count"], batch_size=1000)
+    TestimonyReactionCount.objects.bulk_create(to_create, batch_size=1000)
+    return len(comment_drift | reaction_drift)
 
 
 def _notify_testimony_comment_safely(*, testimony: Testimony, actor) -> None:
@@ -833,3 +880,199 @@ def delete_testimony_comment(*, comment_id: int, actor) -> None:
     deleted_count = TestimonyComment.objects.filter(Q(id=comment.id) | Q(parent_comment_id=comment.id)).count()
     comment.delete()
     _adjust_comment_count(testimony_id=comment.testimony_id, delta=-deleted_count)
+
+
+# --- Phase 35 Slice 6: the admin's reaction catalogue and category sets ---
+
+
+def _log_reaction_change(*, actor, action: str, summary: str, reaction=None, category=None) -> None:
+    ReactionChangeLog.objects.create(
+        actor=actor, action=action, reaction=reaction, category=category, summary=summary[:200]
+    )
+
+
+def _clean_reaction_label(label: str, *, exclude_id: int | None = None) -> str:
+    label = " ".join((label or "").split())
+    if not label:
+        raise ReactionAdminError("Give the reaction a label.")
+    if len(label) > 24:
+        raise ReactionAdminError("Keep the label to 24 characters or fewer.")
+    clash = Reaction.objects.filter(label__iexact=label)
+    if exclude_id is not None:
+        clash = clash.exclude(id=exclude_id)
+    if clash.exists():
+        raise ReactionAdminError(f"There's already a reaction called “{label}”.")
+    return label
+
+
+def _clean_reaction_icon(icon: str) -> str:
+    if icon not in ReactionIcon.values:
+        raise ReactionAdminError("Choose one of the icons.")
+    return icon
+
+
+def _new_reaction_key(label: str) -> str:
+    base = (slugify(label).replace("-", "_") or "reaction")[:36]
+    key, suffix = base, 2
+    while Reaction.objects.filter(key=key).exists():
+        key, suffix = f"{base}_{suffix}", suffix + 1
+    return key
+
+
+@transaction.atomic
+def create_reaction(*, actor, label: str, icon: str) -> Reaction:
+    """Adds a reaction to the catalogue. It isn't offered anywhere until it
+    is put in a category's set (or the default set)."""
+    label = _clean_reaction_label(label)
+    reaction = Reaction.objects.create(key=_new_reaction_key(label), label=label, icon=_clean_reaction_icon(icon))
+    _log_reaction_change(actor=actor, action=ReactionChangeAction.CREATED, reaction=reaction, summary=f"Created “{label}”")
+    return reaction
+
+
+@transaction.atomic
+def update_reaction(*, actor, reaction_id: int, label: str | None = None, icon: str | None = None) -> Reaction:
+    """Renames a reaction or changes its icon. Its key -- what stored
+    responses point at -- never changes."""
+    reaction = Reaction.objects.select_for_update().filter(id=reaction_id).first()
+    if reaction is None:
+        raise ReactionAdminError("That reaction no longer exists.")
+    changes = []
+    if label is not None:
+        label = _clean_reaction_label(label, exclude_id=reaction.id)
+        if label != reaction.label:
+            changes.append(f"renamed “{reaction.label}” to “{label}”")
+            reaction.label = label
+    if icon is not None and _clean_reaction_icon(icon) != reaction.icon:
+        changes.append(f"icon of “{reaction.label}” changed")
+        reaction.icon = icon
+    if changes:
+        reaction.save(update_fields=["label", "icon", "updated_at"])
+        _log_reaction_change(
+            actor=actor, action=ReactionChangeAction.EDITED, reaction=reaction, summary="; ".join(changes).capitalize()
+        )
+    return reaction
+
+
+@transaction.atomic
+def retire_reaction(*, actor, reaction_id: int) -> Reaction:
+    """Stops offering a reaction anywhere: it comes off every category's set
+    and the default set. Its past responses and counts stay. The default
+    set can't be left empty, since every category without a set uses it."""
+    reaction = Reaction.objects.select_for_update().filter(id=reaction_id).first()
+    if reaction is None:
+        raise ReactionAdminError("That reaction no longer exists.")
+    if not reaction.is_active:
+        return reaction
+    if reaction.default_position is not None and not Reaction.objects.filter(
+        is_active=True, default_position__isnull=False
+    ).exclude(id=reaction.id).exists():
+        raise ReactionAdminError(
+            f"“{reaction.label}” is the only reaction in the default set. Add another to the default set first."
+        )
+
+    category_names = list(
+        CategoryReaction.objects.filter(reaction=reaction).values_list("category__name", flat=True)
+    )
+    for category_id in CategoryReaction.objects.filter(reaction=reaction).values_list("category_id", flat=True):
+        CategoryReaction.objects.filter(category_id=category_id, reaction=reaction).delete()
+        _renumber_category_set(category_id)
+    if reaction.default_position is not None:
+        reaction.default_position = None
+        _renumber_default_set(exclude_id=reaction.id)
+    reaction.is_active = False
+    reaction.save(update_fields=["is_active", "default_position", "updated_at"])
+
+    taken_off = ", ".join(category_names)
+    _log_reaction_change(
+        actor=actor,
+        action=ReactionChangeAction.RETIRED,
+        reaction=reaction,
+        summary=f"Retired “{reaction.label}”" + (f" (taken off {taken_off})" if taken_off else ""),
+    )
+    return reaction
+
+
+@transaction.atomic
+def restore_reaction(*, actor, reaction_id: int) -> Reaction:
+    """Brings a retired reaction back into the catalogue. It isn't put back
+    in any set; the admin chooses where it appears."""
+    reaction = Reaction.objects.select_for_update().filter(id=reaction_id).first()
+    if reaction is None:
+        raise ReactionAdminError("That reaction no longer exists.")
+    if not reaction.is_active:
+        reaction.is_active = True
+        reaction.save(update_fields=["is_active", "updated_at"])
+        _log_reaction_change(
+            actor=actor, action=ReactionChangeAction.RESTORED, reaction=reaction, summary=f"Brought back “{reaction.label}”"
+        )
+    return reaction
+
+
+def _renumber_category_set(category_id: int) -> None:
+    rows = list(CategoryReaction.objects.filter(category_id=category_id).order_by("position"))
+    CategoryReaction.objects.filter(category_id=category_id).delete()
+    CategoryReaction.objects.bulk_create(
+        [CategoryReaction(category_id=category_id, reaction_id=row.reaction_id, position=i) for i, row in enumerate(rows, start=1)]
+    )
+
+
+def _renumber_default_set(*, exclude_id: int | None = None) -> None:
+    members = list(
+        Reaction.objects.filter(default_position__isnull=False).exclude(id=exclude_id).order_by("default_position")
+    )
+    Reaction.objects.filter(default_position__isnull=False).update(default_position=None)
+    for position, member in enumerate(members, start=1):
+        Reaction.objects.filter(id=member.id).update(default_position=position)
+
+
+def _clean_reaction_set(reaction_ids) -> list[Reaction]:
+    reaction_ids = list(reaction_ids)
+    if len(reaction_ids) != len(set(reaction_ids)):
+        raise ReactionAdminError("Each reaction can only appear once in a set.")
+    if len(reaction_ids) > REACTION_SET_MAX:
+        raise ReactionAdminError(f"A set can have at most {REACTION_SET_MAX} reactions.")
+    found = {reaction.id: reaction for reaction in Reaction.objects.filter(id__in=reaction_ids)}
+    if len(found) != len(reaction_ids):
+        raise ReactionAdminError("One of those reactions no longer exists.")
+    if any(not found[reaction_id].is_active for reaction_id in reaction_ids):
+        raise ReactionAdminError("A retired reaction can't be added to a set. Bring it back first.")
+    return [found[reaction_id] for reaction_id in reaction_ids]
+
+
+@transaction.atomic
+def set_category_reactions(*, actor, category_id: int, reaction_ids) -> None:
+    """Replaces a category's ordered set. An empty list puts the category
+    back on the default set. Testimonies keep the responses they already
+    have; only what's offered changes."""
+    category = TestimonyCategory.objects.select_for_update().filter(id=category_id).first()
+    if category is None:
+        raise ReactionAdminError("That category no longer exists.")
+    reactions = _clean_reaction_set(reaction_ids)
+    CategoryReaction.objects.filter(category=category).delete()
+    CategoryReaction.objects.bulk_create(
+        [CategoryReaction(category=category, reaction=reaction, position=i) for i, reaction in enumerate(reactions, start=1)]
+    )
+    summary = (
+        f"{category.name}: " + ", ".join(reaction.label for reaction in reactions)
+        if reactions
+        else f"{category.name}: back to the default set"
+    )
+    _log_reaction_change(actor=actor, action=ReactionChangeAction.SET_CHANGED, category=category, summary=summary)
+
+
+@transaction.atomic
+def set_default_reactions(*, actor, reaction_ids) -> None:
+    """Replaces the default set, used by every category without its own.
+    It can't be empty."""
+    reactions = _clean_reaction_set(reaction_ids)
+    if not reactions:
+        raise ReactionAdminError("The default set needs at least one reaction.")
+    list(Reaction.objects.select_for_update().filter(default_position__isnull=False))
+    Reaction.objects.filter(default_position__isnull=False).update(default_position=None)
+    for position, reaction in enumerate(reactions, start=1):
+        Reaction.objects.filter(id=reaction.id).update(default_position=position)
+    _log_reaction_change(
+        actor=actor,
+        action=ReactionChangeAction.SET_CHANGED,
+        summary="Default set: " + ", ".join(reaction.label for reaction in reactions),
+    )
