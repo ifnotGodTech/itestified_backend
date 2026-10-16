@@ -5,8 +5,8 @@ import logging
 from datetime import datetime, timedelta
 
 from django.db import transaction
-from django.db.models import F, Q
-from django.db.models.functions import Greatest
+from django.db.models import Count, F, OuterRef, Q, Subquery
+from django.db.models.functions import Coalesce, Greatest
 from django.utils import timezone
 
 from apps.testimonies.exceptions import (
@@ -748,6 +748,34 @@ def remove_testimony_reaction(*, testimony: Testimony, user) -> Testimony:
 
 def _adjust_comment_count(*, testimony_id: int, delta: int) -> None:
     Testimony.objects.filter(id=testimony_id).update(comment_count=Greatest(F("comment_count") + delta, 0))
+
+
+def recount_testimony_counters(*, testimony_ids=None) -> int:
+    """Resets comment_count and the reaction counts from the rows themselves,
+    for the given testimonies (all when None). The counters are normally
+    kept by the commands above; this repairs them after rows went away
+    without those commands -- a user deleted outright (Django admin, shell)
+    takes their reactions and comments with them. Returns how many
+    testimonies were changed."""
+    def count_of(queryset):
+        return Coalesce(Subquery(queryset.values("testimony_id").annotate(n=Count("id")).values("n")), 0)
+
+    reactions = TestimonyReaction.objects.filter(testimony_id=OuterRef("pk"))
+    counts = {"comment_count": count_of(TestimonyComment.objects.filter(testimony_id=OuterRef("pk")))}
+    for reaction_type, field in _REACTION_COUNT_FIELDS.items():
+        counts[field] = count_of(reactions.filter(reaction_type=reaction_type))
+
+    testimonies = Testimony.objects.all()
+    if testimony_ids is not None:
+        testimonies = testimonies.filter(id__in=list(testimony_ids))
+    drifted = Q()
+    for field, expression in counts.items():
+        testimonies = testimonies.annotate(**{f"actual_{field}": expression})
+        drifted |= ~Q(**{field: F(f"actual_{field}")})
+    drifted_ids = list(testimonies.filter(drifted).values_list("id", flat=True))
+    if not drifted_ids:
+        return 0
+    return Testimony.objects.filter(id__in=drifted_ids).update(**counts)
 
 
 def _notify_testimony_comment_safely(*, testimony: Testimony, actor) -> None:

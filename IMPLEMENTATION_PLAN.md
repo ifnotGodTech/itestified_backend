@@ -2888,8 +2888,23 @@ Found along the way (2026-10-15), not fixed here:
   - Mobile: `HomeContentSnapshot` holds only pictures and Scripture.
   - Dashboard: Home page Management is now just the featured pictures. The Video/Text tabs, the section order, the add-testimony dialog, the tab-switching route and the testimony detail modals are gone. Old `?tab=video` links still open the page.
   - Verified against the local backend: the page loads, and adding a picture saves it.
-  - Noticed, not fixed: a featured picture hosted somewhere other than Cloudinary or placehold.co crashes the dashboard page (`next/image` refuses unknown hosts). Real pictures are on Cloudinary.
-- **Deleting an account leaves its reactions and comments in a testimony's stored totals** (`*_count`, `comment_count`): the rows cascade away, but the counters don't go down.
+  - **✅ Fixed 2026-10-16:** a featured picture hosted somewhere other than Cloudinary or placehold.co crashed the dashboard page (`next/image` refuses unknown hosts).
+    - New `RemoteImage` (`src/core/ui/remote-image.tsx`) shows such pictures `unoptimized`, so the real image appears.
+    - The host list now lives in one place, `src/core/lib/image-hosts.ts`, which `next.config.ts` reads.
+    - Used for every admin image whose address comes from data: Home page Management, Inspirational Pictures (replacing its own workaround), testimony thumbnails, user and author avatars, and the share page.
+    - Verified at 127.0.0.1 with an unsplash.com picture: the page loads and shows the thumbnail.
+- **✅ Fixed 2026-10-16: testimony totals drifted when a user was deleted outright.**
+  - The app's own account deletion is a soft delete that keeps the user's reactions and comments, so it was never affected.
+  - A hard delete (Django admin or a shell) cascaded the rows away but left `*_count` and `comment_count` as they were.
+  - `apps/testimonies/signals.py` now recounts the testimonies that user had touched once the delete commits. This counter bookkeeping is the kind of signal AGENTS.md allows. It includes other people's replies under the user's comments, which cascade too.
+  - New `recount_testimony_counters` service plus a `recount_testimony_counters` management command. The command replaces `recalculate_testimony_comment_counts`, which only covered comments.
+  - Run locally: 2 testimonies corrected. On Render, it has to be run through a temporary Build Command addition (no Shell on the free plan).
+  - 3 tests in `test_counter_recount.py`.
+- **✅ Fixed 2026-10-16: dashboard redirects lost the session in dev.** Same cause as the Phase 34 Bible-pack route.
+  - All 27 proxy routes that redirect after a form post now use `seeOther()` (`src/core/lib/see-other.ts`), a 303 with a relative `Location`.
+  - It also accepts only a path on this site, so a crafted `?next=https://…` can no longer send the admin elsewhere.
+  - Verified at 127.0.0.1: removing a featured picture through the real dialog returned `303 /home-management?tab=pictures&success=remove`, stayed signed in, and showed the success message.
+- **✅ Fixed 2026-10-16: the 6 onboarding test failures.** The splash moves on by itself now (2.4s), so the tests wait instead of tapping a Continue button. Two of them now expect the immersive Home ("For you"), not the old greeting.
 
 Out of scope:
 - the Premium value gaps (Celery worker, AI key, Agora/S3 on Render, Phases 30 and 31), tracked separately;
