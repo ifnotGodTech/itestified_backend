@@ -2941,6 +2941,14 @@ Found along the way (2026-10-15), not fixed here:
   - All 27 proxy routes that redirect after a form post now use `seeOther()` (`src/core/lib/see-other.ts`), a 303 with a relative `Location`.
   - It also accepts only a path on this site, so a crafted `?next=https://…` can no longer send the admin elsewhere.
   - Verified at 127.0.0.1: removing a featured picture through the real dialog returned `303 /home-management?tab=pictures&success=remove`, stayed signed in, and showed the success message.
+- **✅ Fixed 2026-10-16: Home opening with no testimonies and no category chips** (admin report).
+  - Cause: both first loads gave up on their first failure. That can be a 502 while Render's free plan wakes the backend, or a saved sign-in the server no longer accepts ("Invalid token", which the backend now answers on every endpoint, public ones included).
+  - The categories list also cached an empty list on failure, so Home kept only For you and Following until the app restarted; Try again and signing in or out never asked again.
+  - Fix:
+    - New `withFirstLoadRetries` (`core/network/retry.dart`) retries after 2s and 4s while the loading state shows. A revoked token is dropped by the API client, so the retry goes through as a guest.
+    - The For you first load and the categories use it.
+    - A category failure is now an error rather than an empty list, and Home asks again on Try again and on sign-in or out.
+  - Tests: 4 in `test/core/network/first_load_retry_test.dart`. `test/flutter_test_config.dart` turns retries off elsewhere so widget tests don't leave timers pending. Full suite: 792 pass.
 - **✅ Fixed 2026-10-16: the 6 onboarding test failures.** The splash moves on by itself now (2.4s), so the tests wait instead of tapping a Continue button. Two of them now expect the immersive Home ("For you"), not the old greeting.
 
 Out of scope:
