@@ -24,7 +24,7 @@ from apps.content.models import (
     ScriptureReadReceipt,
     ScriptureStatus,
 )
-from apps.content.services.commands import mark_scripture_read, scripture_streak_freezes_remaining
+from apps.content.services.commands import delete_scripture, mark_scripture_read, scripture_streak_freezes_remaining
 from apps.content.services.queries import scripture_streak_engagement_stats
 from apps.notifications.services import notify_all_users_of_scripture_published
 from apps.testimonies.models import Testimony, TestimonyStatus
@@ -273,7 +273,7 @@ class AdminScriptureListCreateView(generics.ListCreateAPIView):
                 notify_all_users_of_scripture_published(scripture=entry, actor=self.request.user)
 
 
-class AdminScriptureDetailView(generics.RetrieveUpdateAPIView):
+class AdminScriptureDetailView(generics.RetrieveUpdateDestroyAPIView):
     authentication_classes = [SessionAuthentication]
     permission_classes = [IsAuthenticated, IsActiveAdmin]
     serializer_class = ScriptureSerializer
@@ -290,6 +290,13 @@ class AdminScriptureDetailView(generics.RetrieveUpdateAPIView):
             entry.save(update_fields=["status", "published_at", "updated_at"])
             if entry.status == ScriptureStatus.PUBLISHED:
                 notify_all_users_of_scripture_published(scripture=entry, actor=self.request.user)
+
+    def destroy(self, request, *args, **kwargs):
+        try:
+            delete_scripture(scripture_id=int(kwargs["pk"]))
+        except ContentError as error:
+            return Response({"message": str(error)}, status=status.HTTP_404_NOT_FOUND)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class AdminScriptureStreakStatsView(APIView):

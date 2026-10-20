@@ -217,6 +217,39 @@ class ContentAdminApiTests(TestCase):
         entry.refresh_from_db()
         self.assertEqual(entry.bible_text, "Psalm 91:2")
 
+    def test_admin_can_delete_a_scheduled_or_published_scripture(self):
+        scheduled = ScriptureOfTheDay.objects.create(
+            date=timezone.localdate() + timedelta(days=3),
+            bible_text="Psalm 91:1",
+            scripture="He who dwells...",
+            status=ScriptureStatus.SCHEDULED,
+        )
+        published = ScriptureOfTheDay.objects.create(
+            date=timezone.localdate(),
+            bible_text="John 3:16",
+            scripture="For God so loved...",
+            status=ScriptureStatus.PUBLISHED,
+        )
+
+        for entry in (scheduled, published):
+            response = self.client.delete(reverse("admin-scripture-detail", kwargs={"pk": entry.id}))
+            self.assertEqual(response.status_code, 204)
+        self.assertFalse(ScriptureOfTheDay.objects.exists())
+
+        missing = self.client.delete(reverse("admin-scripture-detail", kwargs={"pk": scheduled.id}))
+        self.assertEqual(missing.status_code, 404)
+
+    def test_deleting_a_scripture_needs_an_admin(self):
+        entry = ScriptureOfTheDay.objects.create(
+            date=timezone.localdate() + timedelta(days=1), bible_text="Psalm 23:1", scripture="The Lord is my shepherd"
+        )
+        self.client.logout()
+
+        response = self.client.delete(reverse("admin-scripture-detail", kwargs={"pk": entry.id}))
+
+        self.assertEqual(response.status_code, 403)
+        self.assertTrue(ScriptureOfTheDay.objects.filter(id=entry.id).exists())
+
     def test_scripture_created_for_today_publishes_immediately(self):
         # Regression: refresh_status_for_today() sets published_at as part of
         # flipping the status, so a caller checking "published_at is None"

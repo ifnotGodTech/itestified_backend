@@ -54,6 +54,16 @@ def publish_due_scheduled_scriptures() -> int:
     return published_count
 
 
+def delete_scripture(*, scripture_id: int) -> None:
+    """Removes a day's Scripture, scheduled or already published. Nothing
+    else points at it: streak read receipts are kept by date, so readers'
+    streaks are untouched, and the app simply shows no Scripture for that
+    day until another is added."""
+    deleted, _ = ScriptureOfTheDay.objects.filter(id=scripture_id).delete()
+    if not deleted:
+        raise ContentError("Scripture not found.")
+
+
 def publish_due_scheduled_inspirational_pictures() -> int:
     now = timezone.now()
 

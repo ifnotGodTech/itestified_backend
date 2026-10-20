@@ -125,7 +125,7 @@ def list_all_playlists_for_admin(*, search: str = "", visibility: str = "") -> Q
     other selector in this module). Search mirrors AdminDonationListView's
     own convention exactly: icontains across the fields an admin would
     actually type, not full-text search."""
-    queryset = _playlist_queryset_with_item_count().select_related("owner", "owner__profile")
+    queryset = _playlist_queryset_with_item_count().select_related("owner", "owner__profile", "owner__creator_profile")
     if visibility in {PlaylistVisibility.PRIVATE, PlaylistVisibility.SHARED}:
         queryset = queryset.filter(visibility=visibility)
     search = search.strip()
