@@ -570,3 +570,30 @@ def admin_reaction_overview() -> dict:
             {**category, "reaction_ids": sets.get(category["id"], [])} for category in categories
         ],
     }
+
+
+def active_categories_with_counts():
+    """The categories people can browse, each with how many approved
+    testimonies it holds and how many people follow it (shown beside the
+    Follow button on a category's chip in Home). Subqueries rather than two
+    joined Counts, which would multiply each other."""
+    from django.db.models import Count, IntegerField
+
+    from apps.testimonies.models import TestimonyCategory, UserFollowedCategory
+
+    def count_of(queryset):
+        return Coalesce(
+            Subquery(queryset.values("category_id").annotate(n=Count("id")).values("n"), output_field=IntegerField()),
+            0,
+        )
+
+    return (
+        TestimonyCategory.objects.filter(is_active=True)
+        .annotate(
+            testimony_count=count_of(
+                Testimony.objects.filter(category_id=OuterRef("pk"), status=TestimonyStatus.APPROVED)
+            ),
+            follower_count=count_of(UserFollowedCategory.objects.filter(category_id=OuterRef("pk"))),
+        )
+        .order_by("name")
+    )

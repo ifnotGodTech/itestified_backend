@@ -926,6 +926,25 @@ class TestimonyApiTests(TestCase):
         for row in response.json():
             self.assertFalse(row["is_followed"])
 
+    def test_public_category_list_counts_approved_testimonies_and_followers(self) -> None:
+        Testimony.objects.create(
+            author=UserFactory(email="pending-author@example.com"),
+            category=self.category_faith,
+            title="Still waiting",
+            body="...",
+            testimony_type=TestimonyType.WRITTEN,
+            status=TestimonyStatus.PENDING_REVIEW,
+        )
+        for email in ("one@example.com", "two@example.com"):
+            UserFollowedCategory.objects.create(user=UserFactory(email=email), category=self.category_faith)
+        approved = Testimony.objects.filter(category=self.category_faith, status=TestimonyStatus.APPROVED).count()
+
+        rows = {row["slug"]: row for row in self.client.get(reverse("testimony-category-list")).json()}
+
+        self.assertEqual(rows["faith"]["testimony_count"], approved)
+        self.assertEqual(rows["faith"]["follower_count"], 2)
+        self.assertEqual(rows["healing"]["follower_count"], 0)
+
     def test_follow_and_unfollow_a_category_reflects_in_the_public_list(self) -> None:
         user = UserFactory(email="follower@example.com")
         ProfileFactory(user=user, full_name="Follower")

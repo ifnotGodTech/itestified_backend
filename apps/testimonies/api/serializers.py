@@ -82,10 +82,13 @@ def normalize_video_source_lines(body: str) -> str:
 
 class TestimonyCategorySerializer(serializers.ModelSerializer):
     is_followed = serializers.SerializerMethodField()
+    # Annotated by active_categories_with_counts; 0 where a caller doesn't.
+    testimony_count = serializers.IntegerField(read_only=True, default=0)
+    follower_count = serializers.IntegerField(read_only=True, default=0)
 
     class Meta:
         model = TestimonyCategory
-        fields = ("id", "name", "slug", "description", "is_followed")
+        fields = ("id", "name", "slug", "description", "is_followed", "testimony_count", "follower_count")
 
     def get_is_followed(self, obj: TestimonyCategory) -> bool:
         # Prefetched once per request by PublicCategoryListView (a single

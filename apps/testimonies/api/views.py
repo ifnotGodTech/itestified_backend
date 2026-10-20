@@ -52,6 +52,7 @@ from apps.testimonies.services.queries import (
     home_feed_page,
     search_ministries,
     suggested_creators_to_follow,
+    active_categories_with_counts,
     admin_reaction_overview,
     legacy_reaction_counts,
     load_reaction_sets,
@@ -147,7 +148,9 @@ def _parse_admin_filter_date(value: str):
 class PublicCategoryListView(generics.ListAPIView):
     permission_classes = [AllowAny]
     serializer_class = TestimonyCategorySerializer
-    queryset = TestimonyCategory.objects.filter(is_active=True).order_by("name")
+
+    def get_queryset(self):
+        return active_categories_with_counts()
 
     def get_serializer_context(self):
         context = super().get_serializer_context()
